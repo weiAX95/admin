@@ -1,0 +1,14 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+mock/db.json
+.npm
+eslintcache
+.env
+.env.*
+!.env.example
+!.env.sample
+*.log
+*.tsbuildinfo
