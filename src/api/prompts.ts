@@ -41,5 +41,12 @@ export const suggestPrompts = (q:string) => http.get<{items:{value:string;kind:'
 export interface PromptReferences { outgoing:{id:string;name:string;version_id:string;semver:string}[]; incoming:{id:string;name:string;version_id:string;semver:string}[]; experiments:{id:string;title:string}[] }
 export const getPromptReferences = (id:string) => http.get<PromptReferences>(`/prompts/${id}/references`);
 export interface PromptVersionStats { id:string;semver:string;calls:number;completed:number;average_auto_score:number|null;average_human_rating:number|null;human_count:number;average_prompt_tokens:number|null }
-export interface PromptAnalytics { versions:PromptVersionStats[];trend:{day:string;calls:number;average_auto_score:number|null}[];models:string[] }
+export interface PromptAnalytics { versions:PromptVersionStats[];trend:{day:string;calls:number;average_auto_score:number|null;average_human_rating:number|null}[];models:string[] }
 export const getPromptAnalytics = (id:string) => http.get<PromptAnalytics>(`/prompts/${id}/analytics`);
+export const getPromptLeaderboard = (order:'calls'|'score') => http.get<{items:{id:string;name:string;calls:number;average_auto_score:number|null}[]}>('/prompts/leaderboard',{order});
+export type PromptTransferFormat='json'|'yaml';
+export interface PromptImportItem {name:string;versionId:string;status:'valid'|'skipped';reason:string;findings:string[]}
+export interface PromptImportPreview {items:PromptImportItem[];validCount:number;skippedCount:number}
+export const exportPromptFile=(format:PromptTransferFormat,ids:string[])=>http.get<{format:PromptTransferFormat;filename:string;content:string}>(`/prompts/export?format=${format}${ids.map(id=>`&id=${encodeURIComponent(id)}`).join('')}`);
+export const previewPromptImport=(format:PromptTransferFormat,text:string)=>http.post<PromptImportPreview>('/prompts/import/preview',{format,text});
+export const confirmPromptImport=(format:PromptTransferFormat,text:string,confirmFindings=false)=>http.post<{imported:number;skipped:number;items:PromptImportItem[]}>('/prompts/import/confirm',{format,text,confirmFindings});

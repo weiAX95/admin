@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { diffChars } from 'diff';
+import YAML from 'yaml';
 
 const id = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -153,6 +154,112 @@ async function latest(client, promptId) {
   return (await client.query('SELECT * FROM prompt_library_versions WHERE prompt_id=$1 ORDER BY version DESC LIMIT 1', [promptId])).rows[0];
 }
 
+function parseTransfer(body) {
+  if (!['json','yaml'].includes(body.format) || typeof body.text!=='string' || body.text.length>10_000_000) throw new Error('仅支持 10 MB 内的 JSON/YAML 文件');
+  const document=body.format==='json' ? JSON.parse(body.text) : YAML.parse(body.text,{uniqueKeys:true});
+  if (document?.schemaVersion!==1 || typeof document.sourceKey!=='string' || !Array.isArray(document.prompts) || document.prompts.length>1000) throw new Error('提示词导入文件结构无效');
+  const ids=new Set(),versions=new Set();
+  for (const prompt of document.prompts) {
+    if (!prompt || typeof prompt.sourceId!=='string' || !prompt.sourceId || ids.has(prompt.sourceId) || typeof prompt.name!=='string' || !prompt.name.trim() || !Array.isArray(prompt.versions) || !prompt.versions.length) throw new Error('提示词条目无效或来源 ID 重复');
+    ids.add(prompt.sourceId);
+    validatedTags(prompt.tags || []);
+    for (const version of prompt.versions) {
+      if (typeof version.id!=='string' || !version.id || versions.has(version.id) || !/^\d+\.\d+\.\d+$/.test(version.semver || '')) throw new Error('版本 ID 或 semver 无效／重复');
+      versions.add(version.id);
+    }
+  }
+  return document;
+}
+
+async function exportPrompts(client,url) {
+  const format=url.searchParams.get('format') || 'json';
+  if (!['json','yaml'].includes(format)) return fail('导出格式无效');
+  const ids=url.searchParams.getAll('id');
+  const rows=(await client.query('SELECT * FROM prompt_library WHERE deleted_at IS NULL AND ($1::text[] IS NULL OR id=ANY($1)) ORDER BY created_at,id',[ids.length?ids:null])).rows;
+  const prompts=[];
+  for (const row of rows) {
+    const versions=(await client.query('SELECT * FROM prompt_library_versions WHERE prompt_id=$1 ORDER BY version',[row.id])).rows;
+    prompts.push({sourceId:row.id,name:row.name,tags:row.tags,versions:versions.map(version=>({id:version.id,semver:version.semver,type:version.prompt_type,format:version.format,content:version.content,variables:version.variables,messages:version.messages,toolSchema:version.tool_schema,createdAt:version.created_at}))});
+  }
+  const document={schemaVersion:1,sourceKey:'admin-prompts-v1',prompts};
+  return ok({format,filename:`prompts.${format==='yaml'?'yaml':'json'}`,content:format==='yaml'?YAML.stringify(document):JSON.stringify(document,null,2)});
+}
+
+async function importPrompts(client,me,body,confirm) {
+  let document;
+  try { document=parseTransfer(body); } catch(error) { return fail(error.message); }
+  const report=[];
+  for (const prompt of document.prompts) {
+    const versions=[];
+    for (const raw of prompt.versions) {
+      try {
+        const value=validatedVersion(raw);
+        const findings=await scanPrompt(client,value);
+        versions.push({raw,value,findings,status:findings.includes('secret')?'skipped':'valid',reason:findings.includes('secret')?'检测到疑似密钥':''});
+      } catch(error) { versions.push({raw,status:'skipped',reason:error.message,findings:[]}); }
+    }
+    report.push({prompt,versions});
+  }
+  const available=new Set(report.flatMap(row=>row.versions.filter(version=>version.status==='valid').map(version=>version.raw.id)));
+  const externalIds=[...new Set(report.flatMap(row=>row.versions.filter(version=>version.status==='valid').flatMap(version=>directIncludes(version.value))))].filter(sourceId=>!available.has(sourceId));
+  const existingIds=new Set(externalIds.length ? (await client.query('SELECT id FROM prompt_library_versions WHERE id=ANY($1)',[externalIds])).rows.map(row=>row.id) : []);
+  let changed=true;
+  while (changed) {
+    changed=false;
+    for (const row of report) for (const version of row.versions) if (version.status==='valid') {
+      const missing=directIncludes(version.value).find(id=>!available.has(id) && !existingIds.has(id));
+      if (missing) { version.status='skipped';version.reason=`引用版本不可用：${missing}`;available.delete(version.raw.id);changed=true; }
+    }
+  }
+  const entries=report.flatMap(row=>row.versions.map(version=>({name:row.prompt.name,versionId:version.raw.id,status:version.status,reason:version.reason,findings:version.findings})));
+  if (!confirm) return ok({items:entries,validCount:entries.filter(item=>item.status==='valid').length,skippedCount:entries.filter(item=>item.status==='skipped').length});
+  if (entries.some(item=>item.status==='valid'&&item.findings.length) && body.confirmFindings!==true) return fail('检测到疑似敏感信息，请确认后重试',409);
+  await client.query('SAVEPOINT prompt_import');
+  try {
+    const idMap=new Map();
+    for (const row of report) for (const version of row.versions) if (version.status==='valid') {
+      const mapped=(await client.query('SELECT version_id FROM prompt_import_versions WHERE source_key=$1 AND source_version_id=$2',[document.sourceKey,version.raw.id])).rows[0];
+      const existing=(await client.query('SELECT id FROM prompt_library_versions WHERE id=$1',[version.raw.id])).rows[0];
+      idMap.set(version.raw.id,mapped?.version_id || existing?.id || id());
+    }
+    let imported=0,skipped=entries.filter(item=>item.status==='skipped').length;
+    for (const row of report) {
+      const valid=row.versions.filter(version=>version.status==='valid');
+      if (!valid.length) continue;
+      const source=row.prompt.sourceId;
+      const mapped=(await client.query('SELECT prompt_id FROM prompt_import_sources WHERE source_key=$1 AND source_prompt_id=$2',[document.sourceKey,source])).rows[0];
+      const existing=(await client.query('SELECT id FROM prompt_library WHERE id=$1',[source])).rows[0];
+      const promptId=mapped?.prompt_id || existing?.id || id();
+      if (!mapped && !existing) await client.query('INSERT INTO prompt_library(id,name,owner_id,tags) VALUES($1,$2,$3,$4)',[promptId,row.prompt.name,me.id,validatedTags(row.prompt.tags || [])]);
+      await client.query('INSERT INTO prompt_import_sources(source_key,source_prompt_id,prompt_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[document.sourceKey,source,promptId]);
+      let number=Number((await client.query('SELECT coalesce(max(version),0) AS n FROM prompt_library_versions WHERE prompt_id=$1',[promptId])).rows[0].n);
+      for (const version of valid) {
+        const targetId=idMap.get(version.raw.id);
+        if ((await client.query('SELECT 1 FROM prompt_library_versions WHERE id=$1',[targetId])).rowCount) {skipped++;continue;}
+        const rewrite=text=>text.replace(includePattern,(match,sourceId)=>idMap.has(sourceId)?`include:prompt://${idMap.get(sourceId)}`:match);
+        const semver=version.raw.semver;
+        if ((await client.query('SELECT 1 FROM prompt_library_versions WHERE prompt_id=$1 AND semver=$2',[promptId,semver])).rowCount) {skipped++;continue;}
+        number++;
+        await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,prompt_type,format,variables,messages,tool_schema,author_id,change_summary,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',[targetId,promptId,number,semver,rewrite(version.value.content),version.value.type,version.value.format,JSON.stringify(version.value.variables),JSON.stringify(version.value.messages.map(item=>({...item,content:rewrite(item.content)}))),JSON.stringify(version.value.toolSchema),me.id,'导入版本',version.raw.createdAt || new Date().toISOString()]);
+        await client.query('INSERT INTO prompt_import_versions(source_key,source_version_id,version_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[document.sourceKey,version.raw.id,targetId]);
+        if (version.findings.length) await client.query('INSERT INTO prompt_compliance_events(id,prompt_id,version_id,actor_id,findings,action) VALUES($1,$2,$3,$4,$5,$6)',[id(),promptId,targetId,me.id,JSON.stringify(version.findings),'confirmed']);
+        imported++;
+      }
+    }
+    for (const row of report) for (const version of row.versions) if (version.status==='valid') {
+      const sourceId=idMap.get(version.raw.id);
+      if (!(await client.query('SELECT 1 FROM prompt_library_versions WHERE id=$1',[sourceId])).rowCount) continue;
+      const source=(await client.query('SELECT * FROM prompt_library_versions WHERE id=$1',[sourceId])).rows[0];
+      const expanded=await expandIncludes(client,source,[sourceId]);
+      for (const targetId of directIncludes(source)) await client.query('INSERT INTO prompt_version_includes(source_version_id,target_version_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[sourceId,targetId]);
+      void expanded;
+    }
+    for (const row of report) for (const version of row.versions) if (version.status==='skipped'&&version.findings?.includes('secret')) await client.query('INSERT INTO prompt_compliance_events(id,actor_id,findings,action) VALUES($1,$2,$3,$4)',[id(),me.id,JSON.stringify(version.findings),'import_skipped']);
+    await client.query('RELEASE SAVEPOINT prompt_import');
+    return ok({imported,skipped,items:entries});
+  } catch(error) {await client.query('ROLLBACK TO SAVEPOINT prompt_import');return fail(`导入失败：${error.message}`,409);}
+}
+
 async function appendVersion(client, prompt, body, me, source = null) {
   const value = validatedVersion(body);
   const expanded = await expandIncludes(client,value);
@@ -173,6 +280,9 @@ async function appendVersion(client, prompt, body, me, source = null) {
 }
 
 export async function handlePrompts({ pathname, method, client, me, readBody, url }) {
+  if (pathname==='/api/prompts/export' && method==='GET') return exportPrompts(client,url);
+  if (pathname==='/api/prompts/import/preview' && method==='POST') return importPrompts(client,me,await readBody(),false);
+  if (pathname==='/api/prompts/import/confirm' && method==='POST') return importPrompts(client,me,await readBody(),true);
   if (pathname === '/api/prompt-compliance-rules' && method === 'GET') {
     if (me.role !== 'admin') return fail('仅管理员可管理合规规则',403);
     return ok({ items:(await client.query('SELECT id,name,pattern,active,created_at FROM prompt_compliance_rules ORDER BY created_at DESC')).rows });
@@ -196,6 +306,14 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
     if (term.length>100) return fail('搜索词过长');
     const rows=(await client.query("SELECT name AS value,'name' AS kind FROM prompt_library WHERE deleted_at IS NULL AND name ILIKE $1 UNION SELECT DISTINCT tag AS value,'tag' AS kind FROM prompt_library CROSS JOIN LATERAL unnest(tags) AS tag WHERE deleted_at IS NULL AND tag ILIKE $1 LIMIT 12", [`%${term}%`])).rows;
     return ok({items:rows});
+  }
+  if (pathname === '/api/prompts/leaderboard' && method === 'GET') {
+    const order=url.searchParams.get('order')==='score' ? 'score' : 'calls';
+    const items=(await client.query(`SELECT p.id,p.name,count(u.run_id)::int AS calls,avg(r.auto_score)::float AS average_auto_score
+      FROM prompt_library p JOIN prompt_library_versions v ON v.prompt_id=p.id LEFT JOIN prompt_run_uses u ON u.version_id=v.id
+      LEFT JOIN experiment_runs r ON r.id=u.run_id WHERE p.deleted_at IS NULL GROUP BY p.id
+      ORDER BY ${order==='score' ? 'average_auto_score DESC NULLS LAST,calls DESC' : 'calls DESC,average_auto_score DESC NULLS LAST'} LIMIT 100`)).rows;
+    return ok({items});
   }
   if (pathname === '/api/prompts/search' && method === 'GET') {
     const keyword=(url.searchParams.get('keyword') || '').trim();
@@ -233,7 +351,7 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
       FROM prompt_library_versions v LEFT JOIN prompt_run_uses u ON u.version_id=v.id LEFT JOIN experiment_runs r ON r.id=u.run_id
       LEFT JOIN LATERAL (SELECT avg(rating) AS average_rating,count(*)::int AS rating_count FROM experiment_annotations WHERE run_id=r.id) h ON true
       WHERE v.prompt_id=$1 GROUP BY v.id ORDER BY v.version DESC`,[analyticsRoute[1]])).rows;
-    const trend=(await client.query("SELECT to_char(u.created_at AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS day,count(*)::int AS calls,avg(r.auto_score)::float AS average_auto_score FROM prompt_run_uses u JOIN experiment_runs r ON r.id=u.run_id JOIN prompt_library_versions v ON v.id=u.version_id WHERE v.prompt_id=$1 AND u.created_at>=now()-interval '30 days' GROUP BY day ORDER BY day",[analyticsRoute[1]])).rows;
+    const trend=(await client.query("SELECT to_char(u.created_at AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS day,count(*)::int AS calls,avg(r.auto_score)::float AS average_auto_score,avg(h.average_rating)::float AS average_human_rating FROM prompt_run_uses u JOIN experiment_runs r ON r.id=u.run_id JOIN prompt_library_versions v ON v.id=u.version_id LEFT JOIN LATERAL (SELECT avg(rating) AS average_rating FROM experiment_annotations WHERE run_id=r.id) h ON true WHERE v.prompt_id=$1 AND u.created_at>=now()-interval '30 days' GROUP BY day ORDER BY day",[analyticsRoute[1]])).rows;
     const models=(await client.query('SELECT DISTINCT r.api_model FROM prompt_run_uses u JOIN experiment_runs r ON r.id=u.run_id JOIN prompt_library_versions v ON v.id=u.version_id WHERE v.prompt_id=$1 ORDER BY r.api_model',[analyticsRoute[1]])).rows.map(row=>row.api_model);
     return ok({versions,trend,models});
   }
