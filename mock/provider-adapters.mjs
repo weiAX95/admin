@@ -87,8 +87,9 @@ function build(provider,model,messages,parameters,tool,outputKind='text') {
   if(provider==='gemini') {
     const geminiPart=part=>part.type==='text'?{text:part.text}:part.media.fileUri?{fileData:{mimeType:part.media.mime,fileUri:part.media.fileUri}}:{inlineData:{mimeType:part.media.mime,data:part.media.base64}};
     const system=messages.filter(message=>message.role==='system').flatMap(message=>message.parts.map(geminiPart));
+    if(outputKind==='audio' && (tool || system.some(part=>part.text?.trim()) || messages.some(message=>message.role!=='user' && message.parts.some(part=>part.text?.trim()) || message.parts.some(part=>part.type!=='text')))) throw new Error('Gemini TTS 仅支持用户纯文本输入');
     const contents=messages.filter(message=>message.role!=='system').map(message=>({role:message.role==='assistant'?'model':'user',parts:message.parts.map(geminiPart)}));
-    return {url:`${base.gemini()}/models/${encodeURIComponent(model)}:generateContent`,body:{contents,systemInstruction:system.length?{parts:system}:undefined,generationConfig:{temperature:parameters.temperature,topP:parameters.top_p,maxOutputTokens:parameters.max_tokens,stopSequences:parameters.stop,...(outputKind==='image'?{responseModalities:['IMAGE']}:{})},...(tool?{tools:[{functionDeclarations:[tool]}]}:{})}};
+    return {url:`${base.gemini()}/models/${encodeURIComponent(model)}:generateContent`,body:{contents,systemInstruction:outputKind==='audio'?undefined:system.length?{parts:system}:undefined,generationConfig:{temperature:parameters.temperature,topP:parameters.top_p,maxOutputTokens:parameters.max_tokens,stopSequences:parameters.stop,...(outputKind==='image'?{responseModalities:['IMAGE']}:outputKind==='audio'?{responseModalities:['AUDIO'],responseFormat:{audio:{mimeType:'AUDIO_WAV'}},speechConfig:{voiceConfig:{voice:'Kore'}}}:{})},...(tool?{tools:[{functionDeclarations:[tool]}]}:{})}};
   }
   throw new Error('未知模型供应商');
 }
@@ -111,8 +112,9 @@ function parsed(provider,result,outputKind='text') {
   const parts=result.candidates?.[0]?.content?.parts || [];
   const output=parts.filter(part=>typeof part.text==='string').map(part=>part.text).join('\n');
   const toolCalls=parts.filter(part=>part.functionCall).map(part=>part.functionCall);
-  const outputParts=parts.filter(part=>part.inlineData).map(part=>({type:'image',mimeType:part.inlineData.mimeType || part.inlineData.mime_type,data:part.inlineData.data}));
+  const outputParts=parts.filter(part=>part.inlineData).map(part=>({type:outputKind,mimeType:part.inlineData.mimeType || part.inlineData.mime_type || (outputKind==='audio'?'audio/wav':undefined),data:part.inlineData.data}));
   if(outputKind==='image' && (!outputParts.length || outputParts.length>4 || outputParts.some(part=>!part.mimeType?.startsWith('image/')))) throw new Error('图片输出缺失、格式无效或超过 4 张');
+  if(outputKind==='audio' && (outputParts.length!==1 || !outputParts[0].mimeType?.startsWith('audio/'))) throw new Error('音频输出缺失或格式无效');
   if(outputKind==='text'&&outputParts.length) throw new Error('文本模型意外返回媒体输出，请检查能力声明');
   if(!output && !toolCalls.length && !outputParts.length) throw new Error('模型响应缺少输出');
   return {output,toolCalls,outputParts,promptTokens:result.usageMetadata?.promptTokenCount,completionTokens:result.usageMetadata?.candidatesTokenCount};
@@ -122,7 +124,7 @@ export async function completeWithProvider(client,{provider='legacy',model,messa
   const key=secret[provider]?.();
   if(!key) throw new Error(`${provider} 凭据未配置`);
   const media=await resolved(messages,client,provider,key);
-  if(outputKind!=='text' && !(provider==='gemini'&&outputKind==='image')) throw new Error('当前供应商适配器不支持所选输出类型');
+  if(outputKind!=='text' && !(provider==='gemini'&&['image','audio'].includes(outputKind))) throw new Error('当前供应商适配器不支持所选输出类型');
   const request=build(provider,model,media,parameters,functionSchema(toolSchema),outputKind);
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),120000);

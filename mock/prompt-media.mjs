@@ -20,17 +20,17 @@ export const maximumPromptMediaSize=kind=>{
 export const isPromptMediaPath=pathname=>pathname==='/api/prompt-media'||route.test(pathname);
 export const promptMediaPath=id=>path.join(directory,id);
 export async function saveGeneratedPromptMedia(client,kind,mimeType,data) {
-  if(kind!=='image'||typeof data!=='string'||!data||!/^[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new Error('生成的图片数据无效');
+  if(!['image','audio'].includes(kind)||typeof data!=='string'||!data||!/^[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new Error('生成的媒体数据无效');
   const bytes=Buffer.from(data,'base64');
-  if(bytes.length>maximumPromptMediaSize(kind)) throw new Error('生成的图片超过大小限制');
+  if(bytes.length>maximumPromptMediaSize(kind)) throw new Error('生成的媒体超过大小限制');
   const id=crypto.randomUUID(),file=promptMediaPath(id);
   await fsp.mkdir(directory,{recursive:true});
   await fsp.writeFile(file,bytes,{flag:'wx'});
   try {
     const inspected=await inspectPromptMedia(file,kind);
-    if(inspected.mime!==mimeType) throw new Error('生成图片格式与声明不符');
-    await client.query('INSERT INTO prompt_media_assets(id,kind,mime_type,byte_size,duration_seconds,sha256) VALUES($1,$2,$3,$4,$5,$6)',[id,kind,mimeType,bytes.length,null,crypto.createHash('sha256').update(bytes).digest('hex')]);
-    return {part:{type:kind,assetId:id,mimeType,byteSize:bytes.length},file};
+    if(inspected.mime!==mimeType) throw new Error('生成媒体格式与声明不符');
+    await client.query('INSERT INTO prompt_media_assets(id,kind,mime_type,byte_size,duration_seconds,sha256) VALUES($1,$2,$3,$4,$5,$6)',[id,kind,mimeType,bytes.length,inspected.duration,crypto.createHash('sha256').update(bytes).digest('hex')]);
+    return {part:{type:kind,assetId:id,mimeType,byteSize:bytes.length,durationSeconds:inspected.duration},file};
   } catch(error) {await fsp.unlink(file).catch(()=>{});throw error;}
 }
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(data));};

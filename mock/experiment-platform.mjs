@@ -98,7 +98,10 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
       const model=models.get(variant.modelId);
       const usages=[];
       preflightOutput(model,variant.parameters.output_kind || 'text');
-      for(const prompt of prompts) usages.push(await preflightMedia(client,prompt.messages,model,toolSchema));
+      for(const prompt of prompts) {
+        if(variant.parameters.output_kind==='audio' && (prompt.system.trim() || toolSchema || prompt.messages.some(message=>message.role!=='user' && (message.content?.trim() || message.parts?.length) || (message.parts || []).some(part=>part.type!=='text')))) throw new Error('Gemini TTS 仅支持用户纯文本输入，不能带系统提示、媒体或工具');
+        usages.push(await preflightMedia(client,prompt.messages,model,toolSchema));
+      }
       usageByVariant.set(variant.id,usages);
     }
   } catch(error) {return fail(error.message,409);}

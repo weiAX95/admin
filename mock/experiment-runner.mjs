@@ -72,12 +72,13 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
           await client.query('BEGIN');
           const outputParts=[];
           for(const part of response.outputParts) {
-            if(part.type==='image') {const stored=await saveGeneratedPromptMedia(client,'image',part.mimeType,part.data);created.push(stored.file);outputParts.push(stored.part);}
+            if(part.type==='image'||part.type==='audio') {const stored=await saveGeneratedPromptMedia(client,part.type,part.mimeType,part.data);created.push(stored.file);outputParts.push(stored.part);}
             else outputParts.push(part);
           }
           const imageCount=outputParts.filter(part=>part.type==='image').length;
-          const cost=(promptTokens*Number(row.input_price)+completionTokens*Number(row.output_price))/1_000_000+Number(row.reserved_media_cost || 0)+imageCount*Number(row.media_price_snapshot?.imageOutputUsdEach || 0);
-          await client.query('UPDATE experiment_runs SET output=$2,prompt_tokens=$3,completion_tokens=$4,latency_ms=$5,cost_usd=$6,tool_calls=$7,output_parts=$8,media_usage=$9,error=NULL WHERE id=$1',[id,output,promptTokens,completionTokens,Math.round(performance.now()-started),cost,JSON.stringify(response.toolCalls),JSON.stringify(outputParts),JSON.stringify({...row.media_usage,imageOutputCount:imageCount})]);
+          const audioSeconds=outputParts.filter(part=>part.type==='audio').reduce((sum,part)=>sum+Number(part.durationSeconds || 0),0);
+          const cost=(promptTokens*Number(row.input_price)+completionTokens*Number(row.output_price))/1_000_000+Number(row.reserved_media_cost || 0)+imageCount*Number(row.media_price_snapshot?.imageOutputUsdEach || 0)+audioSeconds*Number(row.media_price_snapshot?.audioOutputUsdPerSecond || 0);
+          await client.query('UPDATE experiment_runs SET output=$2,prompt_tokens=$3,completion_tokens=$4,latency_ms=$5,cost_usd=$6,tool_calls=$7,output_parts=$8,media_usage=$9,error=NULL WHERE id=$1',[id,output,promptTokens,completionTokens,Math.round(performance.now()-started),cost,JSON.stringify(response.toolCalls),JSON.stringify(outputParts),JSON.stringify({...row.media_usage,imageOutputCount:imageCount,audioOutputSeconds:audioSeconds})]);
           await client.query('COMMIT');
         } catch(error) {await client.query('ROLLBACK').catch(()=>{});for(const file of created)await fs.unlink(file).catch(()=>{});throw error;}
         finally {client.release();}

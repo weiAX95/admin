@@ -17,7 +17,7 @@ export function validateParameters(value) {
       if (!Array.isArray(raw) || raw.length > 8 || raw.some(item => typeof item !== 'string' || !item || item.length > 100)) throw new Error('stop_sequences 无效');
       result[key] = raw;
     } else if (key === 'output_kind') {
-      if (!['text','image'].includes(raw)) throw new Error('output_kind 只支持 text 或 image');
+      if (!['text','image','audio'].includes(raw)) throw new Error('output_kind 只支持 text、image 或 audio');
       result[key]=raw;
     } else {
       const range = ranges[key];
