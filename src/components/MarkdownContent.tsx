@@ -70,7 +70,7 @@ function SecureImage({ src, alt }: { src?: string; alt?: string }) {
     setUrl(null);
     setFailed(false);
     if (!src) return;
-    if (!/^\/api\/assets\/[0-9a-f-]{36}$/.test(src)) {
+    if (!/^\/api\/assets\/[0-9a-f-]{36}(?:\?share=[0-9a-f-]{36})?$/.test(src)) {
       if (/^https:\/\//i.test(src)) setUrl(src);
       return;
     }

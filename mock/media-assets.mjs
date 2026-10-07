@@ -33,10 +33,12 @@ async function readLimited(req) {
   return Buffer.concat(chunks);
 }
 
-export async function handleAssetRequest(req, res, pool, lookupSession) {
-  const pathname = new URL(req.url, "http://localhost").pathname;
+export async function handleAssetRequest(req, res, pool, lookupSession, canReadSharedAsset = async () => false) {
+  const url = new URL(req.url, "http://localhost");
+  const pathname = url.pathname;
   const token = /^Bearer (.+)$/.exec(req.headers.authorization || "")?.[1];
-  if (!await lookupSession(token)) return json(res, 401, { error: "请先登录" });
+  const assetMatch = pathname.match(assetRoute);
+  if (!await lookupSession(token) && !(assetMatch && req.method === "GET" && await canReadSharedAsset(url.searchParams.get("share"), assetMatch[1]))) return json(res, 401, { error: "请先登录" });
   if (pathname === "/api/assets" && req.method === "POST") {
     try {
       if (Number(req.headers["content-length"] || 0) > MAX_BYTES) return json(res, 413, { error: "图片不能超过 10 MB" });
@@ -73,7 +75,7 @@ export async function cleanupAssets(pool, now = new Date(), directory = assetDir
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(748201)");
-    const content = await client.query("SELECT content AS value FROM notes UNION ALL SELECT description FROM tasks UNION ALL SELECT notes FROM tasks UNION ALL SELECT prompt FROM experiments UNION ALL SELECT result FROM experiments UNION ALL SELECT snapshot_description FROM recurring_series UNION ALL SELECT description FROM task_templates");
+    const content = await client.query("SELECT content AS value FROM notes UNION ALL SELECT description FROM tasks UNION ALL SELECT notes FROM tasks UNION ALL SELECT prompt FROM experiments UNION ALL SELECT result FROM experiments UNION ALL SELECT system_prompt FROM experiments UNION ALL SELECT user_prompt FROM experiments UNION ALL SELECT output FROM experiment_runs UNION ALL SELECT snapshot_description FROM recurring_series UNION ALL SELECT description FROM task_templates");
     const referenced = new Set();
     const pattern = /\/api\/assets\/([0-9a-f-]{36})/g;
     for (const row of content.rows) for (const match of String(row.value || "").matchAll(pattern)) referenced.add(match[1]);

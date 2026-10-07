@@ -5,6 +5,9 @@ import { getExperiment } from "../api/experiments";
 import type { Experiment } from "../types";
 import MarkdownContent from "../components/MarkdownContent";
 import ExperimentDefinitionDetail from "../components/ExperimentDefinitionDetail";
+import ExperimentShareButton from "../components/ExperimentShareButton";
+import { getStoredUser } from "../api/client";
+import type { AuthUser } from "../types";
 
 export default function ExperimentDetail() {
   const { id } = useParams();
@@ -19,7 +22,9 @@ export default function ExperimentDetail() {
   if (error) return <Alert type="error" showIcon message={error} />;
   if (!experiment) return <Spin className="task-detail-loading" />;
   if (experiment.recordKind === "definition") return <ExperimentDefinitionDetail id={experiment.id} />;
-  return <Card title={experiment.title} extra={experiment.taskId ? <Link to={`/tasks/${experiment.taskId}`}>返回关联任务</Link> : <Link to="/experiments">返回实验列表</Link>}>
+  const me = getStoredUser<AuthUser>();
+  const canShare = me?.role === "admin" || experiment.ownerId === me?.id;
+  return <Card title={experiment.title} extra={<>{canShare && <ExperimentShareButton id={experiment.id}/>} {experiment.taskId ? <Link to={`/tasks/${experiment.taskId}`}>返回关联任务</Link> : <Link to="/experiments">返回实验列表</Link>}</>}>
     <Descriptions column={{ xs: 1, md: 2 }} items={[
       { key: "model", label: "模型", children: experiment.model || "未填写" },
       { key: "score", label: "自评", children: `${experiment.score} / 5` },

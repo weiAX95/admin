@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)、[复习提醒迁移](../db/migrations/008_note_reviews.sql)和[实验执行基础迁移](../db/migrations/009_experiment_foundation.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **45 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)、[复习提醒迁移](../db/migrations/008_note_reviews.sql)、[实验执行基础迁移](../db/migrations/009_experiment_foundation.sql)、[实验评测迁移](../db/migrations/010_experiment_evaluation.sql)、[分享与调度迁移](../db/migrations/011_experiment_sharing_schedules.sql)和[数据集批次约束迁移](../db/migrations/012_experiment_dataset_batch_kind.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **58 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 页面如何读写数据
 
@@ -92,6 +92,51 @@ flowchart LR
 | `experiment_variants` | 一个实验定义的模型和参数组合；实验与模型均为外键。 | 实验详情、批量运行 |
 | `experiment_batches` | 单次或 A/B 批次、变量输入、运行状态；实验和发起账号均为外键。 | 运行进度与汇总 |
 | `experiment_runs` | 每个变体和输入组的独立执行、状态、响应、用量、价格与成本快照；批次、实验和变体均为外键。 | 实验详情的运行结果 |
+
+## 实验评测、标注、分享与调度
+
+```mermaid
+flowchart LR
+  Datasets["experiment_datasets"] -->|"FK dataset_id"| Versions["experiment_dataset_versions"]
+  Versions -->|"FK dataset_version_id"| Cases["experiment_dataset_cases"]
+  Versions -->|"FK dataset_version_id"| Batches["experiment_batches"]
+  Cases -->|"FK case_id"| Runs["experiment_runs"]
+  Metrics["experiment_metric_versions"] -->|"FK metric_version_id"| Batches
+  Metrics -->|"FK metric_version_id"| Scores["experiment_run_metrics"]
+  Runs -->|"FK run_id"| Scores
+  Experiments["experiments"] -->|"FK experiment_id"| Annotations["experiment_annotations"]
+  Runs -->|"FK run_id"| Annotations
+  Users["users"] -->|"FK reviewer_id；删除账号时置空"| Annotations
+  Annotations -->|"FK annotation_id"| AnnotationTags["experiment_annotation_tags"]
+  Annotations -->|"FK annotation_id"| Candidates["experiment_dataset_candidates"]
+  Chains["experiment_chains"] -->|"FK chain_id；删除链时置空"| Experiments
+  Experiments -->|"FK experiment_id"| Shares["experiment_shares"]
+  Experiments -->|"FK experiment_id"| Schedules["experiment_schedules"]
+  Schedules -->|"FK schedule_id；序列＋到期时刻唯一"| Occurrences["experiment_schedule_occurrences"]
+  Batches -->|"FK batch_id；删除批次时置空"| Occurrences
+  Users -->|"FK user_id"| Notices["app_notifications"]
+  Experiments -. "app_notifications.entity_id；应用层关联" .-> Notices
+```
+
+数据集版本固定用例清单，运行通过 `case_id` 记录对应输入。指标版本确定规则评分、Judge 提示词、通过门槛及退化阈值；规则和 Judge 的 0–5 分独立保存，再计算合成分。人工评分与自动分分开存储，人工标签只允许迁移中列出的七种值；标注可进入待审核候选池，不自动改写已发布数据集。版本链只在用户确认相似标题建议后设置稳定 `chain_id`。
+
+分享表只保存随机令牌的哈希，公开页使用令牌查找最新配置和运行结果，过期或撤销后无法访问。调度记录以 `(schedule_id, due_at)` 唯一约束防止同一周期重复执行；账号时区用于计算下次运行时刻。`app_notifications.entity_id` 是应用层多类型关联，没有指向实验或调度的 SQL 外键；笔记复习仍保留原有专用通知表。
+
+| 表 | 当前内容与关键关系 | 对应页面或功能 |
+| --- | --- | --- |
+| `experiment_metric_versions` | 规则类型、Judge 提示词、通过与退化门槛；由批次和运行指标引用。 | 回归设置与报告 |
+| `experiment_datasets` | 数据集目录；创建账号外键可置空。 | `/experiments/datasets` |
+| `experiment_dataset_versions` | 不可变的版本标识；`dataset_id` 外键。 | 数据集版本选择 |
+| `experiment_dataset_cases` | 稳定用例键、变量、参考答案、难度与分类；版本外键。 | 回归逐项比较 |
+| `experiment_run_metrics` | 单次运行的规则、Judge 和合成评分；运行与指标版本外键。 | 回归报告、自动评分 |
+| `experiment_annotations` | 人工星级；实验、具体运行和评分账号外键，账号删除后匿名保留。 | 实验输出评分 |
+| `experiment_annotation_tags` | 人工标签；标注外键和七值 CHECK。 | 实验输出标签 |
+| `experiment_dataset_candidates` | 标注衍生的待审核候选；实验、运行、标注均为外键。 | 数据集候选池 |
+| `experiment_chains` | 用户确认后的稳定版本链；创建账号外键。 | `/experiments/chains/:id` |
+| `experiment_shares` | 只读分享的令牌哈希、期限、撤销时间；实验与创建者外键。 | `/share/experiments/:token` |
+| `experiment_schedules` | 时区、频率、变量、重试、连续失败次数和下次执行时间；实验与账号外键。 | `/experiments/schedules` |
+| `experiment_schedule_occurrences` | 每个计划周期与批次的持久关联；调度与批次外键。 | 定时运行恢复及去重 |
+| `app_notifications` | 实验事件站内通知及可选邮件发送状态；账号外键。 | 顶部铃铛 |
 
 ## 账号、会话与人工评分
 

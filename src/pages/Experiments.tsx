@@ -15,7 +15,7 @@ import {
   Typography,
 } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import type { ColumnsType } from "antd/es/table";
 import {
   createExperiment,
@@ -33,6 +33,7 @@ import type { ExperimentDefinition } from "../api/experiment-platform";
 import { getStoredUser } from "../api/client";
 import type { AuthUser } from "../types";
 import ExperimentPlatformSettings from "../components/ExperimentPlatformSettings";
+import ExperimentCosts from "../components/ExperimentCosts";
 
 function scoreColor(score: number): string {
   if (score >= 4) return "success";
@@ -128,6 +129,7 @@ export function ExperimentFormDrawer({ open, initial, tasks, defaultTaskId, onCl
 
 export default function Experiments() {
   const { message } = App.useApp();
+  const navigate = useNavigate();
   const [items, setItems] = useState<Experiment[]>([]);
   const [tasks, setTasks] = useState<LearningTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,6 +139,7 @@ export default function Experiments() {
   const [definitionOpen, setDefinitionOpen] = useState(false);
   const [editingDefinition, setEditingDefinition] = useState<ExperimentDefinition | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [compareIds, setCompareIds] = useState<React.Key[]>([]);
   const currentUser = getStoredUser<AuthUser>();
 
   const load = useCallback(
@@ -244,7 +247,8 @@ export default function Experiments() {
     },
   ];
 
-  return (
+  return (<>
+    <ExperimentCosts />
     <Card className="collection-card" title={<span className="collection-title">实验列表<span className="collection-count">{items.length} 条</span></span>}>
       <Space className="collection-toolbar" wrap size={[10, 12]}>
         <Select
@@ -264,9 +268,13 @@ export default function Experiments() {
         </Button>
         <Button onClick={() => { setEditing(null); setDrawerOpen(true); }}>记录手工实验</Button>
         {currentUser?.role === "admin" && <Button onClick={() => setSettingsOpen(true)}>模型与预算配置</Button>}
+        <Button disabled={compareIds.length < 2} onClick={() => navigate(`/experiments/compare?ids=${compareIds.map(String).map(encodeURIComponent).join(',')}`)}>对比已选 {compareIds.length} 个</Button>
+        <Button onClick={() => navigate('/experiments/datasets')}>评测数据集</Button>
+        <Button onClick={() => navigate('/experiments/schedules')}>定时任务</Button>
       </Space>
       <Table
         rowKey="id"
+        rowSelection={{ selectedRowKeys: compareIds, onChange: keys => { if (keys.length > 5) { message.warning('最多对比 5 个'); return; } setCompareIds(keys); } }}
         loading={loading}
         columns={columns}
         dataSource={items}
@@ -286,5 +294,6 @@ export default function Experiments() {
       <ExperimentDefinitionDrawer open={definitionOpen} initial={editingDefinition} tasks={tasks} onClose={() => setDefinitionOpen(false)} onSaved={() => { setDefinitionOpen(false); void load(taskFilter); }} />
       <ExperimentPlatformSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </Card>
+  </>
   );
 }

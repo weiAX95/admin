@@ -101,13 +101,13 @@ export default function AdminLayout() {
             <span className="header-breadcrumb">工作空间 <span>/</span> <strong>{page.section}</strong></span>
           </Space>
           <Space size={14} className="header-account">
-            <Popover trigger="click" placement="bottomRight" title="复习提醒" content={<div style={{ width: 320, maxHeight: 360, overflowY: "auto" }}>
+            <Popover trigger="click" placement="bottomRight" title="站内通知" content={<div style={{ width: 320, maxHeight: 360, overflowY: "auto" }}>
               {notifications.length ? notifications.map(item => <div key={item.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--ant-color-border-secondary)" }}>
-                <Space><Link to={`/notes/${item.noteId}`} onClick={() => { if (!item.readAt) void markNotificationRead(item.id).then(refreshNotifications); }}>{item.title}</Link>{!item.readAt && <Badge status="processing" />}</Space>
-                <div><Typography.Text type="secondary">到期 {item.dueOn}</Typography.Text></div>
-              </div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无复习提醒" />}
+                <Space><Link to={item.targetUrl || `/notes/${item.noteId}`} onClick={() => { if (!item.readAt) void markNotificationRead(item.id).then(refreshNotifications); }}>{item.title}</Link>{!item.readAt && <Badge status="processing" />}</Space>
+                <div><Typography.Text type="secondary">{item.dueOn ? `到期 ${item.dueOn}` : item.body || ''}</Typography.Text></div>
+              </div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无通知" />}
               <Button type="link" onClick={() => navigate("/notes/reviews")}>打开复习面板</Button>
-            </div>}><Button type="text" aria-label={`复习提醒，未读 ${unread} 条`} icon={<Badge count={unread} size="small"><BellOutlined /></Badge>} onClick={refreshNotifications} /></Popover>
+            </div>}><Button type="text" aria-label={`站内通知，未读 ${unread} 条`} icon={<Badge count={unread} size="small"><BellOutlined /></Badge>} onClick={refreshNotifications} /></Popover>
             <Avatar size={32} className="account-avatar">{name.slice(0, 1)}</Avatar>
             <div className="account-copy"><strong>{name}</strong><span>{user?.role === "admin" ? "管理员" : "普通成员"}</span></div>
             <Button type="text" icon={<LogoutOutlined />} onClick={() => { void logout().catch(() => undefined).finally(() => { clearAuth(); navigate("/login", { replace: true }); }); }}>

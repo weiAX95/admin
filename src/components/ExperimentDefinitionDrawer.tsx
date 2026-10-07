@@ -11,12 +11,13 @@ function highlighted(text: string) { return text.split(/(\{\{[a-zA-Z_][a-zA-Z0-9
 
 interface Props { open: boolean; initial?: ExperimentDefinition | null; tasks: LearningTask[]; defaultTaskId?: string; onClose: () => void; onSaved: (id: string) => void }
 export default function ExperimentDefinitionDrawer({ open, initial, tasks, defaultTaskId, onClose, onSaved }: Props) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [form] = Form.useForm<DefinitionPayload>();
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [templates, setTemplates] = useState<ExperimentTemplate[]>([]);
   const [prompts, setPrompts] = useState<{ id: string; name: string; version_id: string; version: number; content: string }[]>([]);
   const [canExecute, setCanExecute] = useState(false);
+  const [judgeModelId, setJudgeModelId] = useState<string | null>(null);
   const [saveAction, setSaveAction] = useState<'save' | 'execute'>('save');
   const [saving, setSaving] = useState(false);
   const userPrompt = Form.useWatch('userPrompt', form) || '';
@@ -30,7 +31,8 @@ export default function ExperimentDefinitionDrawer({ open, initial, tasks, defau
     form.setFieldsValue(initial ? { ...initial, variants: initial.variants } : { title: '', taskId: defaultTaskId || null, systemPrompt: '', userPrompt: '', promptVersionId: null, variables: {}, variants: [] });
     void Promise.all([getPlatformConfig(), getExperimentTemplates(), getPromptLibrary()]).then(([config, library, promptList]) => {
       setModels(config.models.filter(item => item.active)); setTemplates(library.items); setPrompts(promptList.items);
-      setCanExecute(config.configured && config.dailyBudgetUsd > 0 && config.concurrencyLimit > 0);
+      setJudgeModelId(config.judgeModelId);
+      setCanExecute(config.configured && config.dailyBudgetUsd > 0 && config.concurrencyLimit > 0 && Boolean(config.judgeModelId));
     }).catch(error => message.error(error instanceof Error ? error.message : '无法读取实验配置'));
   }, [open, initial, defaultTaskId, form, message]);
 
@@ -40,7 +42,21 @@ export default function ExperimentDefinitionDrawer({ open, initial, tasks, defau
     form.setFieldsValue({ systemPrompt: template.systemPrompt, userPrompt: template.userPrompt, variables: {}, variants: template.variants.map(variant => ({ ...variant, modelId: models[0]?.id || '' })) });
   };
   const submit = async (values: DefinitionPayload) => {
+    if (!values.variants?.length) { message.error('请添加至少一个模型变体'); return; }
     if (saveAction === 'execute' && missing.length) { message.error(`请填写变量：${missing.join('、')}`); return; }
+    if (saveAction === 'execute') {
+      const judge = models.find(model => model.id === judgeModelId);
+      const estimate = values.variants.reduce((total, variant) => {
+        const model = models.find(item => item.id === variant.modelId);
+        if (!model || !judge) return total;
+        const user = values.userPrompt.replace(/\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g, (_, name: string) => values.variables[name] || '');
+        const tokens = variant.parameters?.max_tokens || 1024;
+        const chars = [...values.systemPrompt, ...user].length;
+        return total + ((chars * model.inputUsdPerMillion + tokens * model.outputUsdPerMillion + (chars + tokens * 4 + 1000) * judge.inputUsdPerMillion + 300 * judge.outputUsdPerMillion) / 1_000_000);
+      }, 0);
+      const confirmed = await new Promise<boolean>(resolve => modal.confirm({ title: `确认保存并提交 ${values.variants.length} 次模型调用？`, content: `本地调用上限估算 $${estimate.toFixed(6)}；服务端会按当前预算再次校验。`, onOk: () => resolve(true), onCancel: () => resolve(false) }));
+      if (!confirmed) return;
+    }
     setSaving(true);
     try {
       const payload = { ...values, variants: values.variants.map(variant => ({ ...variant, parameters: variant.parameters || {} })), execute: !initial && saveAction === 'execute' };
@@ -55,7 +71,7 @@ export default function ExperimentDefinitionDrawer({ open, initial, tasks, defau
   };
   const preview = (() => { try { return userPrompt.replace(/\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g, (_, name) => variables[name] || `〔未填写：${name}〕`); } catch { return userPrompt; } })();
   return <Drawer title={initial ? '编辑实验定义' : '新建实验定义'} open={open} onClose={onClose} width="min(1100px, 100vw)" extra={<Space><Button loading={saving} onClick={() => { setSaveAction('save'); form.submit(); }}>仅保存</Button><Button type="primary" disabled={!canExecute || missing.length > 0 || models.length === 0} loading={saving} onClick={() => { setSaveAction('execute'); form.submit(); }}>保存并执行</Button></Space>}>
-    {!canExecute && <Alert type="info" showIcon message="真实执行需管理员配置模型、价格、每日预算、并发上限和服务端 API 密钥；定义仍可保存。" style={{ marginBottom: 16 }} />}
+    {!canExecute && <Alert type="info" showIcon message="真实执行需管理员配置模型、价格、LLM Judge、每日预算、并发上限和服务端 API 密钥；定义仍可保存。" style={{ marginBottom: 16 }} />}
     <Form form={form} layout="vertical" onFinish={submit}>
       <Row gutter={16}><Col span={16}><Form.Item name="title" label="实验标题" rules={[{ required: true, message: '请输入标题' }]}><Input maxLength={200} /></Form.Item></Col><Col span={8}><Form.Item name="taskId" label="关联任务"><Select allowClear options={tasks.map(task => ({ value: task.id, label: task.title }))} /></Form.Item></Col></Row>
       {!initial && <Form.Item label="使用模板"><Select allowClear placeholder="选择后预填，可继续修改" options={templates.map(template => ({ value: template.id, label: template.name }))} onChange={applyTemplate} /></Form.Item>}

@@ -30,6 +30,10 @@ import { initializeNoteReviews, initializeUserReviews, resetNoteReviews, complet
 import { deliverReviewEmails, smtpConfigured } from "./review-mailer.mjs";
 import { handleExperimentPlatform } from "./experiment-platform.mjs";
 import { recoverExperimentJobs, runExperimentJobs } from "./experiment-runner.mjs";
+import { handleExperimentEvaluation } from "./experiment-evaluation.mjs";
+import { canReadSharedExperimentAsset, handleExperimentSharing, handlePublicExperimentShare } from "./experiment-sharing.mjs";
+import { deliverAppEmails } from "./app-notifications.mjs";
+import { handleExperimentSchedules, processDueExperimentSchedules } from "./experiment-schedules.mjs";
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -461,6 +465,8 @@ async function handleRequest(req, res) {
   if (method === "OPTIONS") return send(res, 204, {});
 
   try {
+    const publicShare = await handlePublicExperimentShare({ pathname, method, client: activeClient });
+    if (publicShare) return send(res, publicShare.status, publicShare.data);
     // ---- 登录（免鉴权）----
     if (method === "POST" && pathname === "/api/auth/login") {
       const body = await readBody(req);
@@ -484,6 +490,12 @@ async function handleRequest(req, res) {
 
     const platformResponse = await handleExperimentPlatform({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (platformResponse) return send(res, platformResponse.status, platformResponse.data);
+    const evaluationResponse = await handleExperimentEvaluation({ pathname, method, client: activeClient, me, readBody: () => readBody(req), url });
+    if (evaluationResponse) return send(res, evaluationResponse.status, evaluationResponse.data);
+    const sharingResponse = await handleExperimentSharing({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (sharingResponse) return send(res, sharingResponse.status, sharingResponse.data);
+    const scheduleResponse = await handleExperimentSchedules({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (scheduleResponse) return send(res, scheduleResponse.status, scheduleResponse.data);
 
     if (method === "GET" && pathname === "/api/auth/me") {
       return send(res, 200, publicUser(me));
@@ -529,13 +541,18 @@ async function handleRequest(req, res) {
     }
     if (pathname === "/api/notifications" && method === "GET") {
       const items = (await activeClient.query("SELECT r.id,r.note_id AS note_id,n.title,to_char(r.due_on,'YYYY-MM-DD') AS due_on,r.created_at,r.read_at,r.email_status FROM note_review_notifications r JOIN notes n ON n.id=r.note_id WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 100", [me.id])).rows;
-      const unread = (await activeClient.query("SELECT count(*)::integer AS count FROM note_review_notifications WHERE user_id=$1 AND read_at IS NULL", [me.id])).rows[0].count;
-      return send(res, 200, { items: items.map(item => ({ id: item.id, noteId: item.note_id, title: item.title, dueOn: item.due_on, createdAt: item.created_at, readAt: item.read_at, emailStatus: item.email_status })), unread });
+      const appItems = (await activeClient.query("SELECT id,kind,title,body,target_url,created_at,read_at,email_status FROM app_notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100", [me.id])).rows;
+      const unreadNotes = (await activeClient.query("SELECT count(*)::integer AS count FROM note_review_notifications WHERE user_id=$1 AND read_at IS NULL", [me.id])).rows[0].count;
+      const unreadApps = (await activeClient.query("SELECT count(*)::integer AS count FROM app_notifications WHERE user_id=$1 AND read_at IS NULL", [me.id])).rows[0].count;
+      const combined = [...items.map(item => ({ id: item.id, kind: "note_review", noteId: item.note_id, title: item.title, dueOn: item.due_on, targetUrl: `/notes/${item.note_id}`, createdAt: item.created_at, readAt: item.read_at, emailStatus: item.email_status })), ...appItems.map(item => ({ id: item.id, kind: item.kind, noteId: null, title: item.title, body: item.body, dueOn: null, targetUrl: item.target_url, createdAt: item.created_at, readAt: item.read_at, emailStatus: item.email_status }))].sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt)).slice(0,100);
+      return send(res, 200, { items: combined, unread: unreadNotes + unreadApps });
     }
     const readNotificationRoute = pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
     if (readNotificationRoute && method === "POST") {
       const result = await activeClient.query("UPDATE note_review_notifications SET read_at=coalesce(read_at,now()) WHERE id=$1 AND user_id=$2 RETURNING id", [readNotificationRoute[1], me.id]);
-      return result.rowCount ? send(res, 200, { id: readNotificationRoute[1], read: true }) : send(res, 404, { error: "通知不存在" });
+      if (result.rowCount) return send(res, 200, { id: readNotificationRoute[1], read: true });
+      const appResult = await activeClient.query("UPDATE app_notifications SET read_at=coalesce(read_at,now()) WHERE id=$1 AND user_id=$2 RETURNING id", [readNotificationRoute[1], me.id]);
+      return appResult.rowCount ? send(res, 200, { id: readNotificationRoute[1], read: true }) : send(res, 404, { error: "通知不存在" });
     }
 
     const logAction = (type, data) => logActivity(type, { ...data, actor: me });
@@ -1534,7 +1551,7 @@ async function withData(work) {
 
 const server = http.createServer((req, res) => {
   if (isAssetPath(new URL(req.url, "http://localhost").pathname)) {
-    void handleAssetRequest(req, res, pool, token => lookupSession(token)).catch(error => {
+    void handleAssetRequest(req, res, pool, token => lookupSession(token), (shareToken, assetId) => canReadSharedExperimentAsset(pool, shareToken, assetId)).catch(error => {
       console.error("[assets] request failed:", error);
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -1621,6 +1638,7 @@ try {
         const { value } = await withData(() => createDueReviewNotifications(activeClient));
         if (value) notifyLive();
         await deliverReviewEmails(pool);
+        await deliverAppEmails(pool);
       } catch (error) { console.error("[reviews] reminder job failed:", error); }
       finally {
         const now = Date.now();
@@ -1637,6 +1655,12 @@ try {
     };
     void runExperiments();
     setInterval(() => { void runExperiments(); }, 1500).unref();
+    const runSchedules = async () => {
+      try { if (await processDueExperimentSchedules(pool)) notifyLive(); }
+      catch (error) { console.error("[experiments] schedule failed:", error); }
+    };
+    void runSchedules();
+    setInterval(() => { void runSchedules(); }, 1000).unref();
   });
 } catch (error) {
   console.error("[mock] PostgreSQL 不可用或尚未迁移：", error.message);

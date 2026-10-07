@@ -53,7 +53,9 @@ export function estimateMaxCost(variants, inputs, models) {
 
 export function winRates(runs) {
   const groups = new Map();
+  const variants = new Set();
   for (const run of runs) {
+    variants.add(run.variantId);
     if (!groups.has(run.inputIndex)) groups.set(run.inputIndex, []);
     groups.get(run.inputIndex).push(run);
   }
@@ -64,5 +66,5 @@ export function winRates(runs) {
     const best = Math.max(...group.map(run => run.autoScore));
     for (const run of group) if (run.autoScore === best) wins.set(run.variantId, (wins.get(run.variantId) || 0) + 1);
   }
-  return { included, excluded, variants: [...wins].map(([variantId, count]) => ({ variantId, wins: count, rate: included ? count / included : 0 })) };
+  return { included, excluded, variants: [...variants].map(variantId => ({ variantId, wins: wins.get(variantId) || 0, rate: included ? (wins.get(variantId) || 0) / included : 0 })) };
 }

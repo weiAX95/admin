@@ -1,0 +1,60 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createPgTestServer } from './pg-helper.mjs';
+
+test('versioned dataset regression, annotations, candidate pool, chains and costs', async t => {
+  const modelServer = http.createServer(async (req,res) => {
+    let raw=''; for await(const chunk of req)raw+=chunk;
+    const body=JSON.parse(raw);
+    const judge=body.messages[0].content.includes('根据问题');
+    res.writeHead(200,{'Content-Type':'application/json'});
+    res.end(JSON.stringify({choices:[{message:{content:judge?'{"score":4,"reason":"准确"}':'正确答案'}}],usage:{prompt_tokens:10,completion_tokens:5}}));
+  });
+  await new Promise(resolve=>modelServer.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>modelServer.close(resolve)));
+  const api=await createPgTestServer(t,undefined,{MODEL_API_BASE_URL:`http://127.0.0.1:${modelServer.address().port}`,MODEL_API_KEY:'test'});
+  const login=async(username,password)=>{const r=await fetch(`${api.base}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});return(await r.json()).token;};
+  const admin=await login('admin','admin123'), member=await login('member','test');
+  const request=async(token,path,method='GET',body)=>{const response=await fetch(`${api.base}${path}`,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return{status:response.status,data:await response.json()};};
+  const model=await request(admin,'/experiment-platform/models','POST',{displayName:'Test',apiModel:'test',inputUsdPerMillion:1,outputUsdPerMillion:2});
+  assert.equal(model.status,201);
+  await request(admin,'/experiment-platform/config','PUT',{dailyBudgetUsd:10,concurrencyLimit:2,judgeModelId:model.data.id});
+  const definitionBody={title:'回归基线',taskId:null,systemPrompt:'系统',userPrompt:'{{question}}',variables:{question:'测试'},variants:[{modelId:model.data.id,label:'A',parameters:{max_tokens:100}}]};
+  const definition=(await request(admin,'/experiment-definitions','POST',definitionBody)).data;
+  const peer=(await request(admin,'/experiment-definitions','POST',{...definitionBody,title:'回归基线 v2'})).data;
+  const dataset=await request(admin,'/experiment-datasets','POST',{name:'测试数据集',cases:[{caseKey:'case-1',variables:{question:'问好'},referenceAnswer:'正确答案',difficulty:'简单',category:'基础'},{caseKey:'case-2',variables:{question:'解释'},referenceAnswer:'正确答案',difficulty:'困难',category:'进阶'}]});
+  assert.equal(dataset.status,201);
+  const versionId=dataset.data.version.id;
+  const baseline=await request(admin,`/experiment-definitions/${definition.id}/dataset-run`,'POST',{datasetVersionId:versionId,metricVersionId:'default-v1',variantIds:[definition.variants[0].id]});
+  assert.equal(baseline.status,202);
+  const incompatible=await request(admin,`/experiment-definitions/${peer.id}/regression`,'POST',{datasetVersionId:versionId,metricVersionId:'default-v1',baselineBatchId:'missing'});
+  assert.equal(incompatible.status,409);
+  let status='queued';
+  for(let i=0;i<50;i++){await new Promise(resolve=>setTimeout(resolve,100));status=(await request(admin,`/experiment-batches/${baseline.data.batchId}`)).data.status;if(status==='completed')break;}
+  assert.equal(status,'completed');
+  const regression=await request(admin,`/experiment-definitions/${peer.id}/regression`,'POST',{datasetVersionId:versionId,metricVersionId:'default-v1',baselineBatchId:baseline.data.batchId,variantIds:[peer.variants[0].id]});
+  assert.equal(regression.status,202);
+  let batch;
+  for(let i=0;i<50;i++){await new Promise(resolve=>setTimeout(resolve,100));batch=(await request(admin,`/experiment-batches/${regression.data.batchId}`)).data;if(batch.status==='completed')break;}
+  assert.equal(batch.status,'completed');
+  const report=await request(admin,`/experiment-batches/${regression.data.batchId}/report`);
+  assert.equal(report.data.total,2);
+  assert.equal(report.data.passRate,1);
+  assert.deepEqual(report.data.degraded,[]);
+  assert.equal(report.data.byDifficulty.length,2);
+  const annotation=await request(member,`/experiment-runs/${batch.runs[0].id}/annotation`,'POST',{rating:3,tags:['推理错误']});
+  assert.equal(annotation.status,200);
+  const updated=await request(member,`/experiment-runs/${batch.runs[0].id}/annotation`,'POST',{rating:5,tags:['完美']});
+  assert.equal(updated.data.ratingCount,1);
+  const summary=await request(admin,`/experiment-runs/${batch.runs[0].id}/annotation`);
+  assert.equal(summary.data.summary.averageRating,5);
+  const candidates=await request(admin,'/experiment-candidates');
+  assert.equal(candidates.data.items.length,1);
+  const suggestions=await request(admin,`/experiments/${peer.id}/chain-suggestions`);
+  assert.ok(suggestions.data.items.some(item=>item.id===definition.id));
+  const chain=await request(admin,`/experiments/${peer.id}/chain`,'POST',{peerId:definition.id});
+  assert.equal((await request(admin,`/experiment-chains/${chain.data.chainId}`)).data.items.length,2);
+  const costs=await request(admin,'/experiment-costs');
+  assert.ok(costs.data.monthTotalUsd>0);
+});

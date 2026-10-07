@@ -13,6 +13,12 @@ import NoteDetail from "./pages/NoteDetail";
 import NoteGraph from "./pages/NoteGraph";
 import NoteReviews from "./pages/NoteReviews";
 import ExperimentDetail from "./pages/ExperimentDetail";
+import ExperimentCompare from "./pages/ExperimentCompare";
+import ExperimentDatasets from "./pages/ExperimentDatasets";
+import ExperimentRegressionReport from "./pages/ExperimentRegressionReport";
+import ExperimentChain from "./pages/ExperimentChain";
+import SharedExperiment from "./pages/SharedExperiment";
+import ExperimentSchedules from "./pages/ExperimentSchedules";
 import Accounts from "./pages/Accounts";
 import Login from "./pages/Login";
 
@@ -55,6 +61,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/share/experiments/:token" element={<SharedExperiment />} />
             <Route element={<RequireAuth />}>
               <Route element={<AdminLayout />}>
                 <Route path="/" element={<Dashboard />} />
@@ -66,6 +73,11 @@ export default function App() {
                 <Route path="/notes/reviews" element={<NoteReviews />} />
                 <Route path="/notes/:id" element={<NoteDetail />} />
                 <Route path="/experiments" element={<Experiments />} />
+                <Route path="/experiments/compare" element={<ExperimentCompare />} />
+                <Route path="/experiments/datasets" element={<ExperimentDatasets />} />
+                <Route path="/experiments/reports/:id" element={<ExperimentRegressionReport />} />
+                <Route path="/experiments/chains/:id" element={<ExperimentChain />} />
+                <Route path="/experiments/schedules" element={<ExperimentSchedules />} />
                 <Route path="/experiments/:id" element={<ExperimentDetail />} />
                 <Route path="/accounts" element={<Accounts />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
