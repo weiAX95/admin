@@ -3,6 +3,8 @@ import { parseJudge, ruleScore, saveRunMetric } from './experiment-scoring.mjs';
 import { notifyUser } from './app-notifications.mjs';
 import {completeWithProvider} from './provider-adapters.mjs';
 import {providerConfigured} from './model-capabilities.mjs';
+import {saveGeneratedPromptMedia} from './prompt-media.mjs';
+import fs from 'node:fs/promises';
 
 export function executionConfigured() { return ['legacy','openai','qwen','gemini'].some(providerConfigured); }
 
@@ -43,7 +45,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const result = await client.query("SELECT id FROM experiment_runs WHERE status='queued' AND provider=ANY($1) AND judge_provider=ANY($1) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1",[enabledProviders]);
+      const result = await client.query("SELECT id FROM experiment_runs WHERE status='queued' AND provider=ANY($1) AND (judge_api_model IS NULL OR judge_provider=ANY($1)) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1",[enabledProviders]);
       if (!result.rowCount) { await client.query('COMMIT'); break; }
       const id = result.rows[0].id;
       await client.query("UPDATE experiment_runs SET status='running',started_at=now(),attempts=attempts+1 WHERE id=$1", [id]);
@@ -58,13 +60,27 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
     const started = performance.now();
     try {
       const parameters = { ...row.parameters };
+      const outputKind=parameters.output_kind || 'text';
+      delete parameters.output_kind;
       if (parameters.stop_sequences) { parameters.stop = parameters.stop_sequences; delete parameters.stop_sequences; }
       let output=row.output, promptTokens=row.prompt_tokens, completionTokens=row.completion_tokens;
       if (output === null) {
-        const response=await completeWithProvider(pool,{provider:row.provider,model:row.api_model,messages:row.request_messages?.length?row.request_messages:[{role:'system',content:row.system_prompt},{role:'user',content:row.user_prompt}],parameters,toolSchema:row.tools_schema});
+        const response=await completeWithProvider(pool,{provider:row.provider,model:row.api_model,messages:row.request_messages?.length?row.request_messages:[{role:'system',content:row.system_prompt},{role:'user',content:row.user_prompt}],parameters,toolSchema:row.tools_schema,outputKind});
         ({output,promptTokens,completionTokens}=response);
-        const cost=(promptTokens*Number(row.input_price)+completionTokens*Number(row.output_price))/1_000_000+Number(row.reserved_media_cost || 0);
-        await pool.query('UPDATE experiment_runs SET output=$2,prompt_tokens=$3,completion_tokens=$4,latency_ms=$5,cost_usd=$6,tool_calls=$7,output_parts=$8,error=NULL WHERE id=$1',[id,output,promptTokens,completionTokens,Math.round(performance.now()-started),cost,JSON.stringify(response.toolCalls),JSON.stringify(response.outputParts)]);
+        const client=await pool.connect(),created=[];
+        try {
+          await client.query('BEGIN');
+          const outputParts=[];
+          for(const part of response.outputParts) {
+            if(part.type==='image') {const stored=await saveGeneratedPromptMedia(client,'image',part.mimeType,part.data);created.push(stored.file);outputParts.push(stored.part);}
+            else outputParts.push(part);
+          }
+          const imageCount=outputParts.filter(part=>part.type==='image').length;
+          const cost=(promptTokens*Number(row.input_price)+completionTokens*Number(row.output_price))/1_000_000+Number(row.reserved_media_cost || 0)+imageCount*Number(row.media_price_snapshot?.imageOutputUsdEach || 0);
+          await client.query('UPDATE experiment_runs SET output=$2,prompt_tokens=$3,completion_tokens=$4,latency_ms=$5,cost_usd=$6,tool_calls=$7,output_parts=$8,media_usage=$9,error=NULL WHERE id=$1',[id,output,promptTokens,completionTokens,Math.round(performance.now()-started),cost,JSON.stringify(response.toolCalls),JSON.stringify(outputParts),JSON.stringify({...row.media_usage,imageOutputCount:imageCount})]);
+          await client.query('COMMIT');
+        } catch(error) {await client.query('ROLLBACK').catch(()=>{});for(const file of created)await fs.unlink(file).catch(()=>{});throw error;}
+        finally {client.release();}
       }
       if (row.judge_api_model) {
         try {
@@ -75,7 +91,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
           try { await client.query('BEGIN'); await client.query('UPDATE experiment_runs SET judge_prompt_tokens=$2,judge_completion_tokens=$3,judge_cost_usd=$4,cost_usd=cost_usd+$4 WHERE id=$1', [id, judge.promptTokens, judge.completionTokens, judgeCost]); await saveRunMetric(client, id, row.metric_version_id, ruleScore(output, row.reference_answer, row.rule_type), parsed.score, parsed.reason); await client.query("UPDATE experiment_runs SET status='completed',completed_at=now() WHERE id=$1",[id]); await client.query('COMMIT'); }
           catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
         } catch (judgeError) { await pool.query("UPDATE experiment_runs SET status='completed',score_reason=$2,completed_at=now() WHERE id=$1", [id, `Judge 评分失败：${String(judgeError.message || judgeError).slice(0, 200)}`]); }
-      } else await pool.query("UPDATE experiment_runs SET status='completed',score_reason='未配置 LLM Judge',completed_at=now() WHERE id=$1", [id]);
+      } else await pool.query("UPDATE experiment_runs SET status='completed',score_reason=$2,completed_at=now() WHERE id=$1", [id,outputKind==='text'?'未配置 LLM Judge':'媒体输出暂无兼容 Judge，保留人工评分']);
     } catch (error) {
       await pool.query("UPDATE experiment_runs SET status='failed',error=$2,latency_ms=$3,completed_at=now() WHERE id=$1", [id, String(error.message || error).slice(0, 500), Math.round(performance.now() - started)]);
       await pool.query("UPDATE experiment_runs SET status='queued',started_at=NULL,completed_at=NULL WHERE id=$1 AND attempts <= COALESCE((SELECT s.retry_limit FROM experiment_schedule_occurrences o JOIN experiment_schedules s ON s.id=o.schedule_id WHERE o.batch_id=experiment_runs.batch_id),-1)", [id]);

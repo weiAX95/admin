@@ -29,7 +29,7 @@ function functionSchema(schema) {
   return {name:schema.name,description:String(schema.description || ''),parameters:schema.parameters};
 }
 
-function build(provider,model,messages,parameters,tool) {
+function build(provider,model,messages,parameters,tool,outputKind='text') {
   if(provider==='legacy') {
     if(messages.some(message=>message.parts.some(part=>part.type!=='text'))) throw new Error('兼容模式只支持文本');
     return {url:`${base.legacy()}/chat/completions`,body:{model,messages:messages.map(message=>({role:message.role,content:message.parts.map(part=>part.text).join('')})),...parameters}};
@@ -57,12 +57,12 @@ function build(provider,model,messages,parameters,tool) {
   if(provider==='gemini') {
     const system=messages.filter(message=>message.role==='system').flatMap(message=>message.parts.map(part=>part.type==='text'?{text:part.text}:{inlineData:{mimeType:part.media.mime,data:part.media.base64}}));
     const contents=messages.filter(message=>message.role!=='system').map(message=>({role:message.role==='assistant'?'model':'user',parts:message.parts.map(part=>part.type==='text'?{text:part.text}:{inlineData:{mimeType:part.media.mime,data:part.media.base64}})}));
-    return {url:`${base.gemini()}/models/${encodeURIComponent(model)}:generateContent`,body:{contents,systemInstruction:system.length?{parts:system}:undefined,generationConfig:{temperature:parameters.temperature,topP:parameters.top_p,maxOutputTokens:parameters.max_tokens,stopSequences:parameters.stop},...(tool?{tools:[{functionDeclarations:[tool]}]}:{})}};
+    return {url:`${base.gemini()}/models/${encodeURIComponent(model)}:generateContent`,body:{contents,systemInstruction:system.length?{parts:system}:undefined,generationConfig:{temperature:parameters.temperature,topP:parameters.top_p,maxOutputTokens:parameters.max_tokens,stopSequences:parameters.stop,...(outputKind==='image'?{responseModalities:['IMAGE']}:{})},...(tool?{tools:[{functionDeclarations:[tool]}]}:{})}};
   }
   throw new Error('未知模型供应商');
 }
 
-function parsed(provider,result) {
+function parsed(provider,result,outputKind='text') {
   if(provider==='legacy'||provider==='qwen') {
     const message=result.choices?.[0]?.message;
     const output=typeof message?.content==='string'?message.content:Array.isArray(message?.content)?message.content.filter(part=>part.type==='text').map(part=>part.text).join('\n'):'';
@@ -71,7 +71,7 @@ function parsed(provider,result) {
     return {output,toolCalls,promptTokens:result.usage?.prompt_tokens,completionTokens:result.usage?.completion_tokens,outputParts:[]};
   }
   if(provider==='openai') {
-    const outputParts=(result.output || []).flatMap(item=>item.content || []).filter(part=>part.type==='output_text' || part.type==='output_image' || part.type==='output_audio');
+    const outputParts=(result.output || []).flatMap(item=>item.content || []).filter(part=>part.type==='output_text');
     const output=result.output_text || outputParts.filter(part=>part.type==='output_text').map(part=>part.text).join('\n');
     const toolCalls=(result.output || []).filter(item=>item.type==='function_call');
     if(!output && !toolCalls.length && !outputParts.length) throw new Error('模型响应缺少输出');
@@ -80,23 +80,26 @@ function parsed(provider,result) {
   const parts=result.candidates?.[0]?.content?.parts || [];
   const output=parts.filter(part=>typeof part.text==='string').map(part=>part.text).join('\n');
   const toolCalls=parts.filter(part=>part.functionCall).map(part=>part.functionCall);
-  const outputParts=parts.filter(part=>part.inlineData).map(part=>part.inlineData);
+  const outputParts=parts.filter(part=>part.inlineData).map(part=>({type:'image',mimeType:part.inlineData.mimeType || part.inlineData.mime_type,data:part.inlineData.data}));
+  if(outputKind==='image' && (!outputParts.length || outputParts.length>4 || outputParts.some(part=>!part.mimeType?.startsWith('image/')))) throw new Error('图片输出缺失、格式无效或超过 4 张');
+  if(outputKind==='text'&&outputParts.length) throw new Error('文本模型意外返回媒体输出，请检查能力声明');
   if(!output && !toolCalls.length && !outputParts.length) throw new Error('模型响应缺少输出');
   return {output,toolCalls,outputParts,promptTokens:result.usageMetadata?.promptTokenCount,completionTokens:result.usageMetadata?.candidatesTokenCount};
 }
 
-export async function completeWithProvider(client,{provider='legacy',model,messages,parameters={},toolSchema=null}) {
+export async function completeWithProvider(client,{provider='legacy',model,messages,parameters={},toolSchema=null,outputKind='text'}) {
   const key=secret[provider]?.();
   if(!key) throw new Error(`${provider} 凭据未配置`);
   const media=await resolved(messages,client);
-  const request=build(provider,model,media,parameters,functionSchema(toolSchema));
+  if(outputKind!=='text' && !(provider==='gemini'&&outputKind==='image')) throw new Error('当前供应商适配器不支持所选输出类型');
+  const request=build(provider,model,media,parameters,functionSchema(toolSchema),outputKind);
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),120000);
   try {
     const headers={'Content-Type':'application/json',...(provider==='gemini'?{'x-goog-api-key':key}:{Authorization:`Bearer ${key}`})};
     const response=await fetch(request.url,{method:'POST',headers,body:JSON.stringify(request.body),signal:controller.signal});
     if(!response.ok) throw new Error(`${provider} HTTP ${response.status}: ${(await response.text()).slice(0,300)}`);
-    const value=parsed(provider,await response.json());
+    const value=parsed(provider,await response.json(),outputKind);
     if(!Number.isInteger(value.promptTokens)||!Number.isInteger(value.completionTokens)) throw new Error('模型响应缺少 token 用量');
     return value;
   } finally {clearTimeout(timeout);}

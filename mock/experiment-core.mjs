@@ -16,6 +16,9 @@ export function validateParameters(value) {
     if (key === 'stop_sequences') {
       if (!Array.isArray(raw) || raw.length > 8 || raw.some(item => typeof item !== 'string' || !item || item.length > 100)) throw new Error('stop_sequences 无效');
       result[key] = raw;
+    } else if (key === 'output_kind') {
+      if (!['text','image'].includes(raw)) throw new Error('output_kind 只支持 text 或 image');
+      result[key]=raw;
     } else {
       const range = ranges[key];
       if (!range || typeof raw !== 'number' || !Number.isFinite(raw) || raw < range[0] || raw > range[1] || (key === 'max_tokens' && !Number.isInteger(raw))) throw new Error(`${key} 参数无效`);

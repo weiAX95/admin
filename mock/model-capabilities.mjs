@@ -1,6 +1,6 @@
 const defaults={input:['text'],output:['text'],tools:false};
-const allowed={legacy:{input:['text'],output:['text'],tools:false},openai:{input:['text','image','audio'],output:['text'],tools:true},qwen:{input:['text','image','audio','video'],output:['text'],tools:true},gemini:{input:['text','image','audio','video'],output:['text'],tools:true}};
-const priceKeys=['imageInputUsdEach','audioInputUsdPerSecond','videoInputUsdPerSecond'];
+const allowed={legacy:{input:['text'],output:['text'],tools:false},openai:{input:['text','image','audio'],output:['text'],tools:true},qwen:{input:['text','image','audio','video'],output:['text'],tools:true},gemini:{input:['text','image','audio','video'],output:['text','image'],tools:true}};
+const priceKeys=['imageInputUsdEach','audioInputUsdPerSecond','videoInputUsdPerSecond','imageOutputUsdEach'];
 
 export function providerConfigured(provider) {
   if(provider==='legacy') return Boolean(process.env.MODEL_API_BASE_URL&&process.env.MODEL_API_KEY);
@@ -13,7 +13,7 @@ export function providerConfigured(provider) {
 export function validateModelCapabilities(provider,capabilities=defaults,pricing={}) {
   const support=allowed[provider];
   if(!support) throw new Error('供应商无效');
-  if(!capabilities || !Array.isArray(capabilities.input) || !Array.isArray(capabilities.output) || !capabilities.input.includes('text') || !capabilities.output.includes('text') || capabilities.input.some(kind=>!support.input.includes(kind)) || capabilities.output.some(kind=>!support.output.includes(kind)) || typeof capabilities.tools!=='boolean' || capabilities.tools&&!support.tools) throw new Error('模型能力声明超出当前适配器范围');
+  if(!capabilities || !Array.isArray(capabilities.input) || !Array.isArray(capabilities.output) || !capabilities.input.includes('text') || !capabilities.output.length || capabilities.input.some(kind=>!support.input.includes(kind)) || capabilities.output.some(kind=>!support.output.includes(kind)) || typeof capabilities.tools!=='boolean' || capabilities.tools&&!support.tools) throw new Error('模型能力声明超出当前适配器范围');
   if(!pricing || typeof pricing!=='object' || Array.isArray(pricing) || Object.entries(pricing).some(([key,value])=>!priceKeys.includes(key) || typeof value!=='number' || !Number.isFinite(value) || value<0)) throw new Error('媒体价格配置无效');
   return {provider,capabilities:{input:[...new Set(capabilities.input)],output:[...new Set(capabilities.output)],tools:capabilities.tools},mediaPricing:pricing};
 }
@@ -43,6 +43,12 @@ export async function preflightMedia(client,messages,model,toolSchema=null) {
   const pricing=model.media_pricing || {};
   if((usage.imageCount && pricing.imageInputUsdEach===undefined) || (usage.audioSeconds && pricing.audioInputUsdPerSecond===undefined) || (usage.videoSeconds && pricing.videoInputUsdPerSecond===undefined)) throw new Error(`${model.display_name} 尚未配置本次媒体输入的单价`);
   return usage;
+}
+
+export function preflightOutput(model,kind='text') {
+  if(!model.capabilities?.output?.includes(kind)) throw new Error(`${model.display_name} 不支持 ${kind} 输出`);
+  if(kind==='image' && model.media_pricing?.imageOutputUsdEach===undefined) throw new Error(`${model.display_name} 尚未配置图片输出单价`);
+  return kind==='image' ? 4*Number(model.media_pricing.imageOutputUsdEach) : 0;
 }
 
 export function mediaCost(usage,pricing) {

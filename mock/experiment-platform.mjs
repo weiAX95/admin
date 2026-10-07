@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { EXPERIMENT_TEMPLATES, fillPrompt, validateDefinition, winRates } from './experiment-core.mjs';
 import { executionConfigured } from './experiment-runner.mjs';
 import { checkPromptCompliance, renderPromptVersion } from './prompts.mjs';
-import {mediaCost,preflightMedia,providerConfigured,validateModelCapabilities} from './model-capabilities.mjs';
+import {mediaCost,preflightMedia,preflightOutput,providerConfigured,validateModelCapabilities} from './model-capabilities.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -20,8 +20,8 @@ function runCeiling(variant, prompt, model, judge, usage={}) {
   const inputTokens = Math.max(1, [...prompt.system, ...prompt.user].length);
   const main = (inputTokens * model.input_usd_per_million + outputTokens * model.output_usd_per_million) / 1_000_000;
   const judgeInputTokens = inputTokens + outputTokens * 4 + 1000;
-  const judgeCost = (judgeInputTokens * judge.input_usd_per_million + 300 * judge.output_usd_per_million) / 1_000_000;
-  return ceiling(main + judgeCost + mediaCost(usage,model.media_pricing || {}));
+  const judgeCost = judge ? (judgeInputTokens * judge.input_usd_per_million + 300 * judge.output_usd_per_million) / 1_000_000 : 0;
+  return ceiling(main + judgeCost + mediaCost(usage,model.media_pricing || {}) + preflightOutput(model,variant.parameters.output_kind || 'text'));
 }
 
 async function getDefinition(client, id) {
@@ -40,7 +40,7 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   if (!definition) return fail('实验定义不存在', 404);
   if (!own({ owner_id: definition.ownerId }, me)) return fail('无权执行该实验', 403);
   const settings = (await client.query('SELECT * FROM experiment_settings WHERE id=1')).rows[0];
-  if (!settings.daily_budget_usd || !settings.concurrency_limit || !settings.judge_model_id) return fail('管理员尚未配置每日预算、并发上限或 LLM Judge', 409);
+  if (!settings.daily_budget_usd || !settings.concurrency_limit) return fail('管理员尚未配置每日预算或并发上限', 409);
   let cases = [];
   if (kind === 'dataset' || kind === 'regression') {
     if (!body.datasetVersionId) return fail('请选择数据集版本');
@@ -62,12 +62,13 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   if (body.variantIds !== undefined && (!Array.isArray(body.variantIds) || body.variantIds.some(id => typeof id !== 'string'))) return fail('variantIds 必须为变体 ID 数组');
   const variants = definition.variants.filter(variant => !body.variantIds || body.variantIds.includes(variant.id));
   if (!variants.length || variants.length > 20) return fail('请选择 1–20 个变体');
+  if(variants.some(variant=>(variant.parameters.output_kind || 'text')==='text')&&!settings.judge_model_id) return fail('文本输出需要配置 LLM Judge',409);
   if ((kind === 'dataset' || kind === 'regression') && variants.length !== 1) return fail('数据集评测和回归每批次必须选择一个变体，以便逐用例与 baseline 对比');
   const models = new Map((await client.query('SELECT * FROM experiment_models WHERE active=true')).rows.map(row => [row.id, row]));
   if (variants.some(variant => !models.has(variant.modelId))) return fail('变体模型已停用，请编辑实验后重试', 409);
   const judge = models.get(settings.judge_model_id);
-  if (!judge) return fail('LLM Judge 模型未启用', 409);
-  if(!providerConfigured(judge.provider)) return fail('LLM Judge 供应商凭据未配置',409);
+  if (variants.some(variant=>(variant.parameters.output_kind || 'text')==='text') && !judge) return fail('LLM Judge 模型未启用', 409);
+  if(judge && !providerConfigured(judge.provider) && variants.some(variant=>(variant.parameters.output_kind || 'text')==='text')) return fail('LLM Judge 供应商凭据未配置',409);
   if(variants.some(variant=>!providerConfigured(models.get(variant.modelId).provider))) return fail('部分变体的供应商凭据未配置',409);
   let prompts, usedVersions=[],toolSchema=null;
   try {
@@ -96,11 +97,12 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
     for(const variant of variants) {
       const model=models.get(variant.modelId);
       const usages=[];
+      preflightOutput(model,variant.parameters.output_kind || 'text');
       for(const prompt of prompts) usages.push(await preflightMedia(client,prompt.messages,model,toolSchema));
       usageByVariant.set(variant.id,usages);
     }
   } catch(error) {return fail(error.message,409);}
-  const estimate = variants.reduce((total, variant) => total + prompts.reduce((sum, prompt,index) => sum + runCeiling(variant, prompt, models.get(variant.modelId), judge,usageByVariant.get(variant.id)[index]), 0), 0);
+  const estimate = variants.reduce((total, variant) => total + prompts.reduce((sum, prompt,index) => sum + runCeiling(variant, prompt, models.get(variant.modelId), (variant.parameters.output_kind || 'text')==='text'?judge:null,usageByVariant.get(variant.id)[index]), 0), 0);
   const spent = Number((await client.query("SELECT COALESCE(sum(reserved_usd),0) AS total FROM experiment_runs WHERE (created_at AT TIME ZONE 'Asia/Shanghai')::date=(now() AT TIME ZONE 'Asia/Shanghai')::date")).rows[0].total);
   if (spent + estimate > settings.daily_budget_usd) return fail(`预计上限 $${estimate.toFixed(6)} 超过今日剩余额度 $${(settings.daily_budget_usd - spent).toFixed(6)}`, 409);
   if (body.dryRun) return ok({ runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate, remainingBudgetUsd: settings.daily_budget_usd - spent });
@@ -109,10 +111,11 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   for (const variant of variants) for (let index = 0; index < inputs.length; index++) {
     const model = models.get(variant.modelId);
     const mediaUsage=usageByVariant.get(variant.id)[index];
-    const reserved = runCeiling(variant, prompts[index], model, judge,mediaUsage);
+    const needsJudge=(variant.parameters.output_kind || 'text')==='text';
+    const reserved = runCeiling(variant, prompts[index], model, needsJudge?judge:null,mediaUsage);
     const reservedMedia=mediaCost(mediaUsage,model.media_pricing || {});
     const runId=uuid();
-    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price,provider,judge_provider,request_messages,tools_schema,media_price_snapshot,media_usage,reserved_media_cost) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved, judge.id, judge.api_model, judge.input_usd_per_million, judge.output_usd_per_million,model.provider,judge.provider,JSON.stringify(prompts[index].messages),JSON.stringify(toolSchema),JSON.stringify(model.media_pricing),JSON.stringify(mediaUsage),reservedMedia]);
+    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price,provider,judge_provider,request_messages,tools_schema,media_price_snapshot,media_usage,reserved_media_cost) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved, needsJudge?judge.id:null, needsJudge?judge.api_model:null, needsJudge?judge.input_usd_per_million:null, needsJudge?judge.output_usd_per_million:null,model.provider,needsJudge?judge.provider:'legacy',JSON.stringify(prompts[index].messages),JSON.stringify(toolSchema),JSON.stringify(model.media_pricing),JSON.stringify(mediaUsage),reservedMedia]);
     for (const versionId of usedVersions) await client.query('INSERT INTO prompt_run_uses(run_id,version_id,direct) VALUES($1,$2,$3)',[runId,versionId,versionId===definition.promptVersionId]);
   }
   return ok({ batchId, status: 'queued', runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate }, 202);

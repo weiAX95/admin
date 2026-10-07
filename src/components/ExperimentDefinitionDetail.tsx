@@ -3,7 +3,7 @@ import { App, Alert, Button, Card, Col, Descriptions, Form, Input, Progress, Rat
 import { Link } from 'react-router-dom';
 import { estimateDefinition, getDefinition, retryBatch, runBatch, runDefinition } from '../api/experiment-platform';
 import type { ExperimentBatch, ExperimentDefinition, ExperimentRun } from '../api/experiment-platform';
-import { getStoredUser } from '../api/client';
+import { getStoredUser, getToken } from '../api/client';
 import type { AuthUser } from '../types';
 import MarkdownContent from './MarkdownContent';
 import { getRunAnnotation, saveRunAnnotation } from '../api/experiment-evaluation';
@@ -12,6 +12,16 @@ import ExperimentChainLinks from './ExperimentChainLinks';
 import ExperimentShareButton from './ExperimentShareButton';
 
 const variableNames = (text: string) => [...new Set([...text.matchAll(/\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g)].map(match => match[1]))];
+function GeneratedImage({assetId}:{assetId:string}) {
+  const [url,setUrl]=useState('');
+  useEffect(()=>{let active=true,objectUrl='';void fetch(`/api/prompt-media/${assetId}`,{headers:{Authorization:`Bearer ${getToken() || ''}`}}).then(response=>{if(!response.ok)throw new Error('图片读取失败');return response.blob();}).then(blob=>{if(active){objectUrl=URL.createObjectURL(blob);setUrl(objectUrl);}}).catch(()=>{if(active)setUrl('');});return()=>{active=false;if(objectUrl)URL.revokeObjectURL(objectUrl);};},[assetId]);
+  return url?<img src={url} alt="模型生成图片" style={{maxWidth:260,maxHeight:220,objectFit:'contain'}} />:<Typography.Text type="secondary">图片加载中或不可用</Typography.Text>;
+}
+function RunOutput({run}:{run:ExperimentRun}) {
+  const images=run.outputParts?.filter(part=>part.type==='image'&&part.assetId) || [];
+  if(!run.output && !images.length) return run.error || '等待运行';
+  return <Space direction="vertical" style={{maxWidth:500,maxHeight:300,overflow:'auto'}}>{run.output&&<div style={{whiteSpace:'pre-wrap'}}>{run.output}</div>}{images.map(part=><GeneratedImage key={part.assetId} assetId={part.assetId!} />)}</Space>;
+}
 export default function ExperimentDefinitionDetail({ id }: { id: string }) {
   const { message, modal } = App.useApp();
   const [definition, setDefinition] = useState<ExperimentDefinition | null>(null);
@@ -55,7 +65,7 @@ function BatchCard({ batch, canManage, onRetry }: { batch: ExperimentBatch; canM
   return <Card title={`${batch.kind === 'ab' ? 'A/B 批次' : '运行批次'} · ${new Date(batch.createdAt).toLocaleString('zh-CN')}`} extra={<Space><Tag>{batch.status}</Tag>{canManage && batch.runs.some(run => run.status === 'failed') && <Button onClick={() => void onRetry()}>仅重试失败项</Button>}</Space>}>
     <Progress percent={batch.runs.length ? Math.round(completed / batch.runs.length * 100) : 0} format={() => `${completed}/${batch.runs.length}`} />
     {batch.kind === 'ab' && <Typography.Paragraph type="secondary">有效输入组 {batch.winRates.included}，排除失败或缺分组 {batch.winRates.excluded}；同分共享胜利。{batch.winRates.variants.map(item => ` ${batch.runs.find(run => run.variantId === item.variantId)?.apiModel}: ${(item.rate * 100).toFixed(1)}%`).join('；')}</Typography.Paragraph>}
-    <Table rowKey="id" size="small" dataSource={batch.runs} scroll={{ x: 900 }} pagination={{ pageSize: 10 }} expandable={{ expandedRowRender: run => run.status === 'completed' ? <RunAnnotation run={run} /> : null, rowExpandable: run => run.status === 'completed' }} columns={[{ title: '输入组', dataIndex: 'inputIndex', render: value => value + 1 }, { title: '模型', dataIndex: 'apiModel' }, { title: '状态', dataIndex: 'status', render: value => <Tag color={value === 'completed' ? 'success' : value === 'failed' ? 'error' : 'processing'}>{value}</Tag> }, { title: '输出', render: (_, run: ExperimentRun) => run.output ? <div style={{ maxWidth: 500, maxHeight: 250, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{run.output}</div> : run.error || '等待运行' }, { title: '自动评分', dataIndex: 'autoScore', render: value => value === null ? '暂无数据' : value }, { title: 'Token', render: (_, run: ExperimentRun) => run.promptTokens === null ? '暂无数据' : `${run.promptTokens} / ${run.completionTokens}` }, { title: '延迟', dataIndex: 'latencyMs', render: value => value === null ? '暂无数据' : `${value} ms` }, { title: '成本', dataIndex: 'costUsd', render: value => value === null ? '暂无数据' : `$${Number(value).toFixed(6)}` }]} />
+    <Table rowKey="id" size="small" dataSource={batch.runs} scroll={{ x: 900 }} pagination={{ pageSize: 10 }} expandable={{ expandedRowRender: run => run.status === 'completed' ? <RunAnnotation run={run} /> : null, rowExpandable: run => run.status === 'completed' }} columns={[{ title: '输入组', dataIndex: 'inputIndex', render: value => value + 1 }, { title: '模型', dataIndex: 'apiModel' }, { title: '状态', dataIndex: 'status', render: value => <Tag color={value === 'completed' ? 'success' : value === 'failed' ? 'error' : 'processing'}>{value}</Tag> }, { title: '输出', render: (_, run: ExperimentRun) => <RunOutput run={run} /> }, { title: '自动评分', dataIndex: 'autoScore', render: value => value === null ? '暂无数据' : value }, { title: 'Token', render: (_, run: ExperimentRun) => run.promptTokens === null ? '暂无数据' : `${run.promptTokens} / ${run.completionTokens}` }, { title: '延迟', dataIndex: 'latencyMs', render: value => value === null ? '暂无数据' : `${value} ms` }, { title: '成本', dataIndex: 'costUsd', render: value => value === null ? '暂无数据' : `$${Number(value).toFixed(6)}` }]} />
   </Card>;
 }
 
