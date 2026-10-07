@@ -175,8 +175,8 @@ async function latest(client, promptId) {
 }
 
 function parseTransfer(body) {
-  if (!['json','yaml'].includes(body.format) || typeof body.text!=='string' || body.text.length>10_000_000) throw new Error('仅支持 10 MB 内的 JSON/YAML 文件');
-  const document=body.format==='json' ? JSON.parse(body.text) : YAML.parse(body.text,{uniqueKeys:true});
+  if (!body.document && (!['json','yaml'].includes(body.format) || typeof body.text!=='string' || body.text.length>10_000_000)) throw new Error('仅支持 10 MB 内的 JSON/YAML 文件');
+  const document=body.document || (body.format==='json' ? JSON.parse(body.text) : YAML.parse(body.text,{uniqueKeys:true}));
   if (document?.schemaVersion!==1 || typeof document.sourceKey!=='string' || !Array.isArray(document.prompts) || document.prompts.length>1000) throw new Error('提示词导入文件结构无效');
   const ids=new Set(),versions=new Set();
   for (const prompt of document.prompts) {
@@ -191,21 +191,24 @@ function parseTransfer(body) {
   return document;
 }
 
-async function exportPrompts(client,url) {
-  const format=url.searchParams.get('format') || 'json';
-  if (!['json','yaml'].includes(format)) return fail('导出格式无效');
-  const ids=url.searchParams.getAll('id');
+export async function buildPromptTransfer(client,ids=[]) {
   const rows=(await client.query('SELECT * FROM prompt_library WHERE deleted_at IS NULL AND ($1::text[] IS NULL OR id=ANY($1)) ORDER BY created_at,id',[ids.length?ids:null])).rows;
   const prompts=[];
   for (const row of rows) {
     const versions=(await client.query('SELECT * FROM prompt_library_versions WHERE prompt_id=$1 ORDER BY version',[row.id])).rows;
     prompts.push({sourceId:row.id,name:row.name,tags:row.tags,versions:versions.map(version=>({id:version.id,semver:version.semver,type:version.prompt_type,format:version.format,content:version.content,variables:version.variables,messages:version.messages,blocks:version.blocks,toolSchema:version.tool_schema,createdAt:version.created_at}))});
   }
-  const document={schemaVersion:1,sourceKey:'admin-prompts-v1',prompts};
+  return {schemaVersion:1,sourceKey:'admin-prompts-v1',prompts};
+}
+
+async function exportPrompts(client,url) {
+  const format=url.searchParams.get('format') || 'json';
+  if (!['json','yaml'].includes(format)) return fail('导出格式无效');
+  const document=await buildPromptTransfer(client,url.searchParams.getAll('id'));
   return ok({format,filename:`prompts.${format==='yaml'?'yaml':'json'}`,content:format==='yaml'?YAML.stringify(document):JSON.stringify(document,null,2)});
 }
 
-async function importPrompts(client,me,body,confirm) {
+export async function importPrompts(client,me,body,confirm) {
   let document;
   try { document=parseTransfer(body); } catch(error) { return fail(error.message); }
   const report=[];
@@ -213,7 +216,7 @@ async function importPrompts(client,me,body,confirm) {
     const versions=[];
     for (const raw of prompt.versions) {
       try {
-        const value=validatedVersion(raw);
+        const value=validatedVersion(body.assetMap ? {...raw,blocks:(raw.blocks || []).map(block=>({...block,parts:block.parts.map(part=>part.type==='text'?part:{...part,assetId:body.assetMap[part.assetId] || part.assetId})}))} : raw);
         const findings=await scanPrompt(client,value);
         versions.push({raw,value,findings,status:findings.includes('secret')?'skipped':'valid',reason:findings.includes('secret')?'检测到疑似密钥':''});
       } catch(error) { versions.push({raw,status:'skipped',reason:error.message,findings:[]}); }

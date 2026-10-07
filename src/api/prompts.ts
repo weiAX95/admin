@@ -1,4 +1,4 @@
-import { http } from './client';
+import { http, getToken, ApiError } from './client';
 
 export type PromptType = 'system' | 'user' | 'assistant' | 'tool_description';
 export type PromptFormat = 'text' | 'chat' | 'tool';
@@ -52,3 +52,17 @@ export interface PromptImportPreview {items:PromptImportItem[];validCount:number
 export const exportPromptFile=(format:PromptTransferFormat,ids:string[])=>http.get<{format:PromptTransferFormat;filename:string;content:string}>(`/prompts/export?format=${format}${ids.map(id=>`&id=${encodeURIComponent(id)}`).join('')}`);
 export const previewPromptImport=(format:PromptTransferFormat,text:string)=>http.post<PromptImportPreview>('/prompts/import/preview',{format,text});
 export const confirmPromptImport=(format:PromptTransferFormat,text:string,confirmFindings=false)=>http.post<{imported:number;skipped:number;items:PromptImportItem[]}>('/prompts/import/confirm',{format,text,confirmFindings});
+
+export async function exportPromptArchive(ids:string[]):Promise<Blob> {
+  const response=await fetch(`/api/prompts/archive?${ids.map(id=>`id=${encodeURIComponent(id)}`).join('&')}`,{headers:{Authorization:`Bearer ${getToken() || ''}`}});
+  if(!response.ok) throw new ApiError(response.status,(await response.json()).error || 'ZIP 导出失败');
+  return response.blob();
+}
+
+export async function importPromptArchive(file:File,confirm=false,confirmFindings=false):Promise<PromptImportPreview | {imported:number;skipped:number;items:PromptImportItem[]}> {
+  const endpoint=confirm?'confirm':'preview';
+  const response=await fetch(`/api/prompts/archive/${endpoint}?confirmFindings=${confirmFindings}`,{method:'POST',headers:{Authorization:`Bearer ${getToken() || ''}`,'Content-Type':'application/zip'},body:file});
+  const data=await response.json();
+  if(!response.ok) throw new ApiError(response.status,data.error || 'ZIP 导入失败');
+  return data;
+}

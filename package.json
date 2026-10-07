@@ -47,7 +47,9 @@
     "unified": "^11.0.5",
     "unist-util-visit": "^5.1.0",
     "ws": "^8.22.0",
-    "yaml": "^2.9.1"
+    "yaml": "^2.9.1",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
   },
   "devDependencies": {
     "@types/d3-force": "^3.0.10",

@@ -25,6 +25,7 @@ import { prepareCsvImport } from "./task-csv-import.mjs";
 import { extractWikiLinks, normalizeWikiLinks } from "./wiki-links.mjs";
 import { cleanupAssets, handleAssetRequest, isAssetPath } from "./media-assets.mjs";
 import { handlePromptMedia, isPromptMediaPath } from "./prompt-media.mjs";
+import { handlePromptArchive, isPromptArchivePath } from "./prompt-archive.mjs";
 import { canonicalNoteTags, noteTagKey, noteTagUsage, validateNoteTagName } from "./note-tags.mjs";
 import { buildKnowledgeGraph } from "./knowledge-graph.mjs";
 import { initializeNoteReviews, initializeUserReviews, resetNoteReviews, completeNoteReview, createDueReviewNotifications, shanghaiDate, addCalendarDays, reminderTime } from "./note-reviews.mjs";
@@ -1555,6 +1556,13 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  if (isPromptArchivePath(new URL(req.url,"http://localhost").pathname)) {
+    void handlePromptArchive(req,res,pool,token=>lookupSession(token)).catch(error=>{
+      console.error('[prompt-archive] request failed:',error);
+      if (!res.headersSent) {res.writeHead(500,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:'提示词归档服务不可用'}));}
+    });
+    return;
+  }
   if (isPromptMediaPath(new URL(req.url,"http://localhost").pathname)) {
     void handlePromptMedia(req,res,pool,token=>lookupSession(token)).catch(error=>{
       console.error('[prompt-media] request failed:',error);

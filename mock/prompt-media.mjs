@@ -13,7 +13,7 @@ const execFileAsync=promisify(execFile);
 const directory=process.env.PROMPT_MEDIA_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)),'prompt-media');
 const route=/^\/api\/prompt-media\/([0-9a-f-]{36})$/;
 const limits={image:10*1024*1024,audio:50*1024*1024,video:500*1024*1024};
-const maximum=kind=>{
+export const maximumPromptMediaSize=kind=>{
   const lowered=Number(process.env[`PROMPT_${kind.toUpperCase()}_MAX_BYTES`]);
   return Number.isInteger(lowered)&&lowered>0 ? Math.min(limits[kind],lowered) : limits[kind];
 };
@@ -29,7 +29,7 @@ function imageMime(data) {
   return null;
 }
 
-async function inspect(file,kind) {
+export async function inspectPromptMedia(file,kind) {
   const handle=await fsp.open(file,'r');
   const head=Buffer.alloc(32);
   try {await handle.read(head,0,32,0);} finally {await handle.close();}
@@ -61,7 +61,7 @@ export async function handlePromptMedia(req,res,pool,lookupSession) {
   if (pathname==='/api/prompt-media' && req.method==='POST') {
     const kind=req.headers['x-media-kind'];
     if (!Object.hasOwn(limits,kind)) return json(res,400,{error:'媒体类型无效'});
-    const max=maximum(kind);
+    const max=maximumPromptMediaSize(kind);
     if (Number(req.headers['content-length'] || 0)>max) return json(res,413,{error:'文件超过允许大小'});
     const id=crypto.randomUUID();
     await fsp.mkdir(directory,{recursive:true});
@@ -71,7 +71,7 @@ export async function handlePromptMedia(req,res,pool,lookupSession) {
     try {
       await pipeline(req,new Transform({transform(chunk,_encoding,callback){bytes+=chunk.length;if(bytes>max) callback(Object.assign(new Error('文件超过允许大小'),{status:413}));else {hash.update(chunk);callback(null,chunk);}}}),fs.createWriteStream(temp,{flags:'wx'}));
       if (!bytes) throw Object.assign(new Error('文件不能为空'),{status:400});
-      const {mime,duration}=await inspect(temp,kind);
+      const {mime,duration}=await inspectPromptMedia(temp,kind);
       await fsp.rename(temp,promptMediaPath(id));
       try {await pool.query('INSERT INTO prompt_media_assets(id,kind,mime_type,byte_size,duration_seconds,sha256,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,kind,mime,bytes,duration,hash.digest('hex'),account.id]);}
       catch(error){await fsp.unlink(promptMediaPath(id)).catch(()=>{});throw error;}

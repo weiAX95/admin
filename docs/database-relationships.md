@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)、[复习提醒迁移](../db/migrations/008_note_reviews.sql)、[实验执行基础迁移](../db/migrations/009_experiment_foundation.sql)、[实验评测迁移](../db/migrations/010_experiment_evaluation.sql)、[分享与调度迁移](../db/migrations/011_experiment_sharing_schedules.sql)、[数据集批次约束迁移](../db/migrations/012_experiment_dataset_batch_kind.sql)、[提示词库迁移](../db/migrations/013_prompt_library.sql)、[提示词引用与调用迁移](../db/migrations/014_prompt_references_usage.sql)、[提示词导入来源迁移](../db/migrations/015_prompt_import_sources.sql)和[提示词媒体迁移](../db/migrations/016_prompt_multimodal.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **66 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)、[复习提醒迁移](../db/migrations/008_note_reviews.sql)、[实验执行基础迁移](../db/migrations/009_experiment_foundation.sql)、[实验评测迁移](../db/migrations/010_experiment_evaluation.sql)、[分享与调度迁移](../db/migrations/011_experiment_sharing_schedules.sql)、[数据集批次约束迁移](../db/migrations/012_experiment_dataset_batch_kind.sql)、[提示词库迁移](../db/migrations/013_prompt_library.sql)、[提示词引用与调用迁移](../db/migrations/014_prompt_references_usage.sql)、[提示词导入来源迁移](../db/migrations/015_prompt_import_sources.sql)、[提示词媒体迁移](../db/migrations/016_prompt_multimodal.sql)和[提示词归档迁移](../db/migrations/017_prompt_archive.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **67 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 页面如何读写数据
 
@@ -84,6 +84,7 @@ flowchart LR
   PromptLibrary -->|"FK prompt_id"| ImportSources["prompt_import_sources"]
   PromptVersions -->|"FK version_id"| ImportVersions["prompt_import_versions"]
   Users -->|"FK uploaded_by；删除时置空"| PromptMedia["prompt_media_assets"]
+  PromptMedia -->|"FK asset_id；禁止删除"| ImportAssets["prompt_import_assets"]
   PromptFolders["prompt_folders"] -->|"FK parent_id；目录树"| PromptFolders
   PromptFolders -->|"FK folder_id；拒绝非空删除"| PromptLibrary
   Users -->|"FK owner_id；删除账号时置空"| PromptLibrary
@@ -107,6 +108,7 @@ flowchart LR
 | `prompt_import_sources` | 外部来源键和来源条目 ID 到本地提示词 ID 的稳定映射；重复导入避免复制。 | JSON/YAML 导入 |
 | `prompt_import_versions` | 来源版本 ID 到本地不可变版本的映射；保持固定版本引用可重映射。 | JSON/YAML 版本导入 |
 | `prompt_media_assets` | 本地受控图片、音频、视频附件元数据；上传账号有可置空外键，消息块中的附件 ID 由应用层校验。 | 提示词消息片段与实验运行 |
+| `prompt_import_assets` | ZIP 来源键和附件 ID 映射到本地媒体，保存来源 SHA-256；同来源重复回导时复用附件，哈希变化则拒绝。`asset_id` 为外键。 | 提示词媒体 ZIP 回导 |
 | `prompt_folders` | 可无限嵌套的共享目录；`parent_id` 自引用外键，非空目录不能删除。 | 提示词库侧栏 |
 | `prompt_compliance_rules` | 管理员配置的受限自定义敏感信息模式。 | 提示词库合规管理 |
 | `prompt_compliance_events` | 被拦截或明确确认后的扫描审计；提示词、版本与账号外键可置空。 | 提示词保存审计 |
