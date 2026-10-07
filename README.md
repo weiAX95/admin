@@ -54,7 +54,7 @@ Markdown 图片经 `/api/assets` 上传并保存到 `mock/uploads/`（可用 `AS
 
 管理员在 `.env` 中配置 `PROMPT_SYNC_LANGFUSE_*` 或 `PROMPT_SYNC_LANGSMITH_*` 后，可从提示词库“外部同步”先预览再确认。服务端分别使用 [LangFuse 提示词 REST API](https://api.reference.langfuse.com) 的分页列表与逐版本读取、[LangSmith 仓库／提交 API](https://api.smith.langchain.com/redoc) 的分页列表；来源不变时重复执行不会复制版本。预览和确认之间外部内容变化会拒绝提交；密钥命中跳过，其他敏感内容需确认。自托管主机需显式加入 `PROMPT_SYNC_ALLOWED_HOSTS`，凭据仅在服务端使用。仅能无损映射的文本及简单聊天版本会导入，复杂消息／媒体、配置或模板语法逐条跳过并展示原因；真实外部服务与媒体复制需配置凭据后另行验收。
 
-提示词版本支持有序文本、图片、音频和视频消息片段。`POST /api/prompt-media` 使用登录令牌与 `x-media-kind` 上传原始字节；图片上限 10 MB，音频 50 MB／10 分钟，视频 500 MB／10 分钟，可用环境变量调低。服务端按内容识别文件并用内置 ffprobe 核对时长；附件保存在 `PROMPT_MEDIA_DIR`（默认 `mock/prompt-media/`），备份时须连同 PostgreSQL 保存。附件仅允许登录账号读取。当前适配器对 OpenAI 使用 Responses、对千问使用 Chat Completions 的多模态内容、对 Gemini 使用 generateContent；按模型声明的能力在批次提交前检查，工具调用只记录，不自动执行。当前执行支持文本，以及经模型能力声明的 Gemini 图片输出：按最多 4 张预留预算，实际生成文件单独存储、按张数和价格快照计费；图片输出暂无兼容 Judge 时只保留人工标注。音频／视频输出尚未接通，OpenAI 视频输入不开放；每件媒体执行前还需满足 20 MB 内联请求上限。真实供应商连通需各自凭据，自动测试使用本地模拟服务。
+提示词版本支持有序文本、图片、音频和视频消息片段。`POST /api/prompt-media` 使用登录令牌与 `x-media-kind` 上传原始字节；图片上限 10 MB，音频 50 MB／10 分钟，视频 500 MB／10 分钟，可用环境变量调低。服务端按内容识别文件并用内置 ffprobe 核对时长；附件保存在 `PROMPT_MEDIA_DIR`（默认 `mock/prompt-media/`），备份时须连同 PostgreSQL 保存。附件仅允许登录账号读取。当前适配器对 OpenAI 使用 Responses、对千问使用 Chat Completions 的多模态内容、对 Gemini 使用 generateContent；按模型声明的能力在批次提交前检查，工具调用只记录，不自动执行。当前执行支持文本，以及经模型能力声明的 Gemini 图片输出：按最多 4 张预留预算，实际生成文件单独存储、按张数和价格快照计费；图片输出暂无兼容 Judge 时只保留人工标注。音频／视频输出尚未接通，OpenAI 视频输入不开放；Gemini 超过 20 MB 的音视频输入改走 Files API 并等待处理完成；其他供应商仍需满足每件媒体 20 MB 内联请求上限。真实供应商连通需各自凭据，自动测试使用本地模拟服务。
 
 搜索基准可运行 `node scripts/benchmark-prompts.mjs`：它在临时测试库写入 1 万条提示词、每条 3 版及 3 个标签，测量 30 次 HTTP 查询后自动删库。本机一次测量中，普通搜索 p95 为 90.35 ms，受限正则 p95 为 52.06 ms；其他设备与数据分布需重新测量。
 

@@ -31,7 +31,7 @@ export async function preflightMedia(client,messages,model,toolSchema=null) {
   if(!ids.length) return {imageCount:0,audioSeconds:0,videoSeconds:0};
   const rows=(await client.query('SELECT id,kind,byte_size,duration_seconds FROM prompt_media_assets WHERE id=ANY($1)',[ids])).rows;
   if(rows.length!==ids.length) throw new Error('部分媒体附件已丢失');
-  if(rows.some(row=>Number(row.byte_size)>20*1024*1024)) throw new Error('当前供应商内联媒体请求限制为每件 20 MB，请选择更小的附件');
+  if(model.provider!=='gemini' && rows.some(row=>Number(row.byte_size)>20*1024*1024)) throw new Error('当前供应商内联媒体请求限制为每件 20 MB，请选择更小的附件');
   const usage={imageCount:0,audioSeconds:0,videoSeconds:0};
   for(const part of parts) if(part.type!=='text') {
     const record=rows.find(row=>row.id===part.assetId);

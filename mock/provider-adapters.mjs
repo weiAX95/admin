@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import {createReadStream} from 'node:fs';
+import {setTimeout as pause} from 'node:timers/promises';
 import {promptMediaPath} from './prompt-media.mjs';
 
 const trim=url=>url.replace(/\/$/,'');
@@ -10,15 +12,43 @@ const base={
 };
 const secret={legacy:()=>process.env.MODEL_API_KEY,openai:()=>process.env.OPENAI_API_KEY,qwen:()=>process.env.DASHSCOPE_API_KEY,gemini:()=>process.env.GEMINI_API_KEY};
 
-async function resolved(messages,client) {
+async function uploadGeminiFile(row,key) {
+  const root=new URL(base.gemini());
+  const apiPath=root.pathname.replace(/\/$/,'').replace(/\/v1beta$/,'');
+  const startUrl=new URL(`${apiPath}/upload/v1beta/files`,root.origin);
+  const started=await fetch(startUrl,{method:'POST',headers:{'x-goog-api-key':key,'Content-Type':'application/json','X-Goog-Upload-Protocol':'resumable','X-Goog-Upload-Command':'start','X-Goog-Upload-Header-Content-Length':String(row.byte_size),'X-Goog-Upload-Header-Content-Type':row.mime_type},body:JSON.stringify({file:{display_name:row.id}}),signal:AbortSignal.timeout(15000)});
+  if(!started.ok) throw new Error(`Gemini 文件上传初始化失败：HTTP ${started.status}`);
+  const target=started.headers.get('x-goog-upload-url');
+  if(!target || new URL(target).origin!==root.origin) throw new Error('Gemini 文件上传地址无效');
+  const uploaded=await fetch(target,{method:'POST',headers:{'Content-Length':String(row.byte_size),'X-Goog-Upload-Offset':'0','X-Goog-Upload-Command':'upload, finalize'},body:createReadStream(promptMediaPath(row.id)),duplex:'half',signal:AbortSignal.timeout(600000)});
+  if(!uploaded.ok) throw new Error(`Gemini 文件上传失败：HTTP ${uploaded.status}`);
+  let file=(await uploaded.json()).file;
+  if(!file?.uri||!file?.name) throw new Error('Gemini 文件响应缺少 URI 或名称');
+  for(let attempt=0;attempt<60;attempt++) {
+    const state=typeof file.state==='string'?file.state:file.state?.name;
+    if(state==='ACTIVE'||!state) return file.uri;
+    if(state==='FAILED') throw new Error('Gemini 文件处理失败');
+    await pause(2000);
+    const checked=await fetch(`${base.gemini()}/${file.name.replace(/^\//,'')}`,{headers:{'x-goog-api-key':key},signal:AbortSignal.timeout(15000)});
+    if(!checked.ok) throw new Error(`Gemini 文件状态读取失败：HTTP ${checked.status}`);
+    file=(await checked.json()).file;
+  }
+  throw new Error('Gemini 文件处理超时');
+}
+
+async function resolved(messages,client,provider,key) {
   const ids=[...new Set(messages.flatMap(message=>(message.parts || []).filter(part=>part.type!=='text').map(part=>part.assetId)))];
-  const rows=ids.length?(await client.query('SELECT id,mime_type,kind FROM prompt_media_assets WHERE id=ANY($1)',[ids])).rows:[];
+  const rows=ids.length?(await client.query('SELECT id,mime_type,kind,byte_size FROM prompt_media_assets WHERE id=ANY($1)',[ids])).rows:[];
   if(rows.length!==ids.length) throw new Error('运行媒体附件不存在');
   const media=new Map();
   for(const row of rows) {
-    const bytes=await fs.readFile(promptMediaPath(row.id));
-    if(bytes.length>20*1024*1024) throw new Error('媒体超过供应商内联请求上限');
-    media.set(row.id,{mime:row.mime_type,kind:row.kind,base64:bytes.toString('base64')});
+    if(Number(row.byte_size)>20*1024*1024) {
+      if(provider!=='gemini') throw new Error('媒体超过供应商内联请求上限');
+      media.set(row.id,{mime:row.mime_type,kind:row.kind,fileUri:await uploadGeminiFile(row,key)});
+    } else {
+      const bytes=await fs.readFile(promptMediaPath(row.id));
+      media.set(row.id,{mime:row.mime_type,kind:row.kind,base64:bytes.toString('base64')});
+    }
   }
   return messages.map(message=>({role:message.role,parts:(message.parts || [{type:'text',text:message.content || ''}]).map(part=>part.type==='text'?part:{...part,media:media.get(part.assetId)})}));
 }
@@ -55,8 +85,9 @@ function build(provider,model,messages,parameters,tool,outputKind='text') {
     return {url:`${base.openai()}/responses`,body:{model,input,...(parameters.max_tokens?{max_output_tokens:parameters.max_tokens}:{}),...(tool?{tools:[{type:'function',...tool}]}:{})}};
   }
   if(provider==='gemini') {
-    const system=messages.filter(message=>message.role==='system').flatMap(message=>message.parts.map(part=>part.type==='text'?{text:part.text}:{inlineData:{mimeType:part.media.mime,data:part.media.base64}}));
-    const contents=messages.filter(message=>message.role!=='system').map(message=>({role:message.role==='assistant'?'model':'user',parts:message.parts.map(part=>part.type==='text'?{text:part.text}:{inlineData:{mimeType:part.media.mime,data:part.media.base64}})}));
+    const geminiPart=part=>part.type==='text'?{text:part.text}:part.media.fileUri?{fileData:{mimeType:part.media.mime,fileUri:part.media.fileUri}}:{inlineData:{mimeType:part.media.mime,data:part.media.base64}};
+    const system=messages.filter(message=>message.role==='system').flatMap(message=>message.parts.map(geminiPart));
+    const contents=messages.filter(message=>message.role!=='system').map(message=>({role:message.role==='assistant'?'model':'user',parts:message.parts.map(geminiPart)}));
     return {url:`${base.gemini()}/models/${encodeURIComponent(model)}:generateContent`,body:{contents,systemInstruction:system.length?{parts:system}:undefined,generationConfig:{temperature:parameters.temperature,topP:parameters.top_p,maxOutputTokens:parameters.max_tokens,stopSequences:parameters.stop,...(outputKind==='image'?{responseModalities:['IMAGE']}:{})},...(tool?{tools:[{functionDeclarations:[tool]}]}:{})}};
   }
   throw new Error('未知模型供应商');
@@ -90,7 +121,7 @@ function parsed(provider,result,outputKind='text') {
 export async function completeWithProvider(client,{provider='legacy',model,messages,parameters={},toolSchema=null,outputKind='text'}) {
   const key=secret[provider]?.();
   if(!key) throw new Error(`${provider} 凭据未配置`);
-  const media=await resolved(messages,client);
+  const media=await resolved(messages,client,provider,key);
   if(outputKind!=='text' && !(provider==='gemini'&&outputKind==='image')) throw new Error('当前供应商适配器不支持所选输出类型');
   const request=build(provider,model,media,parameters,functionSchema(toolSchema),outputKind);
   const controller=new AbortController();
