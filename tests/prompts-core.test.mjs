@@ -1,0 +1,52 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createPgTestServer } from './pg-helper.mjs';
+
+test('prompt versions, folders, permissions and compliance use persisted PostgreSQL data', async t => {
+  const api = await createPgTestServer(t);
+  const login = async (username,password) => {
+    const response = await fetch(`${api.base}/auth/login`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username,password}) });
+    return (await response.json()).token;
+  };
+  const admin = await login('admin','admin123'), member = await login('member','test');
+  const call = async (token,path,method='GET',body) => {
+    const response = await fetch(`${api.base}${path}`, { method, headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}, body:body===undefined?undefined:JSON.stringify(body) });
+    return { status:response.status, data:await response.json() };
+  };
+  const folder = await call(admin,'/prompt-folders','POST',{name:'分类'});
+  assert.equal(folder.status,201);
+  assert.equal((await call(member,'/prompt-folders','POST',{name:'无权限'})).status,403);
+  const prompt = await call(member,'/prompts','POST',{name:'问答',folderId:folder.data.id,tags:['学习'],content:'你好 {{name}}',variables:[{name:'name',type:'string',required:true}],type:'system'});
+  assert.equal(prompt.status,201);
+  assert.deepEqual(prompt.data.warnings,['name 为必填变量且没有默认值']);
+  assert.equal((await call(admin,'/prompts')).data.items[0].name,'问答');
+  assert.equal((await call(admin,`/prompt-folders/${folder.data.id}`,'DELETE')).status,409);
+  const moved = await call(member,`/prompts/${prompt.data.id}`,'PATCH',{folderId:null});
+  assert.equal(moved.status,200);
+  assert.equal((await call(admin,`/prompt-folders/${folder.data.id}`,'DELETE')).status,200);
+  assert.equal((await call(admin,`/prompts/${prompt.data.id}/versions`,'POST',{content:'无权修改'})).status,201);
+  const first = (await call(member,`/prompts/${prompt.data.id}/versions`)).data.items.at(-1);
+  const second = await call(member,`/prompts/${prompt.data.id}/versions`,'POST',{content:'新内容',type:'system',variables:[],expectedVersionId:first.id,bump:'minor'});
+  assert.equal(second.status,409);
+  const current = (await call(member,`/prompts/${prompt.data.id}/versions`)).data.items[0];
+  const next = await call(member,`/prompts/${prompt.data.id}/versions`,'POST',{content:'新内容',type:'system',variables:[],expectedVersionId:current.id,bump:'minor'});
+  assert.equal(next.data.semver,'1.1.0');
+  const restored = await call(member,`/prompts/${prompt.data.id}/versions/${first.id}/restore`,'POST',{expectedVersionId:next.data.id});
+  assert.equal(restored.data.semver,'1.1.1');
+  const sensitive = await call(member,'/prompts','POST',{name:'隐私',content:'联系 test@example.com'});
+  assert.equal(sensitive.status,409);
+  const confirmed = await call(member,'/prompts','POST',{name:'隐私',content:'联系 test@example.com',confirmFindings:true});
+  assert.equal(confirmed.status,201);
+  const blocked = await call(member,'/prompts','POST',{name:'密钥',content:'api_key=abcdefghijklmnop'});
+  assert.equal(blocked.status,422);
+  assert.equal((await call(member,'/prompt-compliance-rules')).status,403);
+  assert.equal((await call(admin,'/prompt-compliance-rules','POST',{name:'危险回溯',pattern:'(a+)+$'})).status,400);
+  const rule = await call(admin,'/prompt-compliance-rules','POST',{name:'项目编号',pattern:'INTERNAL-[0-9]{4}'});
+  assert.equal(rule.status,201);
+  assert.equal((await call(member,'/prompts','POST',{name:'内部',content:'INTERNAL-2026'})).status,409);
+  assert.equal((await call(member,'/prompts','POST',{name:'内部',content:'INTERNAL-2026',confirmFindings:true})).status,201);
+  assert.equal((await call(admin,`/prompt-compliance-rules/${rule.data.id}`,'DELETE')).status,200);
+  assert.equal((await call(admin,`/prompts/${prompt.data.id}`,'DELETE')).status,200);
+  assert.equal((await call(member,'/prompts')).data.items.some(item=>item.id===prompt.data.id),false);
+  assert.equal((await call(member,`/prompts/${prompt.data.id}`)).status,200);
+});

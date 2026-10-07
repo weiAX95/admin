@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { EXPERIMENT_TEMPLATES, fillPrompt, validateDefinition, winRates } from './experiment-core.mjs';
 import { executionConfigured } from './experiment-runner.mjs';
+import { checkPromptCompliance } from './prompts.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -122,22 +123,29 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if (method === 'POST') {
       const body = await readBody();
       if (!body.name?.trim() || typeof body.content !== 'string') return fail('提示词名称和内容为必填');
+      const checked = await checkPromptCompliance(client, body, me);
+      if (checked) return checked;
       const id = uuid(), versionId = uuid();
       await client.query('INSERT INTO prompt_library(id,name,owner_id) VALUES($1,$2,$3)', [id, body.name.trim(), me.id]);
-      await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,content) VALUES($1,$2,1,$3)', [versionId, id, body.content]);
+      await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,author_id,change_summary) VALUES($1,$2,1,$3,$4,$5,$6)', [versionId, id, '1.0.0', body.content, me.id, '初始版本']);
       return ok({ id, versionId, version: 1 }, 201);
     }
   }
   const promptVersion = pathname.match(/^\/api\/experiment-platform\/prompts\/([^/]+)\/versions$/);
   if (promptVersion && method === 'POST') {
     const body = await readBody();
-    const prompt = (await client.query('SELECT * FROM prompt_library WHERE id=$1', [promptVersion[1]])).rows[0];
+    const prompt = (await client.query('SELECT * FROM prompt_library WHERE id=$1 FOR UPDATE', [promptVersion[1]])).rows[0];
     if (!prompt) return fail('提示词不存在', 404);
     if (me.role !== 'admin' && prompt.owner_id !== me.id) return fail('无权修改提示词', 403);
     if (typeof body.content !== 'string') return fail('content 必须为文本');
-    const version = (await client.query('SELECT COALESCE(max(version),0)+1 AS n FROM prompt_library_versions WHERE prompt_id=$1', [prompt.id])).rows[0].n;
+    const checked = await checkPromptCompliance(client, body, me, prompt.id);
+    if (checked) return checked;
+    const last = (await client.query('SELECT version,semver FROM prompt_library_versions WHERE prompt_id=$1 ORDER BY version DESC LIMIT 1', [prompt.id])).rows[0];
+    const version = last.version + 1;
+    const bits = last.semver.split('.').map(Number);
+    const semver = `${bits[0]}.${bits[1]}.${bits[2]+1}`;
     const id = uuid();
-    await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,content) VALUES($1,$2,$3,$4)', [id, prompt.id, version, body.content]);
+    await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,author_id,change_summary) VALUES($1,$2,$3,$4,$5,$6,$7)', [id, prompt.id, version, semver, body.content, me.id, body.content.slice(0,100)]);
     return ok({ id, version }, 201);
   }
   if (pathname === '/api/experiment-definitions' && method === 'POST') {

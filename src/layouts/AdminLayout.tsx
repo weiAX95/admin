@@ -20,6 +20,7 @@ const MENU_ITEMS = [
   { key: "/notes", icon: <FileTextOutlined />, label: "学习笔记" },
   { key: "/notes/reviews", icon: <BellOutlined />, label: "复习面板" },
   { key: "/experiments", icon: <ExperimentOutlined />, label: "实验记录" },
+  { key: "/prompts", icon: <FileTextOutlined />, label: "提示词库" },
 ];
 const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号管理" };
 const PAGE_META: Record<string, { title: string; description: string; section: string }> = {
@@ -29,6 +30,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/notes": { title: "学习笔记", description: "整理思考、记录心得，建立自己的知识积累。", section: "学习工作台" },
   "/notes/reviews": { title: "复习面板", description: "按计划回顾笔记，让知识留下来。", section: "学习工作台" },
   "/experiments": { title: "实验记录", description: "记录提示词、模型与结果，让每一次尝试都成为经验。", section: "学习工作台" },
+  "/prompts": { title: "提示词库", description: "管理版本、变量与提示词结构。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
 };
 

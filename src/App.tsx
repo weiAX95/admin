@@ -19,6 +19,8 @@ import ExperimentRegressionReport from "./pages/ExperimentRegressionReport";
 import ExperimentChain from "./pages/ExperimentChain";
 import SharedExperiment from "./pages/SharedExperiment";
 import ExperimentSchedules from "./pages/ExperimentSchedules";
+import Prompts from "./pages/Prompts";
+import PromptDetail from "./pages/PromptDetail";
 import Accounts from "./pages/Accounts";
 import Login from "./pages/Login";
 
@@ -79,6 +81,8 @@ export default function App() {
                 <Route path="/experiments/chains/:id" element={<ExperimentChain />} />
                 <Route path="/experiments/schedules" element={<ExperimentSchedules />} />
                 <Route path="/experiments/:id" element={<ExperimentDetail />} />
+                <Route path="/prompts" element={<Prompts />} />
+                <Route path="/prompts/:id" element={<PromptDetail />} />
                 <Route path="/accounts" element={<Accounts />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>

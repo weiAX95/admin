@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)、[复习提醒迁移](../db/migrations/008_note_reviews.sql)、[实验执行基础迁移](../db/migrations/009_experiment_foundation.sql)、[实验评测迁移](../db/migrations/010_experiment_evaluation.sql)、[分享与调度迁移](../db/migrations/011_experiment_sharing_schedules.sql)和[数据集批次约束迁移](../db/migrations/012_experiment_dataset_batch_kind.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **58 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)、[复习提醒迁移](../db/migrations/008_note_reviews.sql)、[实验执行基础迁移](../db/migrations/009_experiment_foundation.sql)、[实验评测迁移](../db/migrations/010_experiment_evaluation.sql)、[分享与调度迁移](../db/migrations/011_experiment_sharing_schedules.sql)、[数据集批次约束迁移](../db/migrations/012_experiment_dataset_batch_kind.sql)和[提示词库迁移](../db/migrations/013_prompt_library.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **61 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 页面如何读写数据
 
@@ -78,6 +78,13 @@ flowchart LR
   Variants -->|"FK variant_id"| Runs
   Experiments -->|"FK prompt_version_id；删除版本时置空"| PromptVersions["prompt_library_versions"]
   PromptLibrary["prompt_library"] -->|"FK prompt_id"| PromptVersions
+  PromptFolders["prompt_folders"] -->|"FK parent_id；目录树"| PromptFolders
+  PromptFolders -->|"FK folder_id；拒绝非空删除"| PromptLibrary
+  Users -->|"FK owner_id；删除账号时置空"| PromptLibrary
+  Users -->|"FK author_id；删除账号时置空"| PromptVersions
+  PromptLibrary -->|"FK prompt_id；删除时置空"| ComplianceEvents["prompt_compliance_events"]
+  PromptVersions -->|"FK version_id；删除时置空"| ComplianceEvents
+  Users -->|"FK created_by；删除时置空"| ComplianceRules["prompt_compliance_rules"]
   Settings["experiment_settings"] -. "应用层预算与并发检查" .-> Runs
 ```
 
@@ -87,8 +94,11 @@ flowchart LR
 | --- | --- | --- |
 | `experiment_settings` | 单行每日预算、并发上限和预留的 Judge 模型 ID。 | 实验管理员配置 |
 | `experiment_models` | 模型目录、兼容 API 名称及美元／百万 token 输入输出单价。 | 实验变体选择、成本快照 |
-| `prompt_library` | 提示词条目及可选创建者外键。 | 实验表单提示词来源 |
-| `prompt_library_versions` | 每条提示词的版本化正文，`prompt_id` 外键。 | 实验定义选择固定版本 |
+| `prompt_library` | 提示词条目、标签、文件夹及软删除标记；创建者与文件夹为外键。 | `/prompts`、实验表单提示词来源 |
+| `prompt_library_versions` | 不可变版本快照；旧整数版映射为 `0.0.N`，正文、类型、变量、消息结构和作者随版本保存。`prompt_id` 外键。 | `/prompts/:id`、实验定义选择固定版本 |
+| `prompt_folders` | 可无限嵌套的共享目录；`parent_id` 自引用外键，非空目录不能删除。 | 提示词库侧栏 |
+| `prompt_compliance_rules` | 管理员配置的受限自定义敏感信息模式。 | 提示词库合规管理 |
+| `prompt_compliance_events` | 被拦截或明确确认后的扫描审计；提示词、版本与账号外键可置空。 | 提示词保存审计 |
 | `experiment_variants` | 一个实验定义的模型和参数组合；实验与模型均为外键。 | 实验详情、批量运行 |
 | `experiment_batches` | 单次或 A/B 批次、变量输入、运行状态；实验和发起账号均为外键。 | 运行进度与汇总 |
 | `experiment_runs` | 每个变体和输入组的独立执行、状态、响应、用量、价格与成本快照；批次、实验和变体均为外键。 | 实验详情的运行结果 |

@@ -34,6 +34,7 @@ import { handleExperimentEvaluation } from "./experiment-evaluation.mjs";
 import { canReadSharedExperimentAsset, handleExperimentSharing, handlePublicExperimentShare } from "./experiment-sharing.mjs";
 import { deliverAppEmails } from "./app-notifications.mjs";
 import { handleExperimentSchedules, processDueExperimentSchedules } from "./experiment-schedules.mjs";
+import { handlePrompts } from "./prompts.mjs";
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -487,6 +488,9 @@ async function handleRequest(req, res) {
     if (!username) return send(res, 401, { error: "未登录或登录已过期" });
     const me = db.users.find((u) => u.username === username) || null;
     if (!me) return send(res, 401, { error: "登录账号不存在，请重新登录" });
+
+    const promptResponse = await handlePrompts({ pathname, method, client: activeClient, me, readBody: () => readBody(req), url });
+    if (promptResponse) return send(res, promptResponse.status, promptResponse.data);
 
     const platformResponse = await handleExperimentPlatform({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (platformResponse) return send(res, platformResponse.status, platformResponse.data);
