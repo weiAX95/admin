@@ -6,6 +6,7 @@ dist-ssr
 mock/db.json
 mock/db-backups/
 mock/uploads/
+mock/prompt-media/
 .npm
 eslintcache
 .env

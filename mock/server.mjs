@@ -24,6 +24,7 @@ import { canGenerate, createSeries, generateDueInstances, occurrenceDueAt, updat
 import { prepareCsvImport } from "./task-csv-import.mjs";
 import { extractWikiLinks, normalizeWikiLinks } from "./wiki-links.mjs";
 import { cleanupAssets, handleAssetRequest, isAssetPath } from "./media-assets.mjs";
+import { handlePromptMedia, isPromptMediaPath } from "./prompt-media.mjs";
 import { canonicalNoteTags, noteTagKey, noteTagUsage, validateNoteTagName } from "./note-tags.mjs";
 import { buildKnowledgeGraph } from "./knowledge-graph.mjs";
 import { initializeNoteReviews, initializeUserReviews, resetNoteReviews, completeNoteReview, createDueReviewNotifications, shanghaiDate, addCalendarDays, reminderTime } from "./note-reviews.mjs";
@@ -1554,6 +1555,13 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  if (isPromptMediaPath(new URL(req.url,"http://localhost").pathname)) {
+    void handlePromptMedia(req,res,pool,token=>lookupSession(token)).catch(error=>{
+      console.error('[prompt-media] request failed:',error);
+      if (!res.headersSent) {res.writeHead(500,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:'提示词媒体服务不可用'}));}
+    });
+    return;
+  }
   if (isAssetPath(new URL(req.url, "http://localhost").pathname)) {
     void handleAssetRequest(req, res, pool, token => lookupSession(token), (shareToken, assetId) => canReadSharedExperimentAsset(pool, shareToken, assetId)).catch(error => {
       console.error("[assets] request failed:", error);

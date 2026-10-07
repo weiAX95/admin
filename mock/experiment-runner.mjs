@@ -1,24 +1,10 @@
 import { performance } from 'node:perf_hooks';
 import { parseJudge, ruleScore, saveRunMetric } from './experiment-scoring.mjs';
 import { notifyUser } from './app-notifications.mjs';
+import {completeWithProvider} from './provider-adapters.mjs';
+import {providerConfigured} from './model-capabilities.mjs';
 
-const endpoint = () => process.env.MODEL_API_BASE_URL?.replace(/\/$/, '') + '/chat/completions';
-export function executionConfigured() { return Boolean(process.env.MODEL_API_BASE_URL && process.env.MODEL_API_KEY); }
-
-async function complete(model, messages, parameters) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 120_000);
-  try {
-    const response = await fetch(endpoint(), { method: 'POST', headers: { Authorization: `Bearer ${process.env.MODEL_API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model, messages, ...parameters }), signal: controller.signal });
-    if (!response.ok) throw new Error(`模型 API HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
-    const result = await response.json();
-    const output = result.choices?.[0]?.message?.content;
-    const promptTokens = result.usage?.prompt_tokens;
-    const completionTokens = result.usage?.completion_tokens;
-    if (typeof output !== 'string' || !Number.isInteger(promptTokens) || !Number.isInteger(completionTokens)) throw new Error('模型响应缺少输出或 token 用量');
-    return { output, promptTokens, completionTokens };
-  } finally { clearTimeout(timeout); }
-}
+export function executionConfigured() { return ['legacy','openai','qwen','gemini'].some(providerConfigured); }
 
 export async function finalizeExperimentBatch(pool, batchId) {
   const client = await pool.connect();
@@ -52,11 +38,12 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
   const running = Number((await pool.query("SELECT count(*) AS n FROM experiment_runs WHERE status='running'")).rows[0].n);
   const slots = Math.max(0, settings.concurrency_limit - running);
   const claimed = [];
+  const enabledProviders=['legacy','openai','qwen','gemini'].filter(providerConfigured);
   for (let index = 0; index < slots; index++) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const result = await client.query("SELECT id FROM experiment_runs WHERE status='queued' ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1");
+      const result = await client.query("SELECT id FROM experiment_runs WHERE status='queued' AND provider=ANY($1) AND judge_provider=ANY($1) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1",[enabledProviders]);
       if (!result.rowCount) { await client.query('COMMIT'); break; }
       const id = result.rows[0].id;
       await client.query("UPDATE experiment_runs SET status='running',started_at=now(),attempts=attempts+1 WHERE id=$1", [id]);
@@ -74,13 +61,14 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
       if (parameters.stop_sequences) { parameters.stop = parameters.stop_sequences; delete parameters.stop_sequences; }
       let output=row.output, promptTokens=row.prompt_tokens, completionTokens=row.completion_tokens;
       if (output === null) {
-        ({ output, promptTokens, completionTokens } = await complete(row.api_model, [{ role: 'system', content: row.system_prompt }, { role: 'user', content: row.user_prompt }], parameters));
-        const cost = (promptTokens * Number(row.input_price) + completionTokens * Number(row.output_price)) / 1_000_000;
-        await pool.query('UPDATE experiment_runs SET output=$2,prompt_tokens=$3,completion_tokens=$4,latency_ms=$5,cost_usd=$6,error=NULL WHERE id=$1', [id, output, promptTokens, completionTokens, Math.round(performance.now() - started), cost]);
+        const response=await completeWithProvider(pool,{provider:row.provider,model:row.api_model,messages:row.request_messages?.length?row.request_messages:[{role:'system',content:row.system_prompt},{role:'user',content:row.user_prompt}],parameters,toolSchema:row.tools_schema});
+        ({output,promptTokens,completionTokens}=response);
+        const cost=(promptTokens*Number(row.input_price)+completionTokens*Number(row.output_price))/1_000_000+Number(row.reserved_media_cost || 0);
+        await pool.query('UPDATE experiment_runs SET output=$2,prompt_tokens=$3,completion_tokens=$4,latency_ms=$5,cost_usd=$6,tool_calls=$7,output_parts=$8,error=NULL WHERE id=$1',[id,output,promptTokens,completionTokens,Math.round(performance.now()-started),cost,JSON.stringify(response.toolCalls),JSON.stringify(response.outputParts)]);
       }
       if (row.judge_api_model) {
         try {
-          const judge = await complete(row.judge_api_model, [{ role: 'system', content: row.judge_prompt }, { role: 'user', content: JSON.stringify({ question: row.user_prompt, referenceAnswer: row.reference_answer, answer: output }) }], { temperature: 0, max_tokens: 300 });
+          const judge = await completeWithProvider(pool,{provider:row.judge_provider,model:row.judge_api_model,messages:[{role:'system',content:row.judge_prompt},{role:'user',content:JSON.stringify({question:row.user_prompt,referenceAnswer:row.reference_answer,answer:output})}],parameters:{temperature:0,max_tokens:300}});
           const parsed = parseJudge(judge.output);
           const judgeCost = (judge.promptTokens * Number(row.judge_input_price) + judge.completionTokens * Number(row.judge_output_price)) / 1_000_000;
           const client=await pool.connect();

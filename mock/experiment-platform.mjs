@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { EXPERIMENT_TEMPLATES, fillPrompt, validateDefinition, winRates } from './experiment-core.mjs';
 import { executionConfigured } from './experiment-runner.mjs';
 import { checkPromptCompliance, renderPromptVersion } from './prompts.mjs';
+import {mediaCost,preflightMedia,providerConfigured,validateModelCapabilities} from './model-capabilities.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -10,17 +11,17 @@ const own = (experiment, me) => me.role === 'admin' || experiment.owner_id === m
 const fail = (error, status = 400) => ok({ error }, status);
 
 function mapRun(row) {
-  return { id: row.id, batchId: row.batch_id, experimentId: row.experiment_id, variantId: row.variant_id, inputIndex: row.input_index, caseId: row.case_id, status: row.status, modelId: row.model_id, apiModel: row.api_model, parameters: row.parameters, output: row.output, promptTokens: row.prompt_tokens, completionTokens: row.completion_tokens, latencyMs: row.latency_ms, costUsd: row.cost_usd, autoScore: row.auto_score, scoreReason: row.score_reason, error: row.error, createdAt: row.created_at, completedAt: row.completed_at };
+  return { id: row.id, batchId: row.batch_id, experimentId: row.experiment_id, variantId: row.variant_id, inputIndex: row.input_index, caseId: row.case_id, status: row.status, modelId: row.model_id, apiModel: row.api_model, provider:row.provider, parameters: row.parameters, output: row.output, outputParts:row.output_parts, toolCalls:row.tool_calls, mediaUsage:row.media_usage, mediaPriceSnapshot:row.media_price_snapshot, promptTokens: row.prompt_tokens, completionTokens: row.completion_tokens, latencyMs: row.latency_ms, costUsd: row.cost_usd, autoScore: row.auto_score, scoreReason: row.score_reason, error: row.error, createdAt: row.created_at, completedAt: row.completed_at };
 }
 const mapVariant = row => ({ id: row.id, modelId: row.model_id, label: row.label, parameters: row.parameters, position: row.position });
 const ceiling = value => Math.ceil(value * 1_000_000) / 1_000_000;
-function runCeiling(variant, prompt, model, judge) {
+function runCeiling(variant, prompt, model, judge, usage={}) {
   const outputTokens = variant.parameters.max_tokens || 1024;
   const inputTokens = Math.max(1, [...prompt.system, ...prompt.user].length);
   const main = (inputTokens * model.input_usd_per_million + outputTokens * model.output_usd_per_million) / 1_000_000;
   const judgeInputTokens = inputTokens + outputTokens * 4 + 1000;
   const judgeCost = (judgeInputTokens * judge.input_usd_per_million + 300 * judge.output_usd_per_million) / 1_000_000;
-  return ceiling(main + judgeCost);
+  return ceiling(main + judgeCost + mediaCost(usage,model.media_pricing || {}));
 }
 
 async function getDefinition(client, id) {
@@ -34,7 +35,7 @@ async function getDefinition(client, id) {
 }
 
 export async function createBatch(client, experimentId, me, body, kind = 'single') {
-  if (!executionConfigured()) return fail('未配置 MODEL_API_BASE_URL 和 MODEL_API_KEY，暂不能真实执行', 409);
+  if (!executionConfigured()) return fail('尚未配置任何模型供应商凭据，暂不能真实执行', 409);
   const definition = await getDefinition(client, experimentId);
   if (!definition) return fail('实验定义不存在', 404);
   if (!own({ owner_id: definition.ownerId }, me)) return fail('无权执行该实验', 403);
@@ -66,7 +67,9 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   if (variants.some(variant => !models.has(variant.modelId))) return fail('变体模型已停用，请编辑实验后重试', 409);
   const judge = models.get(settings.judge_model_id);
   if (!judge) return fail('LLM Judge 模型未启用', 409);
-  let prompts, usedVersions=[];
+  if(!providerConfigured(judge.provider)) return fail('LLM Judge 供应商凭据未配置',409);
+  if(variants.some(variant=>!providerConfigured(models.get(variant.modelId).provider))) return fail('部分变体的供应商凭据未配置',409);
+  let prompts, usedVersions=[],toolSchema=null;
   try {
     const version=definition.promptVersionId ? (await client.query('SELECT * FROM prompt_library_versions WHERE id=$1',[definition.promptVersionId])).rows[0] : null;
     const linked=version && version.content===definition.systemPrompt;
@@ -78,11 +81,26 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
         const raw=await renderPromptVersion(client,version,input);
         system=raw.content;
         usedVersions=raw.versionIds;
+        toolSchema=version.tool_schema;
+        const user=fillPrompt(definition.userPrompt,input);
+        const messages=[...(system?[{role:'system',parts:[{type:'text',text:system}]}]:[]),...raw.blocks,...(user?[{role:'user',parts:[{type:'text',text:user}]}]:[])];
+        prompts.push({system,user,messages});
+        continue;
       } else system=fillPrompt(definition.systemPrompt,input);
-      prompts.push({system,user:fillPrompt(definition.userPrompt,input)});
+      const user=fillPrompt(definition.userPrompt,input);
+      prompts.push({system,user,messages:[{role:'system',content:system},{role:'user',content:user}]});
     }
   } catch (error) { return fail(error.message); }
-  const estimate = variants.reduce((total, variant) => total + prompts.reduce((sum, prompt) => sum + runCeiling(variant, prompt, models.get(variant.modelId), judge), 0), 0);
+  const usageByVariant=new Map();
+  try {
+    for(const variant of variants) {
+      const model=models.get(variant.modelId);
+      const usages=[];
+      for(const prompt of prompts) usages.push(await preflightMedia(client,prompt.messages,model,toolSchema));
+      usageByVariant.set(variant.id,usages);
+    }
+  } catch(error) {return fail(error.message,409);}
+  const estimate = variants.reduce((total, variant) => total + prompts.reduce((sum, prompt,index) => sum + runCeiling(variant, prompt, models.get(variant.modelId), judge,usageByVariant.get(variant.id)[index]), 0), 0);
   const spent = Number((await client.query("SELECT COALESCE(sum(reserved_usd),0) AS total FROM experiment_runs WHERE (created_at AT TIME ZONE 'Asia/Shanghai')::date=(now() AT TIME ZONE 'Asia/Shanghai')::date")).rows[0].total);
   if (spent + estimate > settings.daily_budget_usd) return fail(`预计上限 $${estimate.toFixed(6)} 超过今日剩余额度 $${(settings.daily_budget_usd - spent).toFixed(6)}`, 409);
   if (body.dryRun) return ok({ runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate, remainingBudgetUsd: settings.daily_budget_usd - spent });
@@ -90,9 +108,11 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   await client.query('INSERT INTO experiment_batches(id,experiment_id,owner_id,kind,status,inputs,dataset_version_id,baseline_batch_id,metric_version_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [batchId, experimentId, me.id, kind, 'queued', JSON.stringify(inputs), body.datasetVersionId || null, body.baselineBatchId || null, metricVersionId]);
   for (const variant of variants) for (let index = 0; index < inputs.length; index++) {
     const model = models.get(variant.modelId);
-    const reserved = runCeiling(variant, prompts[index], model, judge);
+    const mediaUsage=usageByVariant.get(variant.id)[index];
+    const reserved = runCeiling(variant, prompts[index], model, judge,mediaUsage);
+    const reservedMedia=mediaCost(mediaUsage,model.media_pricing || {});
     const runId=uuid();
-    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved, judge.id, judge.api_model, judge.input_usd_per_million, judge.output_usd_per_million]);
+    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price,provider,judge_provider,request_messages,tools_schema,media_price_snapshot,media_usage,reserved_media_cost) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved, judge.id, judge.api_model, judge.input_usd_per_million, judge.output_usd_per_million,model.provider,judge.provider,JSON.stringify(prompts[index].messages),JSON.stringify(toolSchema),JSON.stringify(model.media_pricing),JSON.stringify(mediaUsage),reservedMedia]);
     for (const versionId of usedVersions) await client.query('INSERT INTO prompt_run_uses(run_id,version_id,direct) VALUES($1,$2,$3)',[runId,versionId,versionId===definition.promptVersionId]);
   }
   return ok({ batchId, status: 'queued', runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate }, 202);
@@ -104,7 +124,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if (method === 'GET') {
       const settings = (await client.query('SELECT * FROM experiment_settings WHERE id=1')).rows[0];
       const models = (await client.query('SELECT * FROM experiment_models ORDER BY created_at')).rows;
-      return ok({ configured: executionConfigured(), dailyBudgetUsd: settings.daily_budget_usd, concurrencyLimit: settings.concurrency_limit, judgeModelId: settings.judge_model_id, models: models.map(model => ({ id: model.id, displayName: model.display_name, apiModel: model.api_model, inputUsdPerMillion: model.input_usd_per_million, outputUsdPerMillion: model.output_usd_per_million, active: model.active })) });
+      return ok({ configured: executionConfigured(), dailyBudgetUsd: settings.daily_budget_usd, concurrencyLimit: settings.concurrency_limit, judgeModelId: settings.judge_model_id, models: models.map(model => ({ id: model.id, displayName: model.display_name, apiModel: model.api_model, provider:model.provider,capabilities:model.capabilities,mediaPricing:model.media_pricing,configured:providerConfigured(model.provider),inputUsdPerMillion: model.input_usd_per_million, outputUsdPerMillion: model.output_usd_per_million, active: model.active })) });
     }
     if (method === 'PUT') {
       if (me.role !== 'admin') return forbidden();
@@ -119,8 +139,10 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if (me.role !== 'admin') return forbidden();
     const body = await readBody();
     if (!body.displayName?.trim() || !body.apiModel?.trim() || !Number.isFinite(body.inputUsdPerMillion) || body.inputUsdPerMillion < 0 || !Number.isFinite(body.outputUsdPerMillion) || body.outputUsdPerMillion < 0) return fail('模型名称、API 名称及非负价格为必填');
+    let configured;
+    try {configured=validateModelCapabilities(body.provider || 'legacy',body.capabilities || {input:['text'],output:['text'],tools:false},body.mediaPricing || {});} catch(error) {return fail(error.message);}
     const id = uuid();
-    await client.query('INSERT INTO experiment_models(id,display_name,api_model,input_usd_per_million,output_usd_per_million) VALUES($1,$2,$3,$4,$5)', [id, body.displayName.trim(), body.apiModel.trim(), body.inputUsdPerMillion, body.outputUsdPerMillion]);
+    await client.query('INSERT INTO experiment_models(id,display_name,api_model,input_usd_per_million,output_usd_per_million,provider,capabilities,media_pricing) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, body.displayName.trim(), body.apiModel.trim(), body.inputUsdPerMillion, body.outputUsdPerMillion,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing)]);
     return ok({ id }, 201);
   }
   const modelRoute = pathname.match(/^\/api\/experiment-platform\/models\/([^/]+)$/);
@@ -128,7 +150,11 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if (me.role !== 'admin') return forbidden();
     const body = await readBody();
     if (typeof body.displayName !== 'string' || !body.displayName.trim() || typeof body.inputUsdPerMillion !== 'number' || !Number.isFinite(body.inputUsdPerMillion) || body.inputUsdPerMillion < 0 || typeof body.outputUsdPerMillion !== 'number' || !Number.isFinite(body.outputUsdPerMillion) || body.outputUsdPerMillion < 0 || typeof body.active !== 'boolean') return fail('模型价格或状态无效');
-    const result = await client.query('UPDATE experiment_models SET display_name=$2,input_usd_per_million=$3,output_usd_per_million=$4,active=$5 WHERE id=$1 RETURNING id', [modelRoute[1],body.displayName.trim(),body.inputUsdPerMillion,body.outputUsdPerMillion,body.active]);
+    const current=(await client.query('SELECT * FROM experiment_models WHERE id=$1',[modelRoute[1]])).rows[0];
+    if(!current) return fail('模型不存在',404);
+    let configured;
+    try {configured=validateModelCapabilities(body.provider || current.provider,body.capabilities || current.capabilities,body.mediaPricing || current.media_pricing);} catch(error) {return fail(error.message);}
+    const result = await client.query('UPDATE experiment_models SET display_name=$2,input_usd_per_million=$3,output_usd_per_million=$4,active=$5,provider=$6,capabilities=$7,media_pricing=$8 WHERE id=$1 RETURNING id', [modelRoute[1],body.displayName.trim(),body.inputUsdPerMillion,body.outputUsdPerMillion,body.active,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing)]);
     return result.rowCount ? ok({ id: modelRoute[1] }) : fail('模型不存在',404);
   }
   if (pathname === '/api/experiment-platform/prompts') {

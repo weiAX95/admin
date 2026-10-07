@@ -39,7 +39,7 @@ export default function ExperimentDefinitionDrawer({ open, initial, tasks, defau
   const applyTemplate = (templateId: string) => {
     const template = templates.find(item => item.id === templateId);
     if (!template) return;
-    form.setFieldsValue({ systemPrompt: template.systemPrompt, userPrompt: template.userPrompt, variables: {}, variants: template.variants.map(variant => ({ ...variant, modelId: models[0]?.id || '' })) });
+    form.setFieldsValue({ systemPrompt: template.systemPrompt, userPrompt: template.userPrompt, promptVersionId:null, variables: {}, variants: template.variants.map(variant => ({ ...variant, modelId: models[0]?.id || '' })) });
   };
   const submit = async (values: DefinitionPayload) => {
     if (!values.variants?.length) { message.error('请添加至少一个模型变体'); return; }
@@ -76,7 +76,7 @@ export default function ExperimentDefinitionDrawer({ open, initial, tasks, defau
       <Row gutter={16}><Col span={16}><Form.Item name="title" label="实验标题" rules={[{ required: true, message: '请输入标题' }]}><Input maxLength={200} /></Form.Item></Col><Col span={8}><Form.Item name="taskId" label="关联任务"><Select allowClear options={tasks.map(task => ({ value: task.id, label: task.title }))} /></Form.Item></Col></Row>
       {!initial && <Form.Item label="使用模板"><Select allowClear placeholder="选择后预填，可继续修改" options={templates.map(template => ({ value: template.id, label: template.name }))} onChange={applyTemplate} /></Form.Item>}
       <Form.Item name="promptVersionId" label="提示词库版本"><Select allowClear placeholder="也可手动填写" options={prompts.map(prompt => ({ value: prompt.version_id, label: `${prompt.name} v${prompt.version}` }))} onChange={value => { const prompt = prompts.find(item => item.version_id === value); if (prompt) form.setFieldValue('systemPrompt', prompt.content); }} /></Form.Item>
-      <Form.Item name="systemPrompt" label="System Prompt"><MarkdownEditor rows={5} placeholder="系统提示词" /></Form.Item>
+      <Form.Item label="System Prompt"><Form.Item noStyle shouldUpdate={(previous,current)=>previous.systemPrompt!==current.systemPrompt}>{()=> <MarkdownEditor rows={5} value={form.getFieldValue('systemPrompt') || ''} onChange={value=>{form.setFieldValue('systemPrompt',value);const selected=prompts.find(item=>item.version_id===form.getFieldValue('promptVersionId'));if(selected && selected.content!==value) form.setFieldValue('promptVersionId',null);}} placeholder="系统提示词" />}</Form.Item></Form.Item>
       <Form.Item name="userPrompt" label="User Prompt（支持 {{variable}}）"><MarkdownEditor rows={7} placeholder="例如：解释 {{topic}}" /></Form.Item>
       <Typography.Text type="secondary">变量标记：</Typography.Text><div style={{ whiteSpace: 'pre-wrap', padding: 12, border: '1px solid var(--ant-color-border)', borderRadius: 8, marginBottom: 12 }}>{highlighted(userPrompt || '暂无内容')}</div>
       {needed.length > 0 && <Row gutter={12}>{needed.map(name => <Col span={12} key={name}><Form.Item name={['variables', name]} label={`变量 ${name}`}><Input placeholder={`填写 ${name}`} /></Form.Item></Col>)}</Row>}

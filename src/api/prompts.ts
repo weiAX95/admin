@@ -4,10 +4,12 @@ export type PromptType = 'system' | 'user' | 'assistant' | 'tool_description';
 export type PromptFormat = 'text' | 'chat' | 'tool';
 export interface PromptVariable { name: string; type: 'string' | 'number' | 'boolean' | 'select'; required: boolean; defaultValue?: string | number | boolean; options?: string[] | string }
 export interface PromptMessage { role: 'system' | 'user' | 'assistant'; content: string }
-export interface PromptVersion { id: string; prompt_id: string; version: number; semver: string; content: string; prompt_type: PromptType; format: PromptFormat; variables: PromptVariable[]; messages: PromptMessage[]; tool_schema: Record<string, unknown> | null; author_id: string | null; author_name?: string | null; change_summary: string; created_at: string }
+export interface PromptPart { type:'text'|'image'|'audio'|'video'; text?:string; assetId?:string }
+export interface PromptBlock { role:'system'|'user'|'assistant'; parts:PromptPart[] }
+export interface PromptVersion { id: string; prompt_id: string; version: number; semver: string; content: string; prompt_type: PromptType; format: PromptFormat; variables: PromptVariable[]; messages: PromptMessage[]; blocks:PromptBlock[]; tool_schema: Record<string, unknown> | null; author_id: string | null; author_name?: string | null; change_summary: string; created_at: string }
 export interface PromptItem { id: string; name: string; owner_id: string | null; folder_id: string | null; tags: string[]; updated_at: string; version_id: string; semver: string; content: string; prompt_type: PromptType; format: PromptFormat; average_auto_score?:number|null; average_human_rating?:number|null; calls?:number }
 export interface PromptFolder { id: string; name: string; parent_id: string | null }
-export interface PromptPayload { name?: string; folderId?: string | null; tags?: string[]; content: string; type: PromptType; format?: PromptFormat; variables: PromptVariable[]; messages?: PromptMessage[]; toolSchema?: Record<string, unknown> | null; confirmFindings?: boolean; expectedVersionId?: string; bump?: 'patch' | 'minor' | 'major' }
+export interface PromptPayload { name?: string; folderId?: string | null; tags?: string[]; content: string; type: PromptType; format?: PromptFormat; variables: PromptVariable[]; messages?: PromptMessage[]; blocks?:PromptBlock[]; toolSchema?: Record<string, unknown> | null; confirmFindings?: boolean; expectedVersionId?: string; bump?: 'patch' | 'minor' | 'major' }
 
 export const listPrompts = (folderId?: string) => http.get<{ items: PromptItem[] }>('/prompts', folderId ? { folderId } : undefined);
 function normalized(value: PromptPayload): PromptPayload {

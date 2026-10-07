@@ -10,7 +10,7 @@ const types = new Set(['system', 'user', 'assistant', 'tool_description']);
 const formats = new Set(['text', 'chat', 'tool']);
 const variableTypes = new Set(['string', 'number', 'boolean', 'select']);
 const includePattern = /include:prompt:\/\/([A-Za-z0-9-]+)/g;
-const directIncludes = value => [...new Set([value.content || '', ...(value.messages || []).map(item => item.content)].flatMap(text => [...text.matchAll(includePattern)].map(match => match[1])))];
+const directIncludes = value => [...new Set([value.content || '', ...(value.messages || []).map(item => item.content), ...(value.blocks || []).flatMap(block=>block.parts.filter(part=>part.type==='text').map(part=>part.text))].flatMap(text => [...text.matchAll(includePattern)].map(match => match[1])))];
 function safePattern(pattern) {
   if (typeof pattern !== 'string' || !pattern || pattern.length > 120 || /[()+*?|]/.test(pattern)) return false;
   const bounds=[...pattern.matchAll(/\{(\d+)(?:,(\d+))?\}/g)];
@@ -43,7 +43,13 @@ async function expandIncludes(client, body, stack = [], found = new Map(), varia
   const content=await expand(body.content || '');
   const messages=[];
   for (const message of body.messages || []) messages.push({ ...message,content:await expand(message.content) });
-  return {content,messages,versions:found,variables:[...variables.values()]};
+  const blocks=[];
+  for (const block of body.blocks || []) {
+    const parts=[];
+    for (const part of block.parts) parts.push(part.type==='text'?{...part,text:await expand(part.text)}:part);
+    blocks.push({...block,parts});
+  }
+  return {content,messages,blocks,versions:found,variables:[...variables.values()]};
 }
 
 export async function renderPromptVersion(client,version,values={}) {
@@ -67,7 +73,9 @@ function validatedVersion(body) {
   if (typeof body.content !== 'string' || body.content.length > 200_000) throw new Error('content 必须为不超过 20 万字的文本');
   const messages = body.messages || [];
   if (!Array.isArray(messages) || messages.length > 50 || messages.some(item => !item || !['system','user','assistant'].includes(item.role) || typeof item.content !== 'string')) throw new Error('消息序列无效');
-  if (format === 'chat' && !messages.length) throw new Error('聊天格式至少需要一条消息');
+  const blocks=body.blocks || [];
+  if (!Array.isArray(blocks) || blocks.length>50 || blocks.some(block=>!block || !['system','user','assistant'].includes(block.role) || !Array.isArray(block.parts) || !block.parts.length || block.parts.length>30 || block.parts.some(part=>!part || !['text','image','audio','video'].includes(part.type) || (part.type==='text' ? typeof part.text!=='string' || part.text.length>200000 : typeof part.assetId!=='string' || !/^[0-9a-f-]{36}$/.test(part.assetId))))) throw new Error('有序消息或媒体块格式无效');
+  if (format === 'chat' && !messages.length && !blocks.length) throw new Error('聊天格式至少需要一条消息');
   if (format === 'tool' && (!body.toolSchema || typeof body.toolSchema !== 'object' || Array.isArray(body.toolSchema))) throw new Error('工具格式需要 toolSchema');
   const variables = body.variables || [];
   if (!Array.isArray(variables) || variables.length > 100) throw new Error('变量列表无效');
@@ -79,7 +87,18 @@ function validatedVersion(body) {
     if (item.type === 'select' && (!Array.isArray(item.options) || !item.options.length || item.options.some(value => typeof value !== 'string'))) throw new Error('select 变量需要字符串选项');
     if (item.defaultValue !== undefined && item.defaultValue !== null && !validValue(item, item.defaultValue)) throw new Error(`变量 ${item.name} 默认值类型无效`);
   }
-  return { type, format, content: body.content, messages, toolSchema: body.toolSchema || null, variables, warnings: variables.filter(item => item.required && (item.defaultValue === undefined || item.defaultValue === null)).map(item => `${item.name} 为必填变量且没有默认值`) };
+  return { type, format, content: body.content, messages, blocks, toolSchema: body.toolSchema || null, variables, warnings: variables.filter(item => item.required && (item.defaultValue === undefined || item.defaultValue === null)).map(item => `${item.name} 为必填变量且没有默认值`) };
+}
+async function validateBlockAssets(client,value) {
+  const expected=new Map();
+  for(const block of value.blocks) for(const part of block.parts) if(part.type!=='text') {
+    const previous=expected.get(part.assetId);
+    if(previous && previous!==part.type) throw new Error('同一媒体不能作为不同类型引用');
+    expected.set(part.assetId,part.type);
+  }
+  if(!expected.size) return;
+  const rows=(await client.query('SELECT id,kind FROM prompt_media_assets WHERE id=ANY($1)',[[...expected.keys()]])).rows;
+  if(rows.length!==expected.size || rows.some(row=>expected.get(row.id)!==row.kind)) throw new Error('媒体附件不存在或类型不符');
 }
 
 function validValue(variable, value) {
@@ -107,8 +126,9 @@ export function fillPromptVersion(version, values = {}) {
   });
   const content = fill(version.content);
   const messages = version.messages.map(message => ({ ...message, content: fill(message.content) }));
+  const blocks = (version.blocks || []).map(block=>({...block,parts:block.parts.map(part=>part.type==='text'?{...part,text:fill(part.text)}:part)}));
   if (missing.length) throw new Error(`未定义或未填写变量：${[...new Set(missing)].join('、')}`);
-  return { content, messages };
+  return { content, messages, blocks };
 }
 
 function bump(previous, kind) {
@@ -129,7 +149,7 @@ const fixedFindings = text => {
 };
 
 export async function scanPrompt(client, body) {
-  const text = [body.content, ...(body.messages || []).map(item => item.content), JSON.stringify(body.toolSchema || {})].join('\n');
+  const text = [body.content, ...(body.messages || []).map(item => item.content), ...(body.blocks || []).flatMap(block=>block.parts.filter(part=>part.type==='text').map(part=>part.text)), JSON.stringify(body.toolSchema || {})].join('\n');
   const findings = fixedFindings(text);
   const rules = (await client.query('SELECT name,pattern FROM prompt_compliance_rules WHERE active=true')).rows;
   for (const rule of rules) if (new RegExp(rule.pattern, 'u').test(text)) findings.push(`custom:${rule.name}`);
@@ -179,7 +199,7 @@ async function exportPrompts(client,url) {
   const prompts=[];
   for (const row of rows) {
     const versions=(await client.query('SELECT * FROM prompt_library_versions WHERE prompt_id=$1 ORDER BY version',[row.id])).rows;
-    prompts.push({sourceId:row.id,name:row.name,tags:row.tags,versions:versions.map(version=>({id:version.id,semver:version.semver,type:version.prompt_type,format:version.format,content:version.content,variables:version.variables,messages:version.messages,toolSchema:version.tool_schema,createdAt:version.created_at}))});
+    prompts.push({sourceId:row.id,name:row.name,tags:row.tags,versions:versions.map(version=>({id:version.id,semver:version.semver,type:version.prompt_type,format:version.format,content:version.content,variables:version.variables,messages:version.messages,blocks:version.blocks,toolSchema:version.tool_schema,createdAt:version.created_at}))});
   }
   const document={schemaVersion:1,sourceKey:'admin-prompts-v1',prompts};
   return ok({format,filename:`prompts.${format==='yaml'?'yaml':'json'}`,content:format==='yaml'?YAML.stringify(document):JSON.stringify(document,null,2)});
@@ -240,7 +260,8 @@ async function importPrompts(client,me,body,confirm) {
         const semver=version.raw.semver;
         if ((await client.query('SELECT 1 FROM prompt_library_versions WHERE prompt_id=$1 AND semver=$2',[promptId,semver])).rowCount) {skipped++;continue;}
         number++;
-        await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,prompt_type,format,variables,messages,tool_schema,author_id,change_summary,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)',[targetId,promptId,number,semver,rewrite(version.value.content),version.value.type,version.value.format,JSON.stringify(version.value.variables),JSON.stringify(version.value.messages.map(item=>({...item,content:rewrite(item.content)}))),JSON.stringify(version.value.toolSchema),me.id,'导入版本',version.raw.createdAt || new Date().toISOString()]);
+        await validateBlockAssets(client,version.value);
+        await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,prompt_type,format,variables,messages,blocks,tool_schema,author_id,change_summary,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)',[targetId,promptId,number,semver,rewrite(version.value.content),version.value.type,version.value.format,JSON.stringify(version.value.variables),JSON.stringify(version.value.messages.map(item=>({...item,content:rewrite(item.content)}))),JSON.stringify(version.value.blocks.map(block=>({...block,parts:block.parts.map(part=>part.type==='text'?{...part,text:rewrite(part.text)}:part)}))),JSON.stringify(version.value.toolSchema),me.id,'导入版本',version.raw.createdAt || new Date().toISOString()]);
         await client.query('INSERT INTO prompt_import_versions(source_key,source_version_id,version_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',[document.sourceKey,version.raw.id,targetId]);
         if (version.findings.length) await client.query('INSERT INTO prompt_compliance_events(id,prompt_id,version_id,actor_id,findings,action) VALUES($1,$2,$3,$4,$5,$6)',[id(),promptId,targetId,me.id,JSON.stringify(version.findings),'confirmed']);
         imported++;
@@ -262,6 +283,7 @@ async function importPrompts(client,me,body,confirm) {
 
 async function appendVersion(client, prompt, body, me, source = null) {
   const value = validatedVersion(body);
+  await validateBlockAssets(client,value);
   const expanded = await expandIncludes(client,value);
   const checked = await compliance(client, value && { ...body, ...value }, me, prompt.id);
   if (checked) return checked;
@@ -273,7 +295,7 @@ async function appendVersion(client, prompt, body, me, source = null) {
   const semver = old ? bump(old.semver, kind) : '1.0.0';
   const summary = source ? `恢复自 ${source.semver}` : old ? (old.content === value.content ? '变量或结构调整' : diffChars(old.content,value.content).filter(part=>part.added||part.removed).map(part=>`${part.added?'+':'−'}${part.value}`).join('').slice(0,100)) : '初始版本';
   const versionId = id();
-  await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,prompt_type,format,variables,messages,tool_schema,author_id,change_summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [versionId,prompt.id,version,semver,value.content,value.type,value.format,JSON.stringify(value.variables),JSON.stringify(value.messages),JSON.stringify(value.toolSchema),me.id,summary]);
+  await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,prompt_type,format,variables,messages,blocks,tool_schema,author_id,change_summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', [versionId,prompt.id,version,semver,value.content,value.type,value.format,JSON.stringify(value.variables),JSON.stringify(value.messages),JSON.stringify(value.blocks),JSON.stringify(value.toolSchema),me.id,summary]);
   for (const targetId of directIncludes(value)) await client.query('INSERT INTO prompt_version_includes(source_version_id,target_version_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[versionId,targetId]);
   await client.query('UPDATE prompt_library SET updated_at=now() WHERE id=$1', [prompt.id]);
   return ok({ id: versionId, promptId: prompt.id, version, semver, warnings: value.warnings }, 201);
@@ -371,12 +393,12 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
     try { tags = validatedTags(body.tags || []); value = validatedVersion(body); } catch (error) { return fail(error.message); }
     if (body.folderId && !(await client.query('SELECT 1 FROM prompt_folders WHERE id=$1', [body.folderId])).rowCount) return fail('文件夹不存在', 404);
     let expanded;
-    try { expanded=await expandIncludes(client,value); } catch(error) { return fail(error.message); }
+    try { await validateBlockAssets(client,value);expanded=await expandIncludes(client,value); } catch(error) { return fail(error.message); }
     const checked = await compliance(client, { ...body, ...value }, me);
     if (checked) return checked;
     const promptId = id(), versionId = id();
     await client.query('INSERT INTO prompt_library(id,name,owner_id,folder_id,tags) VALUES($1,$2,$3,$4,$5)', [promptId,body.name.trim(),me.id,body.folderId || null,tags]);
-    await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,prompt_type,format,variables,messages,tool_schema,author_id,change_summary) VALUES($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [versionId,promptId,'1.0.0',value.content,value.type,value.format,JSON.stringify(value.variables),JSON.stringify(value.messages),JSON.stringify(value.toolSchema),me.id,'初始版本']);
+    await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,prompt_type,format,variables,messages,blocks,tool_schema,author_id,change_summary) VALUES($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [versionId,promptId,'1.0.0',value.content,value.type,value.format,JSON.stringify(value.variables),JSON.stringify(value.messages),JSON.stringify(value.blocks),JSON.stringify(value.toolSchema),me.id,'初始版本']);
     for (const targetId of directIncludes(value)) await client.query('INSERT INTO prompt_version_includes(source_version_id,target_version_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[versionId,targetId]);
     return ok({ id: promptId, versionId, semver: '1.0.0', warnings: value.warnings }, 201);
   }
@@ -423,7 +445,7 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
     if (!canEdit(prompt,me)) return fail('无权恢复该提示词',403);
     const source = (await client.query('SELECT * FROM prompt_library_versions WHERE id=$1 AND prompt_id=$2', [restore[2],prompt.id])).rows[0];
     if (!source) return fail('历史版本不存在',404);
-    return appendVersion(client,prompt,{ content:source.content,type:source.prompt_type,format:source.format,variables:source.variables,messages:source.messages,toolSchema:source.tool_schema,expectedVersionId:body.expectedVersionId,confirmFindings:body.confirmFindings },me,source);
+    return appendVersion(client,prompt,{ content:source.content,type:source.prompt_type,format:source.format,variables:source.variables,messages:source.messages,blocks:source.blocks,toolSchema:source.tool_schema,expectedVersionId:body.expectedVersionId,confirmFindings:body.confirmFindings },me,source);
   }
   const promptRoute = pathname.match(/^\/api\/prompts\/([^/]+)$/);
   if (promptRoute && method === 'GET') {
