@@ -15,7 +15,7 @@ import {
   Typography,
 } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { ColumnsType } from "antd/es/table";
 import {
   createExperiment,
@@ -130,6 +130,7 @@ export function ExperimentFormDrawer({ open, initial, tasks, defaultTaskId, onCl
 export default function Experiments() {
   const { message } = App.useApp();
   const navigate = useNavigate();
+  const [searchParams,setSearchParams]=useSearchParams();
   const [items, setItems] = useState<Experiment[]>([]);
   const [tasks, setTasks] = useState<LearningTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -137,6 +138,7 @@ export default function Experiments() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<Experiment | null>(null);
   const [definitionOpen, setDefinitionOpen] = useState(false);
+  const [trialPrompt,setTrialPrompt]=useState<{promptId:string;versionId:string}|null>(null);
   const [editingDefinition, setEditingDefinition] = useState<ExperimentDefinition | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [compareIds, setCompareIds] = useState<React.Key[]>([]);
@@ -166,6 +168,13 @@ export default function Experiments() {
       .then((res) => setTasks(res.items))
       .catch(() => setTasks([]));
   }, []);
+
+  useEffect(()=>{
+    const promptId=searchParams.get('promptId'),versionId=searchParams.get('promptVersionId');
+    if(!promptId||!versionId) return;
+    setTrialPrompt({promptId,versionId});setEditingDefinition(null);setDefinitionOpen(true);
+    setSearchParams(previous=>{const next=new URLSearchParams(previous);next.delete('promptId');next.delete('promptVersionId');return next;},{replace:true});
+  },[searchParams,setSearchParams]);
 
   const taskTitle = (id: string | null) =>
     id ? tasks.find((t) => t.id === id)?.title || "已删除任务" : null;
@@ -262,7 +271,7 @@ export default function Experiments() {
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          onClick={() => { setEditingDefinition(null); setDefinitionOpen(true); }}
+          onClick={() => { setTrialPrompt(null);setEditingDefinition(null); setDefinitionOpen(true); }}
         >
           新建可执行实验
         </Button>
@@ -291,7 +300,7 @@ export default function Experiments() {
           void load(taskFilter);
         }}
       />
-      <ExperimentDefinitionDrawer open={definitionOpen} initial={editingDefinition} tasks={tasks} onClose={() => setDefinitionOpen(false)} onSaved={() => { setDefinitionOpen(false); void load(taskFilter); }} />
+      <ExperimentDefinitionDrawer open={definitionOpen} initial={editingDefinition} trialPrompt={trialPrompt} tasks={tasks} onClose={() => {setDefinitionOpen(false);setTrialPrompt(null);}} onSaved={() => { setDefinitionOpen(false);setTrialPrompt(null); void load(taskFilter); }} />
       <ExperimentPlatformSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </Card>
   </>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { App, Alert, Button, Card, Col, Form, Input, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
-import { diffLines } from 'diff';
-import { Link, useParams } from 'react-router-dom';
+import { diffArrays, diffLines } from 'diff';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { getStoredUser } from '../api/client';
 import type { AuthUser } from '../types';
 import { getPrompt, getPromptAnalytics, getPromptReferences, listPromptVersions, restorePromptVersion, savePromptVersion, updatePromptMeta } from '../api/prompts';
@@ -12,6 +12,7 @@ import PromptBlocksEditor from '../components/PromptBlocksEditor';
 
 export default function PromptDetail() {
   const { id = '' } = useParams();
+  const navigate=useNavigate();
   const { message, modal } = App.useApp();
   const user = getStoredUser<AuthUser>();
   const [form] = Form.useForm<PromptPayload>();
@@ -53,6 +54,22 @@ export default function PromptDetail() {
   const other = versions.find(version => version.id === compare);
   const selectedStats=analytics?.versions.find(item=>item.id===active?.id);
   const otherStats=analytics?.versions.find(item=>item.id===other?.id);
+  const structure=(version:PromptVersion)=>[
+    ...(version.messages || []).map((item,index)=>`消息 ${index+1} · ${item.role}\n${item.content}`),
+    ...(version.blocks || []).map((item,index)=>`媒体块 ${index+1} · ${item.role}\n${JSON.stringify(item.parts,null,2)}`),
+    ...(version.tool_schema ? [`工具结构\n${JSON.stringify(version.tool_schema,null,2)}`] : []),
+  ];
+  const structureDiff=active&&other?diffArrays(structure(other),structure(active)):[];
+  const trendPoints=(kind:'average_auto_score'|'average_human_rating')=>{
+    const result:string[][]=[];let segment:string[]=[];
+    (analytics?.trend || []).forEach((point,index)=>{
+      const value=point[kind];
+      if(value===null){if(segment.length)result.push(segment);segment=[];return;}
+      segment.push(`${12+index*296/Math.max(1,(analytics?.trend.length||1)-1)},${88-value*72/5}`);
+    });
+    if(segment.length)result.push(segment);
+    return result;
+  };
   const scoreCard=(title:string,stats:typeof selectedStats)=><Card size="small" title={title}><Space direction="vertical"><span>自动评分：{stats?.average_auto_score == null ? '暂无数据' : stats.average_auto_score.toFixed(1)}</span><span>人工评分：{stats?.average_human_rating == null ? '暂无数据' : stats.average_human_rating.toFixed(1)}（{stats?.human_count || 0} 次）</span><span>调用：{stats?.calls || 0}，成功：{stats?.completed || 0}</span><span>平均输入 token：{stats?.average_prompt_tokens == null ? '暂无数据' : stats.average_prompt_tokens.toFixed(0)}</span></Space></Card>;
   return <div><Space style={{marginBottom:16}}><Link to="/prompts">返回提示词库</Link><Typography.Title level={3} style={{margin:0}}>{prompt?.name || '加载中'}</Typography.Title><Tag>{versions[0]?.semver}</Tag></Space>
     <Row gutter={16}><Col xs={24} lg={15}><Card title="编辑与预览" extra={canEdit && <Button type="primary" loading={saving} onClick={() => form.submit()}>保存新版本</Button>}>
@@ -67,10 +84,11 @@ export default function PromptDetail() {
         <Form.List name="variables">{(fields,{add,remove})=><div><Space><Typography.Title level={5}>变量定义</Typography.Title><Button onClick={()=>add({name:'',type:'string',required:true})}>添加</Button><Button onClick={()=>{const existing=form.getFieldValue('variables') || []; const names=[...new Set([...content.matchAll(/\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}/g)].map(match=>match[1]))]; const missing=names.filter(name=>!existing.some((item:PromptVariable)=>item.name===name));form.setFieldValue('variables',[...existing,...missing.map(name=>({name,type:'string',required:true}))]);message.info(missing.length?`检测到 ${missing.length} 个新变量`:'没有新变量');}}>变量检测</Button></Space>{fields.map(field=><Row gutter={8} key={field.key} align="middle"><Col span={4}><Form.Item name={[field.name,'name']} rules={[{required:true}]}><Input placeholder="变量名" /></Form.Item></Col><Col span={3}><Form.Item name={[field.name,'type']}><Select options={['string','number','boolean','select'].map(value=>({value,label:value}))} /></Form.Item></Col><Col span={6}><Form.Item name={[field.name,'defaultValue']}><Input placeholder="默认值" /></Form.Item></Col><Col span={5}><Form.Item name={[field.name,'options']}><Input placeholder="选项，逗号分隔" /></Form.Item></Col><Col span={3}><Form.Item name={[field.name,'required']}><Select options={[{value:true,label:'必填'},{value:false,label:'可选'}]} /></Form.Item></Col><Col span={3}><Button onClick={()=>remove(field.name)}>删除</Button></Col></Row>)}</div>}</Form.List>
         {variables.some((item:PromptVariable)=>item.required && item.defaultValue === undefined) && <Alert type="warning" message="有必填变量没有默认值：可以保存，执行前须填写" />}
       </Form></Card></Col><Col xs={24} lg={9}><Card title="历史版本"><Space direction="vertical" style={{width:'100%'}}>{versions.map(version=><div key={version.id} style={{padding:10,border:'1px solid #30364c',borderRadius:8}}><Space><Button type="link" onClick={()=>setSelected(version)}>v{version.semver}</Button><Typography.Text type="secondary">{new Date(version.created_at).toLocaleString('zh-CN')} · {version.author_name || '历史作者未知'}</Typography.Text></Space><div>{version.change_summary.slice(0,100)}</div><Space><Button size="small" onClick={()=>setCompare(version.id)}>对比</Button>{canEdit && version.id !== versions[0]?.id && <Popconfirm title="将此历史内容保存为新版本？" onConfirm={()=>void restore(version)}><Button size="small">恢复此版本</Button></Popconfirm>}</Space></div>)}</Space></Card>
-      {active && <Card title={`版本 ${active.semver} 内容`} style={{marginTop:16}}><pre style={{whiteSpace:'pre-wrap'}}>{active.content}</pre></Card>}
+      {active && <Card title={`版本 ${active.semver} 内容`} extra={<Button onClick={()=>navigate(`/experiments?promptId=${encodeURIComponent(id)}&promptVersionId=${encodeURIComponent(active.id)}`)}>试运行此版本</Button>} style={{marginTop:16}}><pre style={{whiteSpace:'pre-wrap'}}>{active.content}</pre></Card>}
     </Col></Row>
     {active && other && <Card title={`逐行差异：${other.semver} → ${active.semver}`} style={{marginTop:16}}><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><pre style={{whiteSpace:'pre-wrap'}}>{diffLines(other.content,active.content).filter(part=>!part.added).map((part,index)=><span key={index} style={{background:part.removed?'#673843':undefined}}>{part.value}</span>)}</pre><pre style={{whiteSpace:'pre-wrap'}}>{diffLines(other.content,active.content).filter(part=>!part.removed).map((part,index)=><span key={index} style={{background:part.added?'#29483b':undefined}}>{part.value}</span>)}</pre></div></Card>}
+    {active && other && structureDiff.length>0 && <Card title="消息、媒体与工具结构差异" style={{marginTop:16}}><div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}><div>{structureDiff.filter(part=>!part.added).flatMap((part,index)=>part.value.map((value,offset)=><pre key={`${index}-${offset}`} style={{whiteSpace:'pre-wrap',padding:8,background:part.removed?'#673843':'transparent'}}>{value}</pre>))}</div><div>{structureDiff.filter(part=>!part.removed).flatMap((part,index)=>part.value.map((value,offset)=><pre key={`${index}-${offset}`} style={{whiteSpace:'pre-wrap',padding:8,background:part.added?'#29483b':'transparent'}}>{value}</pre>))}</div></div></Card>}
     {active && other && <Row gutter={16} style={{marginTop:16}}><Col span={12}>{scoreCard(`版本 ${other.semver}`,otherStats)}</Col><Col span={12}>{scoreCard(`版本 ${active.semver}`,selectedStats)}</Col></Row>}
-    <Row gutter={16} style={{marginTop:16}}><Col xs={24} lg={12}><Card title="引用关系"><Typography.Title level={5}>引用了 {references?.outgoing.length || 0} 个提示词</Typography.Title>{references?.outgoing.map(item=><div key={item.version_id}><Link to={`/prompts/${item.id}`}>{item.name} · {item.semver}</Link></div>)}<Typography.Title level={5}>被 {references?.incoming.length || 0} 个提示词引用</Typography.Title>{references?.incoming.map(item=><div key={item.version_id}><Link to={`/prompts/${item.id}`}>{item.name} · {item.semver}</Link></div>)}<Typography.Title level={5}>被 {references?.experiments.length || 0} 个实验引用</Typography.Title>{references?.experiments.map(item=><div key={item.id}><Link to={`/experiments/${item.id}`}>{item.title}</Link></div>)}</Card></Col><Col xs={24} lg={12}><Card title="调用与评分（近 30 天）"><Typography.Paragraph>全部版本调用 {analytics?.versions.reduce((sum,item)=>sum+item.calls,0) || 0} 次 · 模型：{analytics?.models.join('、') || '暂无数据'}</Typography.Paragraph>{analytics?.trend.length ? <svg viewBox="0 0 320 100" role="img" aria-label="近 30 天调用趋势" style={{width:'100%',height:120}}><polyline fill="none" stroke="#9582ff" strokeWidth="3" points={analytics.trend.map((point,index)=>`${12+index*296/Math.max(1,analytics.trend.length-1)},${88-point.calls*72/Math.max(1,...analytics.trend.map(item=>item.calls))}`).join(' ')} /></svg> : <Typography.Text type="secondary">暂无调用数据</Typography.Text>}</Card></Col></Row>
+    <Row gutter={16} style={{marginTop:16}}><Col xs={24} lg={12}><Card title="引用关系"><Typography.Title level={5}>引用了 {references?.outgoing.length || 0} 个提示词</Typography.Title>{references?.outgoing.map(item=><div key={item.version_id}><Link to={`/prompts/${item.id}`}>{item.name} · {item.semver}</Link></div>)}<Typography.Title level={5}>被 {references?.incoming.length || 0} 个提示词引用</Typography.Title>{references?.incoming.map(item=><div key={item.version_id}><Link to={`/prompts/${item.id}`}>{item.name} · {item.semver}</Link></div>)}<Typography.Title level={5}>被 {references?.experiments.length || 0} 个实验引用</Typography.Title>{references?.experiments.map(item=><div key={item.id}><Link to={`/experiments/${item.id}`}>{item.title}</Link></div>)}</Card></Col><Col xs={24} lg={12}><Card title="调用与评分（近 30 天）"><Typography.Paragraph>全部版本调用 {analytics?.versions.reduce((sum,item)=>sum+item.calls,0) || 0} 次 · 模型：{analytics?.models.join('、') || '暂无数据'}</Typography.Paragraph>{analytics?.trend.length ? <><svg viewBox="0 0 320 100" role="img" aria-label="近 30 天调用趋势" style={{width:'100%',height:100}}><polyline fill="none" stroke="#9582ff" strokeWidth="3" points={analytics.trend.map((point,index)=>`${12+index*296/Math.max(1,analytics.trend.length-1)},${88-point.calls*72/Math.max(1,...analytics.trend.map(item=>item.calls))}`).join(' ')} /></svg><Typography.Text>评分趋势：自动（绿色）／人工（紫色）</Typography.Text><svg viewBox="0 0 320 100" role="img" aria-label="近 30 天自动和人工评分趋势，满分 5 分" style={{width:'100%',height:100}}>{trendPoints('average_auto_score').map((segment,index)=><polyline key={`auto-${index}`} fill="none" stroke="#52c41a" strokeWidth="3" points={segment.join(' ')} />)}{trendPoints('average_human_rating').map((segment,index)=><polyline key={`human-${index}`} fill="none" stroke="#9582ff" strokeWidth="3" points={segment.join(' ')} />)}</svg></> : <Typography.Text type="secondary">暂无调用数据</Typography.Text>}</Card></Col></Row>
   </div>;
 }

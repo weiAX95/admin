@@ -4,13 +4,14 @@ import { MinusCircleOutlined, PlusOutlined } from '@ant-design/icons';
 import type { LearningTask } from '../types';
 import MarkdownEditor from './MarkdownEditor';
 import { createDefinition, getExperimentTemplates, getPlatformConfig, getPromptLibrary, runDefinition, updateDefinition } from '../api/experiment-platform';
+import {listPromptVersions} from '../api/prompts';
 import type { DefinitionPayload, ExperimentDefinition, ExperimentTemplate, ModelConfig } from '../api/experiment-platform';
 
 function names(text: string) { return [...new Set([...text.matchAll(/\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g)].map(match => match[1]))]; }
 function highlighted(text: string) { return text.split(/(\{\{[a-zA-Z_][a-zA-Z0-9_]*\}\})/g).map((part, index) => part.startsWith('{{') ? <mark key={index}>{part}</mark> : part); }
 
-interface Props { open: boolean; initial?: ExperimentDefinition | null; tasks: LearningTask[]; defaultTaskId?: string; onClose: () => void; onSaved: (id: string) => void }
-export default function ExperimentDefinitionDrawer({ open, initial, tasks, defaultTaskId, onClose, onSaved }: Props) {
+interface Props { open: boolean; initial?: ExperimentDefinition | null; trialPrompt?:{promptId:string;versionId:string}|null; tasks: LearningTask[]; defaultTaskId?: string; onClose: () => void; onSaved: (id: string) => void }
+export default function ExperimentDefinitionDrawer({ open, initial, trialPrompt, tasks, defaultTaskId, onClose, onSaved }: Props) {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<DefinitionPayload>();
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -29,12 +30,17 @@ export default function ExperimentDefinitionDrawer({ open, initial, tasks, defau
     if (!open) return;
     form.resetFields();
     form.setFieldsValue(initial ? { ...initial, variants: initial.variants } : { title: '', taskId: defaultTaskId || null, systemPrompt: '', userPrompt: '', promptVersionId: null, variables: {}, variants: [] });
-    void Promise.all([getPlatformConfig(), getExperimentTemplates(), getPromptLibrary()]).then(([config, library, promptList]) => {
-      setModels(config.models.filter(item => item.active)); setTemplates(library.items); setPrompts(promptList.items);
+    void Promise.all([getPlatformConfig(), getExperimentTemplates(), getPromptLibrary(),trialPrompt&&!initial?listPromptVersions(trialPrompt.promptId):Promise.resolve(null)]).then(([config, library, promptList,history]) => {
+      const requested=history?.items.find(item=>item.id===trialPrompt?.versionId);
+      setModels(config.models.filter(item => item.active)); setTemplates(library.items); setPrompts(requested?[...promptList.items,{id:trialPrompt!.promptId,name:'试运行所选版本',version_id:requested.id,version:requested.version,content:requested.content}]:promptList.items);
+      if(trialPrompt&&!initial) {
+        if(!requested) message.error('所选提示词版本不存在');
+        else form.setFieldsValue({title:`试运行 · ${requested.semver}`,promptVersionId:requested.id,systemPrompt:requested.content,userPrompt:'',variants:[{label:'试运行变体',modelId:config.models.find(item=>item.active)?.id || '',parameters:{temperature:0.7,top_p:1,max_tokens:1024}}]});
+      }
       setJudgeModelId(config.judgeModelId);
       setCanExecute(config.configured && config.dailyBudgetUsd > 0 && config.concurrencyLimit > 0 && Boolean(config.judgeModelId));
     }).catch(error => message.error(error instanceof Error ? error.message : '无法读取实验配置'));
-  }, [open, initial, defaultTaskId, form, message]);
+  }, [open, initial, trialPrompt, defaultTaskId, form, message]);
 
   const applyTemplate = (templateId: string) => {
     const template = templates.find(item => item.id === templateId);
