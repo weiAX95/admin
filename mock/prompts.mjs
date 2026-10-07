@@ -8,6 +8,52 @@ const canEdit = (row, me) => me.role === 'admin' || row.owner_id === me.id;
 const types = new Set(['system', 'user', 'assistant', 'tool_description']);
 const formats = new Set(['text', 'chat', 'tool']);
 const variableTypes = new Set(['string', 'number', 'boolean', 'select']);
+const includePattern = /include:prompt:\/\/([A-Za-z0-9-]+)/g;
+const directIncludes = value => [...new Set([value.content || '', ...(value.messages || []).map(item => item.content)].flatMap(text => [...text.matchAll(includePattern)].map(match => match[1])))];
+function safePattern(pattern) {
+  if (typeof pattern !== 'string' || !pattern || pattern.length > 120 || /[()+*?|]/.test(pattern)) return false;
+  const bounds=[...pattern.matchAll(/\{(\d+)(?:,(\d+))?\}/g)];
+  if (bounds.some(match=>Number(match[1])>32 || Number(match[2] || match[1])>32)) return false;
+  if (pattern.replace(/\{\d+(?:,\d+)?\}/g,'').includes('{') || pattern.replace(/\{\d+(?:,\d+)?\}/g,'').includes('}')) return false;
+  try { new RegExp(pattern,'u'); return true; } catch { return false; }
+}
+
+async function expandIncludes(client, body, stack = [], found = new Map(), variables = new Map()) {
+  for (const item of body.variables || []) {
+    const previous = variables.get(item.name);
+    if (previous && JSON.stringify(previous) !== JSON.stringify(item)) throw new Error(`变量 ${item.name} 在引用链中定义冲突`);
+    variables.set(item.name,item);
+  }
+  const expand = async text => {
+    let result = '', last = 0;
+    for (const match of text.matchAll(includePattern)) {
+      result += text.slice(last,match.index);
+      const targetId=match[1];
+      if (stack.includes(targetId)) throw new Error(`循环引用：${[...stack,targetId].join(' → ')}`);
+      const target=(await client.query('SELECT * FROM prompt_library_versions WHERE id=$1',[targetId])).rows[0];
+      if (!target) throw new Error(`被引用版本不存在：${targetId}`);
+      found.set(targetId,target);
+      const nested=await expandIncludes(client,target,[...stack,targetId],found,variables);
+      result += nested.content;
+      last=match.index+match[0].length;
+    }
+    return result+text.slice(last);
+  };
+  const content=await expand(body.content || '');
+  const messages=[];
+  for (const message of body.messages || []) messages.push({ ...message,content:await expand(message.content) });
+  return {content,messages,versions:found,variables:[...variables.values()]};
+}
+
+export async function renderPromptVersion(client,version,values={}) {
+  const expanded=await expandIncludes(client,version,[version.id]);
+  const typed=Object.fromEntries(expanded.variables.map(variable=>{
+    const input=values[variable.name];
+    return [variable.name,input===undefined ? variable.defaultValue : variable.type==='number' && typeof input==='string' && input.trim()!=='' ? Number(input) : variable.type==='boolean' && typeof input==='string' ? input==='true' ? true : input==='false' ? false : input : input];
+  }));
+  const filled=fillPromptVersion(expanded,typed);
+  return { ...filled, versionIds:[version.id,...expanded.versions.keys()], variables:expanded.variables };
+}
 
 function validatedTags(value) {
   if (!Array.isArray(value) || value.length > 30 || value.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 32)) throw new Error('标签必须为最多 30 个非空字符串，每项不超过 32 字');
@@ -109,6 +155,7 @@ async function latest(client, promptId) {
 
 async function appendVersion(client, prompt, body, me, source = null) {
   const value = validatedVersion(body);
+  const expanded = await expandIncludes(client,value);
   const checked = await compliance(client, value && { ...body, ...value }, me, prompt.id);
   if (checked) return checked;
   const old = await latest(client, prompt.id);
@@ -120,6 +167,7 @@ async function appendVersion(client, prompt, body, me, source = null) {
   const summary = source ? `恢复自 ${source.semver}` : old ? (old.content === value.content ? '变量或结构调整' : diffChars(old.content,value.content).filter(part=>part.added||part.removed).map(part=>`${part.added?'+':'−'}${part.value}`).join('').slice(0,100)) : '初始版本';
   const versionId = id();
   await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,prompt_type,format,variables,messages,tool_schema,author_id,change_summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [versionId,prompt.id,version,semver,value.content,value.type,value.format,JSON.stringify(value.variables),JSON.stringify(value.messages),JSON.stringify(value.toolSchema),me.id,summary]);
+  for (const targetId of directIncludes(value)) await client.query('INSERT INTO prompt_version_includes(source_version_id,target_version_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[versionId,targetId]);
   await client.query('UPDATE prompt_library SET updated_at=now() WHERE id=$1', [prompt.id]);
   return ok({ id: versionId, promptId: prompt.id, version, semver, warnings: value.warnings }, 201);
 }
@@ -132,10 +180,7 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
   if (pathname === '/api/prompt-compliance-rules' && method === 'POST') {
     if (me.role !== 'admin') return fail('仅管理员可管理合规规则',403);
     const body = await readBody();
-    if (typeof body.name !== 'string' || !body.name.trim() || typeof body.pattern !== 'string' || !body.pattern || body.pattern.length > 120 || /[()+*?|]/.test(body.pattern)) return fail('规则名称或正则无效；只支持有限重复、不含分组与分支的模式');
-    const bounds=[...body.pattern.matchAll(/\{(\d+)(?:,(\d+))?\}/g)];
-    if (bounds.some(match=>Number(match[1])>32 || Number(match[2] || match[1])>32) || body.pattern.replace(/\{\d+(?:,\d+)?\}/g,'').includes('{') || body.pattern.replace(/\{\d+(?:,\d+)?\}/g,'').includes('}')) return fail('重复次数上限为 32');
-    try { new RegExp(body.pattern,'u'); } catch { return fail('正则语法无效'); }
+    if (typeof body.name !== 'string' || !body.name.trim() || !safePattern(body.pattern)) return fail('规则名称或正则无效；只支持有限重复、不含分组与分支的模式');
     const ruleId=id(); await client.query('INSERT INTO prompt_compliance_rules(id,name,pattern,created_by) VALUES($1,$2,$3,$4)',[ruleId,body.name.trim(),body.pattern,me.id]);
     return ok({id:ruleId},201);
   }
@@ -145,10 +190,59 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
     const result=await client.query('DELETE FROM prompt_compliance_rules WHERE id=$1 RETURNING id',[ruleRoute[1]]);
     return result.rowCount ? ok({deleted:true}) : fail('规则不存在',404);
   }
+  if (pathname === '/api/prompts/suggestions' && method === 'GET') {
+    const term=(url.searchParams.get('q') || '').trim();
+    if (!term) return ok({items:[]});
+    if (term.length>100) return fail('搜索词过长');
+    const rows=(await client.query("SELECT name AS value,'name' AS kind FROM prompt_library WHERE deleted_at IS NULL AND name ILIKE $1 UNION SELECT DISTINCT tag AS value,'tag' AS kind FROM prompt_library CROSS JOIN LATERAL unnest(tags) AS tag WHERE deleted_at IS NULL AND tag ILIKE $1 LIMIT 12", [`%${term}%`])).rows;
+    return ok({items:rows});
+  }
+  if (pathname === '/api/prompts/search' && method === 'GET') {
+    const keyword=(url.searchParams.get('keyword') || '').trim();
+    const history=url.searchParams.get('history')==='true', regex=url.searchParams.get('regex')==='true';
+    if (keyword.length>100) return fail('搜索词过长');
+    if (regex && me.role!=='admin') return fail('仅管理员可使用正则搜索',403);
+    if (regex && !safePattern(keyword)) return fail('正则搜索语法超出安全范围');
+    if (!keyword) return ok({items:[]});
+    const op=regex ? '~*' : 'ILIKE';
+    const value=regex ? keyword : `%${keyword.replace(/[\\%_]/g,'\\$&')}%`;
+    const versionSource=history ? 'JOIN prompt_library_versions v ON v.prompt_id=p.id' : 'JOIN LATERAL (SELECT * FROM prompt_library_versions WHERE prompt_id=p.id ORDER BY version DESC LIMIT 1) v ON true';
+    if (regex) await client.query("SET LOCAL statement_timeout = '150ms'");
+    const items=(await client.query(`SELECT p.id,p.name,p.owner_id,p.tags,p.folder_id,p.updated_at,v.id AS version_id,v.semver,v.content,v.prompt_type,v.format FROM prompt_library p ${versionSource} WHERE p.deleted_at IS NULL AND (p.name ${op} $1 OR v.content ${op} $1 OR array_to_string(p.tags,' ') ${op} $1) ORDER BY p.updated_at DESC,v.version DESC LIMIT 200`,[value])).rows;
+    return ok({items});
+  }
+  const refsRoute=pathname.match(/^\/api\/prompts\/([^/]+)\/references$/);
+  if (refsRoute && method === 'GET') {
+    const outgoing=(await client.query('SELECT DISTINCT p.id,p.name,v.id AS version_id,v.semver FROM prompt_version_includes i JOIN prompt_library_versions v ON v.id=i.target_version_id JOIN prompt_library p ON p.id=v.prompt_id WHERE i.source_version_id IN (SELECT id FROM prompt_library_versions WHERE prompt_id=$1)',[refsRoute[1]])).rows;
+    const incoming=(await client.query('SELECT DISTINCT p.id,p.name,v.id AS version_id,v.semver FROM prompt_version_includes i JOIN prompt_library_versions v ON v.id=i.source_version_id JOIN prompt_library p ON p.id=v.prompt_id WHERE i.target_version_id IN (SELECT id FROM prompt_library_versions WHERE prompt_id=$1)',[refsRoute[1]])).rows;
+    const experiments=(await client.query("SELECT id,title FROM experiments WHERE prompt_version_id IN (SELECT id FROM prompt_library_versions WHERE prompt_id=$1) AND record_kind='definition'",[refsRoute[1]])).rows;
+    return ok({outgoing,incoming,experiments});
+  }
+  const previewRoute=pathname.match(/^\/api\/prompts\/([^/]+)\/versions\/([^/]+)\/preview$/);
+  if (previewRoute && method === 'POST') {
+    const body=await readBody();
+    const version=(await client.query('SELECT * FROM prompt_library_versions WHERE id=$1 AND prompt_id=$2',[previewRoute[2],previewRoute[1]])).rows[0];
+    if (!version) return fail('版本不存在',404);
+    try { return ok(await renderPromptVersion(client,version,body.values || {})); } catch(error) { return fail(error.message); }
+  }
+  const analyticsRoute=pathname.match(/^\/api\/prompts\/([^/]+)\/analytics$/);
+  if (analyticsRoute && method === 'GET') {
+    const versions=(await client.query(`SELECT v.id,v.semver,count(u.run_id)::int AS calls,count(u.run_id) FILTER (WHERE r.status='completed')::int AS completed,
+      avg(r.auto_score)::float AS average_auto_score,avg(h.average_rating)::float AS average_human_rating,
+      COALESCE(sum(h.rating_count),0)::int AS human_count,avg(r.prompt_tokens)::float AS average_prompt_tokens
+      FROM prompt_library_versions v LEFT JOIN prompt_run_uses u ON u.version_id=v.id LEFT JOIN experiment_runs r ON r.id=u.run_id
+      LEFT JOIN LATERAL (SELECT avg(rating) AS average_rating,count(*)::int AS rating_count FROM experiment_annotations WHERE run_id=r.id) h ON true
+      WHERE v.prompt_id=$1 GROUP BY v.id ORDER BY v.version DESC`,[analyticsRoute[1]])).rows;
+    const trend=(await client.query("SELECT to_char(u.created_at AT TIME ZONE 'Asia/Shanghai','YYYY-MM-DD') AS day,count(*)::int AS calls,avg(r.auto_score)::float AS average_auto_score FROM prompt_run_uses u JOIN experiment_runs r ON r.id=u.run_id JOIN prompt_library_versions v ON v.id=u.version_id WHERE v.prompt_id=$1 AND u.created_at>=now()-interval '30 days' GROUP BY day ORDER BY day",[analyticsRoute[1]])).rows;
+    const models=(await client.query('SELECT DISTINCT r.api_model FROM prompt_run_uses u JOIN experiment_runs r ON r.id=u.run_id JOIN prompt_library_versions v ON v.id=u.version_id WHERE v.prompt_id=$1 ORDER BY r.api_model',[analyticsRoute[1]])).rows.map(row=>row.api_model);
+    return ok({versions,trend,models});
+  }
   if (pathname === '/api/prompts' && method === 'GET') {
     const folder = url.searchParams.get('folderId');
-    const items = (await client.query(`SELECT p.id,p.name,p.owner_id,p.folder_id,p.tags,p.updated_at,v.id AS version_id,v.semver,v.content,v.prompt_type,v.format
+    const items = (await client.query(`SELECT p.id,p.name,p.owner_id,p.folder_id,p.tags,p.updated_at,v.id AS version_id,v.semver,v.content,v.prompt_type,v.format,s.average_auto_score,s.average_human_rating,s.calls
       FROM prompt_library p LEFT JOIN LATERAL (SELECT * FROM prompt_library_versions WHERE prompt_id=p.id ORDER BY version DESC LIMIT 1) v ON true
+      LEFT JOIN LATERAL (SELECT avg(r.auto_score)::float AS average_auto_score,avg(h.average_rating)::float AS average_human_rating,count(u.run_id)::int AS calls
+        FROM prompt_run_uses u JOIN experiment_runs r ON r.id=u.run_id LEFT JOIN LATERAL (SELECT avg(rating) AS average_rating FROM experiment_annotations WHERE run_id=r.id) h ON true WHERE u.version_id=v.id) s ON true
       WHERE p.deleted_at IS NULL AND ($1::text IS NULL OR p.folder_id=$1) ORDER BY p.updated_at DESC LIMIT 500`, [folder])).rows;
     return ok({ items });
   }
@@ -158,11 +252,14 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
     let tags, value;
     try { tags = validatedTags(body.tags || []); value = validatedVersion(body); } catch (error) { return fail(error.message); }
     if (body.folderId && !(await client.query('SELECT 1 FROM prompt_folders WHERE id=$1', [body.folderId])).rowCount) return fail('文件夹不存在', 404);
+    let expanded;
+    try { expanded=await expandIncludes(client,value); } catch(error) { return fail(error.message); }
     const checked = await compliance(client, { ...body, ...value }, me);
     if (checked) return checked;
     const promptId = id(), versionId = id();
     await client.query('INSERT INTO prompt_library(id,name,owner_id,folder_id,tags) VALUES($1,$2,$3,$4,$5)', [promptId,body.name.trim(),me.id,body.folderId || null,tags]);
     await client.query('INSERT INTO prompt_library_versions(id,prompt_id,version,semver,content,prompt_type,format,variables,messages,tool_schema,author_id,change_summary) VALUES($1,$2,1,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [versionId,promptId,'1.0.0',value.content,value.type,value.format,JSON.stringify(value.variables),JSON.stringify(value.messages),JSON.stringify(value.toolSchema),me.id,'初始版本']);
+    for (const targetId of directIncludes(value)) await client.query('INSERT INTO prompt_version_includes(source_version_id,target_version_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[versionId,targetId]);
     return ok({ id: promptId, versionId, semver: '1.0.0', warnings: value.warnings }, 201);
   }
   if (pathname === '/api/prompt-folders' && method === 'GET') return ok({ items: (await client.query('SELECT id,name,parent_id,created_at FROM prompt_folders ORDER BY name')).rows });

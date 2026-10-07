@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { EXPERIMENT_TEMPLATES, fillPrompt, validateDefinition, winRates } from './experiment-core.mjs';
 import { executionConfigured } from './experiment-runner.mjs';
-import { checkPromptCompliance } from './prompts.mjs';
+import { checkPromptCompliance, renderPromptVersion } from './prompts.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -66,11 +66,22 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   if (variants.some(variant => !models.has(variant.modelId))) return fail('变体模型已停用，请编辑实验后重试', 409);
   const judge = models.get(settings.judge_model_id);
   if (!judge) return fail('LLM Judge 模型未启用', 409);
-  let prompts;
-  try { prompts = inputs.map(input => {
-    if (Object.values(input).some(value => typeof value !== 'string')) throw new Error('变量值必须为字符串');
-    return { system: fillPrompt(definition.systemPrompt, input), user: fillPrompt(definition.userPrompt, input) };
-  }); } catch (error) { return fail(error.message); }
+  let prompts, usedVersions=[];
+  try {
+    const version=definition.promptVersionId ? (await client.query('SELECT * FROM prompt_library_versions WHERE id=$1',[definition.promptVersionId])).rows[0] : null;
+    const linked=version && version.content===definition.systemPrompt;
+    prompts=[];
+    for (const input of inputs) {
+      if (Object.values(input).some(value => typeof value !== 'string')) throw new Error('变量值必须为字符串');
+      let system;
+      if (linked) {
+        const raw=await renderPromptVersion(client,version,input);
+        system=raw.content;
+        usedVersions=raw.versionIds;
+      } else system=fillPrompt(definition.systemPrompt,input);
+      prompts.push({system,user:fillPrompt(definition.userPrompt,input)});
+    }
+  } catch (error) { return fail(error.message); }
   const estimate = variants.reduce((total, variant) => total + prompts.reduce((sum, prompt) => sum + runCeiling(variant, prompt, models.get(variant.modelId), judge), 0), 0);
   const spent = Number((await client.query("SELECT COALESCE(sum(reserved_usd),0) AS total FROM experiment_runs WHERE (created_at AT TIME ZONE 'Asia/Shanghai')::date=(now() AT TIME ZONE 'Asia/Shanghai')::date")).rows[0].total);
   if (spent + estimate > settings.daily_budget_usd) return fail(`预计上限 $${estimate.toFixed(6)} 超过今日剩余额度 $${(settings.daily_budget_usd - spent).toFixed(6)}`, 409);
@@ -80,7 +91,9 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   for (const variant of variants) for (let index = 0; index < inputs.length; index++) {
     const model = models.get(variant.modelId);
     const reserved = runCeiling(variant, prompts[index], model, judge);
-    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)', [uuid(), batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved, judge.id, judge.api_model, judge.input_usd_per_million, judge.output_usd_per_million]);
+    const runId=uuid();
+    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved, judge.id, judge.api_model, judge.input_usd_per_million, judge.output_usd_per_million]);
+    for (const versionId of usedVersions) await client.query('INSERT INTO prompt_run_uses(run_id,version_id,direct) VALUES($1,$2,$3)',[runId,versionId,versionId===definition.promptVersionId]);
   }
   return ok({ batchId, status: 'queued', runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate }, 202);
 }
@@ -154,7 +167,11 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     let definition;
     try { definition = validateDefinition(body, models); } catch (error) { return fail(error.message); }
     if (definition.taskId && !(await client.query('SELECT 1 FROM tasks WHERE id=$1', [definition.taskId])).rowCount) return fail('关联任务不存在');
-    if (definition.promptVersionId && !(await client.query('SELECT 1 FROM prompt_library_versions WHERE id=$1', [definition.promptVersionId])).rowCount) return fail('提示词版本不存在');
+    if (definition.promptVersionId) {
+      const source=(await client.query('SELECT content FROM prompt_library_versions WHERE id=$1',[definition.promptVersionId])).rows[0];
+      if (!source) return fail('提示词版本不存在');
+      if (source.content!==definition.systemPrompt) definition.promptVersionId=null;
+    }
     const id = uuid();
     await client.query("INSERT INTO experiments(id,title,task_id,prompt,model,params,result,score,owner_id,record_kind,system_prompt,user_prompt,prompt_version_id,variables,created_at,updated_at) VALUES($1,$2,$3,'','','','',0,$4,'definition',$5,$6,$7,$8,now(),now())", [id, definition.title, definition.taskId, me.id, definition.systemPrompt, definition.userPrompt, definition.promptVersionId, JSON.stringify(definition.variables)]);
     for (const variant of definition.variants) await client.query('INSERT INTO experiment_variants(id,experiment_id,model_id,label,parameters,position) VALUES($1,$2,$3,$4,$5,$6)', [variant.id, id, variant.modelId, variant.label, JSON.stringify(variant.parameters), variant.position]);
@@ -177,7 +194,11 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
       let definition;
       try { definition = validateDefinition(body, models); } catch (error) { return fail(error.message); }
       if (definition.taskId && !(await client.query('SELECT 1 FROM tasks WHERE id=$1', [definition.taskId])).rowCount) return fail('关联任务不存在');
-      if (definition.promptVersionId && !(await client.query('SELECT 1 FROM prompt_library_versions WHERE id=$1', [definition.promptVersionId])).rowCount) return fail('提示词版本不存在');
+      if (definition.promptVersionId) {
+        const source=(await client.query('SELECT content FROM prompt_library_versions WHERE id=$1',[definition.promptVersionId])).rows[0];
+        if (!source) return fail('提示词版本不存在');
+        if (source.content!==definition.systemPrompt) definition.promptVersionId=null;
+      }
       await client.query('UPDATE experiments SET title=$2,task_id=$3,system_prompt=$4,user_prompt=$5,prompt_version_id=$6,variables=$7,updated_at=now() WHERE id=$1', [id, definition.title, definition.taskId, definition.systemPrompt, definition.userPrompt, definition.promptVersionId, JSON.stringify(definition.variables)]);
       await client.query('UPDATE experiment_variants SET active=false WHERE experiment_id=$1', [id]);
       for (const variant of definition.variants) await client.query('INSERT INTO experiment_variants(id,experiment_id,model_id,label,parameters,position) VALUES($1,$2,$3,$4,$5,$6)', [variant.id, id, variant.modelId, variant.label, JSON.stringify(variant.parameters), variant.position]);

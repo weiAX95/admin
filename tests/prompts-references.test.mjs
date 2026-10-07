@@ -1,0 +1,64 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import http from 'node:http';
+import { createPgTestServer } from './pg-helper.mjs';
+
+test('prompt includes, search, preview and usage facts survive version changes', async t => {
+  const api=await createPgTestServer(t);
+  const login=await fetch(`${api.base}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'admin',password:'admin123'})});
+  const token=(await login.json()).token;
+  const call=async(path,method='GET',body)=>{
+    const response=await fetch(`${api.base}${path}`,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
+    return {status:response.status,data:await response.json()};
+  };
+  const child=await call('/prompts','POST',{name:'可复用片段',tags:['问答'],content:'回答 {{topic}}',variables:[{name:'topic',type:'string',required:true}]});
+  assert.equal(child.status,201);
+  const parent=await call('/prompts','POST',{name:'主提示词',content:`系统指令\ninclude:prompt://${child.data.versionId}`,variables:[{name:'topic',type:'string',required:true}]});
+  assert.equal(parent.status,201);
+  const preview=await call(`/prompts/${parent.data.id}/versions/${parent.data.versionId}/preview`,'POST',{values:{topic:'数据库'}});
+  assert.equal(preview.status,200);
+  assert.match(preview.data.content,/回答 数据库/);
+  assert.deepEqual(preview.data.versionIds,[parent.data.versionId,child.data.versionId]);
+  const refs=await call(`/prompts/${parent.data.id}/references`);
+  assert.equal(refs.data.outgoing[0].id,child.data.id);
+  assert.equal((await call('/prompts/search?keyword=%E5%9B%9E%E7%AD%94')).data.items.length,1);
+  assert.equal((await call('/prompts/suggestions?q=%E9%97%AE')).data.items.some(item=>item.value==='问答'),true);
+  const conflict=await call('/prompts','POST',{name:'冲突',content:`include:prompt://${child.data.versionId}`,variables:[{name:'topic',type:'number',required:true}]});
+  assert.equal(conflict.status,400);
+  const version=await call(`/prompts/${child.data.id}/versions`,'POST',{content:'新版',type:'system',variables:[],expectedVersionId:child.data.versionId});
+  assert.equal(version.status,201);
+  assert.equal((await call(`/prompts/${parent.data.id}/versions/${parent.data.versionId}/preview`,'POST',{values:{topic:'数据库'}})).data.content,preview.data.content);
+  const analytics=await call(`/prompts/${parent.data.id}/analytics`);
+  assert.equal(analytics.status,200);
+  assert.equal(analytics.data.versions[0].calls,0);
+});
+
+test('experiment calls attribute direct and included versions, while manual edits unbind', async t=>{
+  const provider=http.createServer((_req,res)=>{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{message:{content:'{"score":4,"reason":"ok"}'}}],usage:{prompt_tokens:10,completion_tokens:5}}));});
+  await new Promise(resolve=>provider.listen(0,'127.0.0.1',resolve));
+  t.after(()=>new Promise(resolve=>provider.close(resolve)));
+  const api=await createPgTestServer(t,undefined,{MODEL_API_BASE_URL:`http://127.0.0.1:${provider.address().port}`,MODEL_API_KEY:'test'});
+  const login=await fetch(`${api.base}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'admin',password:'admin123'})});
+  const token=(await login.json()).token;
+  const call=async(path,method='GET',body)=>{const response=await fetch(`${api.base}${path}`,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,data:await response.json()};};
+  const model=(await call('/experiment-platform/models','POST',{displayName:'Model',apiModel:'local',inputUsdPerMillion:1,outputUsdPerMillion:1})).data;
+  assert.equal((await call('/experiment-platform/config','PUT',{dailyBudgetUsd:1,concurrencyLimit:1,judgeModelId:model.id})).status,200);
+  const child=(await call('/prompts','POST',{name:'child',content:'子指令'})).data;
+  const content=`父指令 include:prompt://${child.versionId}`;
+  const parent=(await call('/prompts','POST',{name:'parent',content})).data;
+  const body={title:'引用实验',systemPrompt:content,promptVersionId:parent.versionId,userPrompt:'测试',variables:{},variants:[{modelId:model.id,label:'A',parameters:{max_tokens:10}}]};
+  const created=await call('/experiment-definitions','POST',body);
+  assert.equal(created.status,201);
+  const run=await call(`/experiment-definitions/${created.data.id}/run`,'POST',{variables:{}});
+  assert.equal(run.status,202);
+  const uses=(await api.client.query('SELECT version_id,direct FROM prompt_run_uses WHERE run_id IN (SELECT id FROM experiment_runs WHERE batch_id=$1) ORDER BY direct DESC',[run.data.batchId])).rows;
+  assert.deepEqual(uses.map(item=>[item.version_id,item.direct]),[[parent.versionId,true],[child.versionId,false]]);
+  const snapshot=(await api.client.query('SELECT system_prompt FROM experiment_runs WHERE batch_id=$1',[run.data.batchId])).rows[0].system_prompt;
+  assert.equal(snapshot,'父指令 子指令');
+  const changed=await call(`/experiment-definitions/${created.data.id}`,'PUT',{...body,systemPrompt:'手工修改'});
+  assert.equal(changed.status,200);
+  assert.equal(changed.data.promptVersionId,null);
+  const second=await call(`/experiment-definitions/${created.data.id}/run`,'POST',{variables:{}});
+  assert.equal(second.status,202);
+  assert.equal((await api.client.query('SELECT count(*)::int AS count FROM prompt_run_uses WHERE run_id IN (SELECT id FROM experiment_runs WHERE batch_id=$1)',[second.data.batchId])).rows[0].count,0);
+});

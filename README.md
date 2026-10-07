@@ -30,7 +30,7 @@ Docker Compose 将开发库映射到本机 `55432` 端口，并初始化独立�
 docker compose exec -T postgres pg_dump -U admin -Fc agent_admin > agent_admin.dump
 ```
 
-恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、61 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
+恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、63 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
 
 Markdown 图片经 `/api/assets` 上传并保存到 `mock/uploads/`（可用 `ASSET_DIR` 调整）。图片仅登录后可读取，支持 PNG/JPEG/WebP/GIF，每张上限 10 MB；超过 24 小时且未被当前笔记、任务或实验内容引用的图片会自动清理。**备份时需同时保存 PostgreSQL 和附件目录**，只恢复数据库会导致图片 URL 失效。笔记引用以 `[[标题]]` 编写；唯一匹配时保存为 `[[标题|id:笔记ID]]`，改名仍指向同一笔记，删除目标后显示悬空占位。
 
