@@ -16,7 +16,7 @@ const snake = name => name.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}
 const spec = (name, table, fields, children = []) => ({ name, table, fields, children });
 const child = (name, table, fields, parentColumn, orderField = "item_order") => ({ name, table, fields, parentColumn, orderField });
 const specs = [
-  spec("users", "users", ["id", "username", ["passwordHash", "password_hash"], "name", "role", "status", "reviewEmail", "reviewEmailEnabled", "createdAt", "updatedAt"]),
+  spec("users", "users", ["id", "username", ["passwordHash", "password_hash"], "name", "role", "status", "reviewEmail", "reviewEmailEnabled", "timeZone", "createdAt", "updatedAt"]),
   spec("tasks", "tasks", ["id", "title", "description", "category", "phase", "status", "priority", "dueDate", "plannedStartDate", "notes", "progress", "manualProgress", "estimatedHours", "ownerId", "version", "activeCycleStartedAt", "legacyCompletionUnknown", "createdAt", "updatedAt", "recurringSeriesId", "recurrenceIndex"], [
     child("checklist", "task_checklist_items", ["id", "text", "done"], "task_id"),
     child("dependencyIds", "task_dependencies", [["value", "dependency_id"]], "task_id"),
@@ -45,7 +45,7 @@ const specs = [
     child("tags", "note_tags", [["value", "tag"]], "note_id"),
   ]),
   spec("noteVersions", "note_versions", ["id", "noteId", "versionNumber", "title", "content", "reason", "createdAt"]),
-  spec("experiments", "experiments", ["id", "title", "taskId", "prompt", "model", "params", "result", "score", "createdAt", "updatedAt"]),
+  spec("experiments", "experiments", ["id", "title", "taskId", "prompt", "model", "params", "result", "score", "ownerId", "recordKind", "systemPrompt", "userPrompt", "promptVersionId", "variables", "chainId", "createdAt", "updatedAt"]),
   spec("activity", "activity", ["id", "type", "taskId", "title", "detail", "at", "userId", "username", "userName"]),
 ];
 
@@ -55,7 +55,7 @@ const mapped = (row, fields) => Object.fromEntries(fields.map(field => { const [
 const values = (item, fields) => fields.map(field => {
   const key = pair(field)[0];
   const value = item?.[key];
-  return key === "oldValue" || key === "newValue" ? value === undefined ? null : JSON.stringify(value) : value ?? null;
+  return ["oldValue", "newValue", "variables"].includes(key) ? value === undefined ? null : JSON.stringify(value) : value ?? null;
 });
 async function upsert(client, table, fields, item, conflict = "id") {
   const cols = columns(fields);
@@ -65,7 +65,8 @@ async function upsert(client, table, fields, item, conflict = "id") {
 }
 
 function prepareParent(entity, name) {
-  if (name === "users") return { ...entity, reviewEmailEnabled: entity.reviewEmailEnabled ?? false };
+  if (name === "users") return { ...entity, reviewEmailEnabled: entity.reviewEmailEnabled ?? false, timeZone: entity.timeZone || "Asia/Shanghai" };
+  if (name === "experiments") return { ...entity, recordKind: entity.recordKind || "manual", systemPrompt: entity.systemPrompt || "", userPrompt: entity.userPrompt || "", variables: entity.variables || {} };
   if (name !== "recurringSeries") return entity;
   const snapshot = entity.snapshot || {};
   return { ...entity, snapshotTitle: snapshot.title, snapshotDescription: snapshot.description, snapshotCategory: snapshot.category, snapshotPhase: snapshot.phase, snapshotPriority: snapshot.priority, snapshotEstimatedHours: snapshot.estimatedHours };

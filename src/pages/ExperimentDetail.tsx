@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router-dom";
 import { getExperiment } from "../api/experiments";
 import type { Experiment } from "../types";
 import MarkdownContent from "../components/MarkdownContent";
+import ExperimentDefinitionDetail from "../components/ExperimentDefinitionDetail";
 
 export default function ExperimentDetail() {
   const { id } = useParams();
@@ -17,6 +18,7 @@ export default function ExperimentDetail() {
   }, [id]);
   if (error) return <Alert type="error" showIcon message={error} />;
   if (!experiment) return <Spin className="task-detail-loading" />;
+  if (experiment.recordKind === "definition") return <ExperimentDefinitionDetail id={experiment.id} />;
   return <Card title={experiment.title} extra={experiment.taskId ? <Link to={`/tasks/${experiment.taskId}`}>返回关联任务</Link> : <Link to="/experiments">返回实验列表</Link>}>
     <Descriptions column={{ xs: 1, md: 2 }} items={[
       { key: "model", label: "模型", children: experiment.model || "未填写" },

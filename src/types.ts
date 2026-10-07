@@ -228,6 +228,8 @@ export interface Experiment {
   params: string;
   result: string;
   score: number;
+  ownerId?: string | null;
+  recordKind?: "manual" | "definition";
   createdAt: string;
   updatedAt: string;
 }

@@ -30,7 +30,7 @@ Docker Compose 将开发库映射到本机 `55432` 端口，并初始化独立�
 docker compose exec -T postgres pg_dump -U admin -Fc agent_admin > agent_admin.dump
 ```
 
-恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、38 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
+恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、45 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
 
 Markdown 图片经 `/api/assets` 上传并保存到 `mock/uploads/`（可用 `ASSET_DIR` 调整）。图片仅登录后可读取，支持 PNG/JPEG/WebP/GIF，每张上限 10 MB；超过 24 小时且未被当前笔记、任务或实验内容引用的图片会自动清理。**备份时需同时保存 PostgreSQL 和附件目录**，只恢复数据库会导致图片 URL 失效。笔记引用以 `[[标题]]` 编写；唯一匹配时保存为 `[[标题|id:笔记ID]]`，改名仍指向同一笔记，删除目标后显示悬空占位。
 
@@ -41,6 +41,8 @@ Markdown 图片经 `/api/assets` 上传并保存到 `mock/uploads/`（可用 `AS
 `/notes/reviews` 是每个账号独立的复习面板。新笔记与新账号自动建立计划；旧笔记在执行 `008_note_reviews` 迁移当天开始第一个周期。到期日按上海日历计算，服务在当天 09:00 生成站内通知；正文变化或正文回滚让所有账号从 1 天间隔重新开始，标题、分类和标签修改不重启。完成复习依次进入 2、4、7、15、30 天，之后保持 30 天。`GET /api/note-reviews` 查询今日及逾期项目，`POST /api/note-reviews/:noteId/complete` 带当前 `generation` 防止重复提交；`GET /api/notifications` 查询站内提醒，`POST /api/notifications/:id/read` 标记已读。
 
 邮件提醒由账号在复习面板填写邮箱并启用，设置经 `/api/account/review-settings` 保存；SMTP 由 `.env.example` 中的 `SMTP_HOST`、`SMTP_PORT`、`SMTP_FROM`（可选 `SMTP_USER`、`SMTP_PASSWORD`）配置。未配置 SMTP 时站内提醒仍正常，待发送邮件保留并在服务配置后尝试发送；失败状态和错误保留在数据库并按退避间隔重试。邮件投递属于至少一次语义：服务在 SMTP 已接收但尚未记录成功时崩溃，重试可能产生重复邮件。**本地 API 必须持续运行才能在 09:00 准时触发**；停机期间遗漏的提醒会在下次启动补建。新建笔记还可选用五种内置 Markdown 模板，正文保存后可自由编辑。
+
+实验平台的可执行定义与旧手工记录并存。管理员须在“实验 → 模型与预算配置”中加入模型及美元／百万 token 价格、设置每日预算和并发上限，并在服务端配置 `MODEL_API_BASE_URL` 与 `MODEL_API_KEY`；密钥不返回浏览器。未配置时可保存定义，但不能执行。运行队列和结果保存在 PostgreSQL，服务重启会将运行中的项目重新排队；每次运行保留模型、参数和价格快照。每日预算按上海日期计算并在提交批次前用 token 上限预留费用，实际成本以模型返回的 token 用量计算。当前模型调用依赖兼容 `/chat/completions`、`choices[0].message.content` 和 `usage.prompt_tokens/completion_tokens` 的接口。提示词库支持版本化存储，五种内置实验模板只作为可修改的初始值，不与创建后的实验共享数据。
 
 ## 验证与构建
 

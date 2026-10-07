@@ -28,6 +28,8 @@ import { canonicalNoteTags, noteTagKey, noteTagUsage, validateNoteTagName } from
 import { buildKnowledgeGraph } from "./knowledge-graph.mjs";
 import { initializeNoteReviews, initializeUserReviews, resetNoteReviews, completeNoteReview, createDueReviewNotifications, shanghaiDate, addCalendarDays, reminderTime } from "./note-reviews.mjs";
 import { deliverReviewEmails, smtpConfigured } from "./review-mailer.mjs";
+import { handleExperimentPlatform } from "./experiment-platform.mjs";
+import { recoverExperimentJobs, runExperimentJobs } from "./experiment-runner.mjs";
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -479,6 +481,9 @@ async function handleRequest(req, res) {
     if (!username) return send(res, 401, { error: "未登录或登录已过期" });
     const me = db.users.find((u) => u.username === username) || null;
     if (!me) return send(res, 401, { error: "登录账号不存在，请重新登录" });
+
+    const platformResponse = await handleExperimentPlatform({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (platformResponse) return send(res, platformResponse.status, platformResponse.data);
 
     if (method === "GET" && pathname === "/api/auth/me") {
       return send(res, 200, publicUser(me));
@@ -1447,6 +1452,7 @@ async function handleRequest(req, res) {
         const t = nowIso();
         const exp = {
           id: newId(), title: String(body.title).trim(),
+          ownerId: me.id, recordKind: "manual",
           taskId: body.taskId || null,
           prompt: typeof body.prompt === "string" ? body.prompt : "",
           model: typeof body.model === "string" ? body.model : "",
@@ -1468,6 +1474,8 @@ async function handleRequest(req, res) {
       if (i === -1) return send(res, 404, { error: "experiment not found" });
       if (method === "GET") return send(res, 200, db.experiments[i]);
       if (method === "PUT" || method === "PATCH") {
+        if (me.role !== "admin" && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权修改该实验" });
+        if (db.experiments[i].recordKind === "definition") return send(res, 409, { error: "请使用实验定义接口修改" });
         const body = await readBody(req);
         const w = {};
         if (typeof body.title === "string") w.title = body.title.trim();
@@ -1482,6 +1490,7 @@ async function handleRequest(req, res) {
         return send(res, 200, db.experiments[i]);
       }
       if (method === "DELETE") {
+        if (me.role !== "admin" && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权删除该实验" });
         const [rm] = db.experiments.splice(i, 1);
         saveDb(db);
         return send(res, 200, { deleted: true, id: rm.id });
@@ -1596,6 +1605,7 @@ server.on("error", (err) => {
 
 try {
   await assertSchemaCurrent();
+  await recoverExperimentJobs(pool);
   const users = await pool.query("SELECT 1 FROM users LIMIT 1");
   if (!users.rowCount) throw new Error("数据库尚无账号；请先运行 npm run db:import");
   await withData(() => {
@@ -1621,6 +1631,12 @@ try {
       }
     };
     runReviewJobs();
+    const runExperiments = async () => {
+      try { await runExperimentJobs(pool, notifyLive); }
+      catch (error) { console.error("[experiments] runner failed:", error); }
+    };
+    void runExperiments();
+    setInterval(() => { void runExperiments(); }, 1500).unref();
   });
 } catch (error) {
   console.error("[mock] PostgreSQL 不可用或尚未迁移：", error.message);

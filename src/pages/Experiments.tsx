@@ -15,6 +15,7 @@ import {
   Typography,
 } from "antd";
 import { PlusOutlined } from "@ant-design/icons";
+import { Link } from "react-router-dom";
 import type { ColumnsType } from "antd/es/table";
 import {
   createExperiment,
@@ -26,6 +27,12 @@ import { listTasks } from "../api/tasks";
 import type { Experiment, ExperimentPayload, LearningTask } from "../types";
 import MarkdownEditor from "../components/MarkdownEditor";
 import { markdownSummary } from "../utils/markdown-summary";
+import ExperimentDefinitionDrawer from "../components/ExperimentDefinitionDrawer";
+import { getDefinition } from "../api/experiment-platform";
+import type { ExperimentDefinition } from "../api/experiment-platform";
+import { getStoredUser } from "../api/client";
+import type { AuthUser } from "../types";
+import ExperimentPlatformSettings from "../components/ExperimentPlatformSettings";
 
 function scoreColor(score: number): string {
   if (score >= 4) return "success";
@@ -127,6 +134,10 @@ export default function Experiments() {
   const [taskFilter, setTaskFilter] = useState<string | undefined>();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<Experiment | null>(null);
+  const [definitionOpen, setDefinitionOpen] = useState(false);
+  const [editingDefinition, setEditingDefinition] = useState<ExperimentDefinition | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const currentUser = getStoredUser<AuthUser>();
 
   const load = useCallback(
     async (taskId?: string) => {
@@ -173,7 +184,8 @@ export default function Experiments() {
       key: "title",
       render: (v: string, e) => (
         <Space direction="vertical" size={0}>
-          <Typography.Text strong>{v}</Typography.Text>
+          <Link to={`/experiments/${e.id}`}><Typography.Text strong>{v}</Typography.Text></Link>
+          <Tag color={e.recordKind === "definition" ? "purple" : "default"}>{e.recordKind === "definition" ? "可执行定义" : "历史手工记录"}</Tag>
           {e.result && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {markdownSummary(e.result)}
@@ -196,7 +208,7 @@ export default function Experiments() {
       dataIndex: "score",
       key: "score",
       width: 80,
-      render: (v: number) => <Tag color={scoreColor(v)}>{v} / 5</Tag>,
+      render: (v: number, e) => e.recordKind === "definition" ? <Tag>按运行评分</Tag> : <Tag color={scoreColor(v)}>{v} / 5</Tag>,
     },
     {
       title: "创建时间",
@@ -214,9 +226,10 @@ export default function Experiments() {
           <Button
             type="link"
             size="small"
+            disabled={currentUser?.role !== "admin" && e.ownerId !== currentUser?.id}
             onClick={() => {
-              setEditing(e);
-              setDrawerOpen(true);
+              if (e.recordKind === "definition") void getDefinition(e.id).then(value => { setEditingDefinition(value); setDefinitionOpen(true); }).catch(error => message.error(error instanceof Error ? error.message : "加载失败"));
+              else { setEditing(e); setDrawerOpen(true); }
             }}
           >
             编辑
@@ -245,13 +258,12 @@ export default function Experiments() {
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          onClick={() => {
-            setEditing(null);
-            setDrawerOpen(true);
-          }}
+          onClick={() => { setEditingDefinition(null); setDefinitionOpen(true); }}
         >
-          新建实验
+          新建可执行实验
         </Button>
+        <Button onClick={() => { setEditing(null); setDrawerOpen(true); }}>记录手工实验</Button>
+        {currentUser?.role === "admin" && <Button onClick={() => setSettingsOpen(true)}>模型与预算配置</Button>}
       </Space>
       <Table
         rowKey="id"
@@ -271,6 +283,8 @@ export default function Experiments() {
           void load(taskFilter);
         }}
       />
+      <ExperimentDefinitionDrawer open={definitionOpen} initial={editingDefinition} tasks={tasks} onClose={() => setDefinitionOpen(false)} onSaved={() => { setDefinitionOpen(false); void load(taskFilter); }} />
+      <ExperimentPlatformSettings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </Card>
   );
 }
