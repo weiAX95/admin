@@ -26,6 +26,7 @@ import { extractWikiLinks, normalizeWikiLinks } from "./wiki-links.mjs";
 import { cleanupAssets, handleAssetRequest, isAssetPath } from "./media-assets.mjs";
 import { handlePromptMedia, isPromptMediaPath } from "./prompt-media.mjs";
 import { handlePromptArchive, isPromptArchivePath } from "./prompt-archive.mjs";
+import { handlePromptSync, isPromptSyncPath } from "./prompt-sync.mjs";
 import { canonicalNoteTags, noteTagKey, noteTagUsage, validateNoteTagName } from "./note-tags.mjs";
 import { buildKnowledgeGraph } from "./knowledge-graph.mjs";
 import { initializeNoteReviews, initializeUserReviews, resetNoteReviews, completeNoteReview, createDueReviewNotifications, shanghaiDate, addCalendarDays, reminderTime } from "./note-reviews.mjs";
@@ -248,7 +249,7 @@ function serialized(work) {
 }
 async function lookupSession(token, client = pool) {
   if (typeof token !== "string" || !token) return null;
-  const result = await client.query("SELECT u.id,u.username FROM auth_sessions a JOIN users u ON u.id=a.user_id WHERE a.token_hash=$1 AND a.revoked_at IS NULL AND a.expires_at>now() AND u.status='active'", [sha256(token)]);
+  const result = await client.query("SELECT u.id,u.username,u.role FROM auth_sessions a JOIN users u ON u.id=a.user_id WHERE a.token_hash=$1 AND a.revoked_at IS NULL AND a.expires_at>now() AND u.status='active'", [sha256(token)]);
   return result.rows[0] || null;
 }
 async function revokeUserSessions(userId) {
@@ -1556,6 +1557,13 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  if (isPromptSyncPath(new URL(req.url,"http://localhost").pathname)) {
+    void handlePromptSync(req,res,pool,token=>lookupSession(token)).catch(error=>{
+      console.error('[prompt-sync] request failed:',error);
+      if (!res.headersSent) {res.writeHead(500,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:'提示词同步服务不可用'}));}
+    });
+    return;
+  }
   if (isPromptArchivePath(new URL(req.url,"http://localhost").pathname)) {
     void handlePromptArchive(req,res,pool,token=>lookupSession(token)).catch(error=>{
       console.error('[prompt-archive] request failed:',error);

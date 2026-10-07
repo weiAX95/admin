@@ -66,3 +66,9 @@ export async function importPromptArchive(file:File,confirm=false,confirmFinding
   if(!response.ok) throw new ApiError(response.status,data.error || 'ZIP 导入失败');
   return data;
 }
+
+export type PromptSyncProvider='langfuse'|'langsmith';
+export interface PromptSyncResult extends PromptImportPreview {digest:string;externalSkipped:PromptImportItem[];imported?:number;skipped?:number}
+export const getPromptSyncConfig=()=>http.get<{langfuse:boolean;langsmith:boolean}>('/prompts/sync/config');
+export const previewPromptSync=(provider:PromptSyncProvider)=>http.post<PromptSyncResult>('/prompts/sync/preview',{provider});
+export const confirmPromptSync=(provider:PromptSyncProvider,expectedDigest:string,confirmFindings=false)=>http.post<PromptSyncResult>('/prompts/sync/confirm',{provider,expectedDigest,confirmFindings});
