@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 import ts from 'typescript';
 import { initializeTaskTrends, recordTaskTrendEvent, recordTaskTrendSnapshot, computeTaskTrends, trendDateKey } from '../mock/task-trends.mjs';
+import { createPgTestServer, basicFixture } from './pg-helper.mjs';
+import { loadData } from '../mock/postgres-store.mjs';
 
 const source = fs.readFileSync(new URL('../src/utils/taskTrends.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -60,30 +62,11 @@ test('weekly and monthly counts sum while progress uses the period end, includin
   assert.deepEqual(aggregateTaskTrends([], 'month'), []);
 });
 
-test('API tracks create, complete, batch import and deletion, and persists independent history', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'admin-trend-test-'));
-  fs.copyFileSync(new URL('../mock/task-trends.mjs', import.meta.url), path.join(dir, 'task-trends.mjs'));
-  fs.copyFileSync(new URL('../mock/overdue.mjs', import.meta.url), path.join(dir, 'overdue.mjs'));
-  fs.copyFileSync(new URL('../mock/activity.mjs', import.meta.url), path.join(dir, 'activity.mjs'));
-  fs.copyFileSync(new URL('../mock/heatmap.mjs', import.meta.url), path.join(dir, 'heatmap.mjs'));
-  fs.copyFileSync(new URL('../mock/quick-actions.mjs', import.meta.url), path.join(dir, 'quick-actions.mjs'));
-  fs.copyFileSync(new URL('../mock/task-checklist.mjs', import.meta.url), path.join(dir, 'task-checklist.mjs'));
-  fs.copyFileSync(new URL('../mock/task-dependencies.mjs', import.meta.url), path.join(dir, 'task-dependencies.mjs'));
-  fs.copyFileSync(new URL('../mock/task-change-log.mjs', import.meta.url), path.join(dir, 'task-change-log.mjs'));
-  fs.copyFileSync(new URL('../mock/task-worklog.mjs', import.meta.url), path.join(dir, 'task-worklog.mjs'));
-  fs.copyFileSync(new URL('../mock/recurring.mjs', import.meta.url), path.join(dir, 'recurring.mjs'));
-  fs.copyFileSync(new URL('../mock/task-csv-import.mjs', import.meta.url), path.join(dir, 'task-csv-import.mjs'));
-  fs.mkdirSync(path.join(dir, 'node_modules'));
-  fs.symlinkSync(fileURLToPath(new URL('../node_modules/ws', import.meta.url)), path.join(dir, 'node_modules', 'ws'), 'dir');
-  const serverSource = fs.readFileSync(new URL('../mock/server.mjs', import.meta.url), 'utf8').replace('server.listen(PORT, "127.0.0.1", () => {', 'server.listen(0, "127.0.0.1", () => { console.log("TEST_PORT:" + server.address().port);');
-  fs.writeFileSync(path.join(dir, 'server.mjs'), serverSource);
-  fs.writeFileSync(path.join(dir, 'db.json'), JSON.stringify({ tasks: [], activity: [], notes: [], sessions: [], experiments: [], users: [{ id: 'admin', username: 'admin', password: 'test', role: 'admin', status: 'active' }, { id: 'member', username: 'member', password: 'test', role: 'member', status: 'active' }] }));
-  const child = spawn(process.execPath, [path.join(dir, 'server.mjs')], { stdio: ['ignore', 'pipe', 'pipe'] });
-  try {
-    const port = await new Promise((resolve, reject) => {
-      child.stdout.on('data', data => { const match = String(data).match(/TEST_PORT:(\d+)/); if (match) resolve(match[1]); });
-      child.once('error', reject); child.once('exit', code => reject(new Error(`Server exited ${code}`)));
-    });
+test('API tracks create, complete, batch import and deletion, and persists independent history', async t => {
+    const fixture = basicFixture();
+    fixture.tasks = []; fixture.activity = []; fixture.legacyActivityIds = [];
+    fixture.users = fixture.users.filter(user => user.username !== 'learner').map(user => ({ ...user, password: 'test' }));
+    const { port, client } = await createPgTestServer(t, fixture);
     let token;
     const call = async (route, method = 'GET', body) => {
       const response = await fetch(`http://127.0.0.1:${port}/api${route}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -130,7 +113,7 @@ test('API tracks create, complete, batch import and deletion, and persists indep
     assert.equal(taskPreview.items.length, 2);
     assert.ok(taskPreview.items.every(item => Object.keys(item).sort().join(',') === 'id,title'));
     assert.deepEqual((await call('/dashboard/quick-preview?kind=sessions')).items, []);
-    const persisted = JSON.parse(fs.readFileSync(path.join(dir, 'db.json'), 'utf8'));
+    const persisted = await loadData(client);
     persisted.activity = [];
     assert.equal(computeTaskTrends(persisted, { start: today, end: today }).items[0].created, 3);
     assert.equal(persisted.taskTrendEvents.filter(e => e.type === 'complete').length, 2);
@@ -186,9 +169,9 @@ test('API tracks create, complete, batch import and deletion, and persists indep
     assert.equal(dependent.status, 'todo');
     assert.equal(dependent.effectiveStatus, 'blocked');
     assert.deepEqual(dependent.blockedBy.map(item => item.id), [prerequisite.id]);
-    const beforeViewing = fs.readFileSync(path.join(dir, 'db.json'), 'utf8');
+    const beforeViewing = JSON.stringify(await loadData(client));
     await call('/tasks'); await call(`/tasks/${dependent.id}`);
-    assert.equal(fs.readFileSync(path.join(dir, 'db.json'), 'utf8'), beforeViewing);
+    assert.equal(JSON.stringify(await loadData(client)), beforeViewing);
     const rejected = async (route, method, body, expected) => {
       const response = await fetch(`http://127.0.0.1:${port}/api${route}`, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body) });
       assert.equal(response.status, 400);
@@ -224,8 +207,4 @@ test('API tracks create, complete, batch import and deletion, and persists indep
     const foreign = await fetch(`http://127.0.0.1:${port}/api/tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${memberToken}` }, body: JSON.stringify({ title: 'Cross permission', dependencyIds: [dependent.id] }) });
     assert.equal(foreign.status, 400);
     assert.match((await foreign.json()).error, /无权限/);
-  } finally {
-    const exited = once(child, 'exit'); child.kill('SIGTERM'); await exited;
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
 });

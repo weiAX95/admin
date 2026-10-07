@@ -56,6 +56,7 @@ import type {
 } from "../types";
 import { exportFields, exportTaskCsv } from "../utils/taskCsv";
 import { COLUMN_LABELS, MOVABLE_COLUMNS, normalizeColumnConfig, nextTaskSort, readTaskQuery, readTaskSort, sortTasks, writeTaskParams, type TaskColumnConfig, type TaskColumnKey, type TaskSortKey } from "../utils/taskTable";
+import { markdownSummary } from "../utils/markdown-summary";
 
 function download(filename: string, content: string | Blob, type: string) {
   const blob = content instanceof Blob ? content : new Blob([content], { type });
@@ -101,11 +102,12 @@ function highlighted(value: string, keyword: string) {
 }
 
 function noteExcerpt(notes: string, keyword: string) {
-  const index = notes.toLocaleLowerCase().indexOf(keyword.trim().toLocaleLowerCase());
+  const plain = markdownSummary(notes, Number.MAX_SAFE_INTEGER);
+  const index = plain.toLocaleLowerCase().indexOf(keyword.trim().toLocaleLowerCase());
   if (index < 0) return "";
   const start = Math.max(0, index - 28);
-  const end = Math.min(notes.length, index + keyword.trim().length + 48);
-  return `${start ? "…" : ""}${notes.slice(start, end)}${end < notes.length ? "…" : ""}`;
+  const end = Math.min(plain.length, index + keyword.trim().length + 48);
+  return `${start ? "…" : ""}${plain.slice(start, end)}${end < plain.length ? "…" : ""}`;
 }
 
 export default function Tasks() {
@@ -311,7 +313,7 @@ export default function Tasks() {
           <Link className="task-title-link" to={`/tasks/${task.id}`}>{task.recurringSeriesId ? "🔄 " : ""}{highlighted(task.title, query.keyword || "")}{task.recurringSeriesId ? ` · 第 ${task.recurrenceIndex || 1} 次` : ""}</Link>
           {task.description && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {highlighted(task.description, query.keyword || "")}
+              {highlighted(markdownSummary(task.description), query.keyword || "")}
             </Typography.Text>
           )}
           {!!query.keyword && !`${task.title} ${task.description || ""}`.toLocaleLowerCase().includes(query.keyword.toLocaleLowerCase()) && !!task.notes && <Typography.Text type="secondary" style={{ fontSize: 12 }}>笔记：{highlighted(noteExcerpt(task.notes, query.keyword), query.keyword)}</Typography.Text>}

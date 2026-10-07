@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { createSeries, generateDueInstances, occurrenceDueAt, parseDueAt, updateSeries } from "../mock/recurring.mjs";
+import { createPgTestServer } from "./pg-helper.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function freePort() {
@@ -54,15 +55,7 @@ test("catch-up creates every missed instance once; deletion does not replace an 
 });
 
 test("mock API searches notes and generates the next instance at due time", async t => {
-  const directory = await mkdtemp(path.join(tmpdir(), "admin-recurring-"));
-  const port = await freePort();
-  const child = spawn(process.execPath, ["mock/server.mjs"], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    env: { ...process.env, MOCK_PORT: String(port), MOCK_DB_FILE: path.join(directory, "db.json") },
-    stdio: "ignore",
-  });
-  t.after(async () => { child.kill(); await rm(directory, { recursive: true, force: true }); });
-  const base = `http://127.0.0.1:${port}/api`;
+  const { base, client } = await createPgTestServer(t);
   let token = "";
   const request = async (method, route, body) => {
     const response = await fetch(`${base}${route}`, { method, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
@@ -96,9 +89,8 @@ test("mock API searches notes and generates the next instance at due time", asyn
   assert.equal(generated.notes, "");
   assert.equal(generated.checklist[0].done, false);
   assert.equal((await request("GET", `/recurring-series/${id}`)).data.finished, true);
-  const persisted = JSON.parse(await readFile(path.join(directory, "db.json"), "utf8"));
-  assert.equal(persisted.recurringSeries.find(item => item.id === id).nextSequence, 3);
-  assert.equal(persisted.tasks.filter(item => item.recurringSeriesId === id).length, 2);
+  assert.equal((await client.query("SELECT next_sequence FROM recurring_series WHERE id=$1", [id])).rows[0].next_sequence, 3);
+  assert.equal((await client.query("SELECT count(*)::int AS count FROM tasks WHERE recurring_series_id=$1", [id])).rows[0].count, 2);
   await request("DELETE", `/tasks/${generated.id}`);
   assert.equal((await request("GET", `/recurring-series/${id}`)).data.nextSequence, 3);
 

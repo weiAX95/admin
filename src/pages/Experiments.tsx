@@ -24,6 +24,8 @@ import {
 } from "../api/experiments";
 import { listTasks } from "../api/tasks";
 import type { Experiment, ExperimentPayload, LearningTask } from "../types";
+import MarkdownEditor from "../components/MarkdownEditor";
+import { markdownSummary } from "../utils/markdown-summary";
 
 function scoreColor(score: number): string {
   if (score >= 4) return "success";
@@ -73,7 +75,7 @@ export function ExperimentFormDrawer({ open, initial, tasks, defaultTaskId, onCl
   return (
     <Drawer
       title={initial ? "编辑实验记录" : "新建实验记录"}
-      width={520}
+      width="min(1050px, 100vw)"
       open={open}
       onClose={onClose}
       extra={
@@ -101,13 +103,13 @@ export function ExperimentFormDrawer({ open, initial, tasks, defaultTaskId, onCl
           <Input placeholder="例如：gpt-4o-mini" />
         </Form.Item>
         <Form.Item name="prompt" label="Prompt">
-          <Input.TextArea rows={3} placeholder="本次实验使用的提示词" />
+          <MarkdownEditor rows={10} placeholder="本次实验使用的提示词" />
         </Form.Item>
         <Form.Item name="params" label="参数">
           <Input placeholder="例如：temperature=0.2, maxSteps=5" />
         </Form.Item>
         <Form.Item name="result" label="结果观察">
-          <Input.TextArea rows={3} placeholder="实验结果与观察" />
+          <MarkdownEditor rows={10} placeholder="实验结果与观察" />
         </Form.Item>
         <Form.Item name="score" label="自评打分（0-5）">
           <InputNumber min={0} max={5} style={{ width: "100%" }} />
@@ -174,7 +176,7 @@ export default function Experiments() {
           <Typography.Text strong>{v}</Typography.Text>
           {e.result && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {e.result}
+              {markdownSummary(e.result)}
             </Typography.Text>
           )}
         </Space>

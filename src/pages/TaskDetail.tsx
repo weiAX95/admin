@@ -11,6 +11,7 @@ import TaskChecklist from "../components/TaskChecklist";
 import TaskTagEditor from "../components/TaskTagEditor";
 import TaskRelations from "../components/TaskRelations";
 import TaskTimeTracking from "../components/TaskTimeTracking";
+import MarkdownContent from "../components/MarkdownContent";
 import type { LearningTask, RecurringSeries } from "../types";
 
 function safeResourceUrl(value: string) {
@@ -67,8 +68,8 @@ export default function TaskDetail() {
             { key: "progress", label: "学习进度", children: <Progress percent={task.progress} size="small" style={{ width: 160 }} /> },
           ]} />
           {task.blockedBy.length > 0 && <Alert type="warning" showIcon message="前置任务尚未完成" description={<Space wrap>{task.blockedBy.map(item => <Link key={item.id} to={`/tasks/${item.id}`}>{item.title}</Link>)}</Space>} style={{ marginTop: 16 }} />}
-          <div className="task-detail-section"><h4>任务描述</h4><p>{task.description || "暂无任务描述"}</p></div>
-          <div className="task-detail-section"><h4>学习笔记</h4><p>{task.notes || "暂无学习笔记"}</p></div>
+          <div className="task-detail-section"><h4>任务描述</h4><MarkdownContent content={task.description || "暂无任务描述"} /></div>
+          <div className="task-detail-section"><h4>学习笔记</h4><MarkdownContent content={task.notes || "暂无学习笔记"} /></div>
         </Card>
         <Card title="检查清单"><TaskChecklist task={task} onChanged={setTask} /></Card>
         <Card title="任务标签"><TaskTagEditor task={task} onChanged={setTask} /></Card>

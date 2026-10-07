@@ -10,6 +10,7 @@ import Sessions from "./pages/Sessions";
 import Notes from "./pages/Notes";
 import Experiments from "./pages/Experiments";
 import NoteDetail from "./pages/NoteDetail";
+import NoteGraph from "./pages/NoteGraph";
 import ExperimentDetail from "./pages/ExperimentDetail";
 import Accounts from "./pages/Accounts";
 import Login from "./pages/Login";
@@ -60,6 +61,7 @@ export default function App() {
                 <Route path="/tasks/:id" element={<TaskDetail />} />
                 <Route path="/sessions" element={<Sessions />} />
                 <Route path="/notes" element={<Notes />} />
+                <Route path="/notes/graph" element={<NoteGraph />} />
                 <Route path="/notes/:id" element={<NoteDetail />} />
                 <Route path="/experiments" element={<Experiments />} />
                 <Route path="/experiments/:id" element={<ExperimentDetail />} />

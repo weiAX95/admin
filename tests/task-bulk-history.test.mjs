@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { createPgTestServer } from "./pg-helper.mjs";
 
 async function freePort() {
   const server = net.createServer();
@@ -15,15 +16,7 @@ async function freePort() {
 }
 
 test("atomic bulk changes and field history, including rollback and legacy activity", async t => {
-  const directory = await mkdtemp(path.join(tmpdir(), "admin-task-history-"));
-  const port = await freePort();
-  const child = spawn(process.execPath, ["mock/server.mjs"], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    env: { ...process.env, MOCK_PORT: String(port), MOCK_DB_FILE: path.join(directory, "db.json") },
-    stdio: "ignore",
-  });
-  t.after(async () => { child.kill(); await rm(directory, { recursive: true, force: true }); });
-  const base = `http://127.0.0.1:${port}/api`;
+  const { base, client } = await createPgTestServer(t);
   let token = "";
   const request = async (method, route, body) => {
     const response = await fetch(`${base}${route}`, {
@@ -118,7 +111,6 @@ test("atomic bulk changes and field history, including rollback and legacy activ
   assert.equal((await request("GET", `/tasks/${parent.id}`)).status, 404);
   assert.deepEqual((await request("GET", `/tasks/${dependent.id}`)).data.dependencyIds, []);
   assert.ok((await request("GET", `/tasks/${dependent.id}/change-logs`)).data.items.some(item => item.fieldName === "dependencyIds"));
-  const persisted = JSON.parse(await readFile(path.join(directory, "db.json"), "utf8"));
-  assert.ok(persisted.changeLogs.some(item => item.action === "rollback" && item.sourceEntryId === categoryEntry.id));
-  assert.ok(persisted.legacyActivityIds.length > 0);
+  assert.ok((await client.query("SELECT 1 FROM change_logs WHERE action='rollback' AND source_entry_id=$1", [categoryEntry.id])).rowCount > 0);
+  assert.ok((await client.query("SELECT 1 FROM legacy_activity_ids LIMIT 1")).rowCount > 0);
 });

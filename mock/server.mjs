@@ -1,9 +1,9 @@
 /**
- * 独立 mock API 层（零依赖，node:http 实现）。
+ * 本地 API 层（node:http + PostgreSQL）。
  * 覆盖：登录鉴权、学习任务 CRUD + 审计、会话记录、学习笔记、实验记录、统计看板。
- * 数据持久化到同目录 db.json；token 仅存内存（重启需重新登录）。
+ * PostgreSQL 是唯一运行时数据源；旧 db.json 仅供显式迁移。
  *
- * 启动：npm run mock   （默认端口 8001，可用 MOCK_PORT 覆盖）
+ * 启动：npm run mock   （默认端口 8002，可用 MOCK_PORT 覆盖）
  * 演示账号：admin / admin123
  */
 import http from "node:http";
@@ -12,20 +12,49 @@ import { listActivity } from "./activity.mjs";
 import { activityHeatmap, activityDay } from "./heatmap.mjs";
 import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
-import fs from "node:fs";
-import path from "node:path";
 import crypto from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { initializeTaskTrends, recordTaskTrendEvent, recordTaskTrendSnapshot, computeTaskTrends, trendDateKey } from "./task-trends.mjs";
+import { pool, loadData, saveData, sha256, assertSchemaCurrent } from "./postgres-store.mjs";
+import { hashPassword, verifyPassword } from "./passwords.mjs";
+import { recordTaskTrendEvent, recordTaskTrendSnapshot, computeTaskTrends, trendDateKey } from "./task-trends.mjs";
 import { applyTaskProgress, clampProgress as normalizeProgress, normalizeChecklist } from "./task-checklist.mjs";
 import { canUseDependency, projectTasks, validateDependencies, validatePlan } from "./task-dependencies.mjs";
 import { AUDITED_TASK_FIELDS, recordTaskChanges } from "./task-change-log.mjs";
 import { actualMinutes, applyCompletionTransition, initializeTaskWork, normalizeTimeEntry, workVariance } from "./task-worklog.mjs";
 import { canGenerate, createSeries, generateDueInstances, occurrenceDueAt, updateSeries } from "./recurring.mjs";
 import { prepareCsvImport } from "./task-csv-import.mjs";
+import { extractWikiLinks, normalizeWikiLinks } from "./wiki-links.mjs";
+import { cleanupAssets, handleAssetRequest, isAssetPath } from "./media-assets.mjs";
+import { canonicalNoteTags, noteTagKey, noteTagUsage, validateNoteTagName } from "./note-tags.mjs";
+import { buildKnowledgeGraph } from "./knowledge-graph.mjs";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DB_FILE = process.env.MOCK_DB_FILE || path.join(__dirname, "db.json");
+function reconcileNoteLinks(preserveContentId = null) {
+  let changed = false;
+  for (const note of db.notes) {
+    const content = note.id === preserveContentId ? note.content || "" : normalizeWikiLinks(note.content || "", db.notes);
+    const links = extractWikiLinks(content, db.notes);
+    if (note.content !== content || JSON.stringify(note.links || []) !== JSON.stringify(links)) {
+      note.content = content;
+      note.links = links;
+      changed = true;
+    }
+  }
+  return changed;
+}
+function snapshotNote(note, reason) {
+  let latest = 0;
+  for (const version of db.noteVersions) if (version.noteId === note.id && version.versionNumber > latest) latest = version.versionNumber;
+  db.noteVersions.push({ id: newId(), noteId: note.id, versionNumber: latest + 1, title: note.title, content: note.content, reason, createdAt: note.updatedAt });
+}
+function categoryBranch(categories, rootId) {
+  const ids = new Set([rootId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const category of categories) if (ids.has(category.parentId) && !ids.has(category.id)) { ids.add(category.id); changed = true; }
+  }
+  return ids;
+}
+
 const PORT = Number(process.env.MOCK_PORT || 8002);
 
 const DAY = 24 * 3600 * 1000;
@@ -193,48 +222,25 @@ function buildSeed() {
 
 /* ------------------------------ 持久化 ------------------------------ */
 
-function loadDb() {
-  if (fs.existsSync(DB_FILE)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
-      if (parsed && Array.isArray(parsed.tasks)) {
-        // 兼容旧库：回填缺失的集合（如新增的 users）
-        if (!Array.isArray(parsed.users)) parsed.users = buildSeed().users;
-        if (!Array.isArray(parsed.taskTemplates)) parsed.taskTemplates = [];
-        parsed.tasks.forEach(task => { applyTaskProgress(task); initializeTaskWork(task); if (!Array.isArray(task.tags)) task.tags = []; });
-        return parsed;
-      }
-    } catch {
-      // 损坏则回退种子
-    }
-  }
-  const db = buildSeed();
-  saveDb(db);
-  return db;
-}
-
 let notifyLive = () => {};
-function saveDb(db) {
-  const temporary = `${DB_FILE}.${process.pid}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(db, null, 2), "utf8");
-  fs.renameSync(temporary, DB_FILE);
-  notifyLive();
+let db;
+let activeClient;
+let dirty = false;
+const saveDb = () => { dirty = true; };
+let requestTail = Promise.resolve();
+function serialized(work) {
+  const current = requestTail.then(work, work);
+  requestTail = current.catch(() => {});
+  return current;
 }
-
-let db = loadDb();
-if (!Array.isArray(db.taskTemplates)) db.taskTemplates = [];
-if (!Array.isArray(db.recurringSeries)) { db.recurringSeries = []; saveDb(db); }
-db.tasks.forEach(task => { applyTaskProgress(task); initializeTaskWork(task); if (!Array.isArray(task.tags)) task.tags = []; });
-if (!Array.isArray(db.timeEntries)) { db.timeEntries = []; saveDb(db); }
-if (!Array.isArray(db.changeLogs) || !Array.isArray(db.legacyActivityIds)) {
-  if (!Array.isArray(db.changeLogs)) db.changeLogs = [];
-  if (!Array.isArray(db.legacyActivityIds)) db.legacyActivityIds = db.activity.map(item => item.id);
-  saveDb(db);
+async function lookupSession(token, client = pool) {
+  if (typeof token !== "string" || !token) return null;
+  const result = await client.query("SELECT u.id,u.username FROM auth_sessions a JOIN users u ON u.id=a.user_id WHERE a.token_hash=$1 AND a.revoked_at IS NULL AND a.expires_at>now() AND u.status='active'", [sha256(token)]);
+  return result.rows[0] || null;
 }
-if (initializeTaskTrends(db)) saveDb(db);
-
-/** 内存 token 表：token -> username */
-const tokens = new Map();
+async function revokeUserSessions(userId) {
+  await activeClient.query("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL", [userId]);
+}
 
 /** 对外返回账号时剔除密码字段 */
 const publicUser = (u) => ({
@@ -246,6 +252,7 @@ const publicUser = (u) => ({
 /* ------------------------------ helpers ------------------------------ */
 
 function send(res, status, payload) {
+  if (activeClient) { res.__pending = { status, payload }; return; }
   const body = JSON.stringify(payload);
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -268,10 +275,27 @@ function readBody(req) {
   });
 }
 
-function authUser(req) {
+async function authUser(req) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  return tokens.get(token) || null;
+  return (await lookupSession(token, activeClient))?.username || null;
+}
+
+async function annotationView(client, sessionId, messageId, reviewerId) {
+  const rows = (await client.query("SELECT a.id,a.reviewer_id,a.rating,a.updated_at,t.tag FROM message_annotations a LEFT JOIN annotation_tags t ON t.annotation_id=a.id WHERE a.session_id=$1 AND a.message_id=$2 ORDER BY a.id", [sessionId, messageId])).rows;
+  const annotations = new Map();
+  for (const row of rows) {
+    if (!annotations.has(row.id)) annotations.set(row.id, { reviewerId: row.reviewer_id, rating: row.rating, updatedAt: row.updated_at, tags: [] });
+    if (row.tag) annotations.get(row.id).tags.push(row.tag);
+  }
+  const entries = [...annotations.values()];
+  const mine = entries.find(item => item.reviewerId === reviewerId) || null;
+  const tagCounts = new Map();
+  for (const item of entries) for (const tag of item.tags) tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+  return {
+    mine: mine ? { rating: mine.rating, tags: mine.tags, updatedAt: mine.updatedAt } : null,
+    summary: { averageRating: entries.length ? Math.round(entries.reduce((sum, item) => sum + item.rating, 0) / entries.length * 10) / 10 : null, ratingCount: entries.length, tags: [...tagCounts].map(([tag, count]) => ({ tag, count })) },
+  };
 }
 
 const clampProgress = normalizeProgress;
@@ -423,7 +447,7 @@ function computeStats(tasks, { start, end } = {}) {
 
 /* ------------------------------ router ------------------------------ */
 
-const server = http.createServer(async (req, res) => {
+async function handleRequest(req, res) {
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
   const pathname = url.pathname;
   const method = req.method || "GET";
@@ -435,25 +459,31 @@ const server = http.createServer(async (req, res) => {
     if (method === "POST" && pathname === "/api/auth/login") {
       const body = await readBody(req);
       const account = db.users.find((u) => u.username === body.username);
-      if (!account || account.password !== body.password) {
+      if (!account || !verifyPassword(body.password, account.passwordHash)) {
         return send(res, 401, { error: "用户名或密码错误" });
       }
       if (account.status !== "active") {
         return send(res, 403, { error: "账号已被禁用，请联系管理员" });
       }
-      const token = newId();
-      tokens.set(token, account.username);
+      const token = crypto.randomBytes(32).toString("hex");
+      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '7 days')", [sha256(token), account.id]);
       return send(res, 200, { token, user: publicUser(account) });
     }
 
     // ---- 其余接口需鉴权 ----
-    const username = authUser(req);
+    const username = await authUser(req);
     if (!username) return send(res, 401, { error: "未登录或登录已过期" });
     const me = db.users.find((u) => u.username === username) || null;
     if (!me) return send(res, 401, { error: "登录账号不存在，请重新登录" });
 
     if (method === "GET" && pathname === "/api/auth/me") {
       return send(res, 200, publicUser(me));
+    }
+    if (method === "POST" && pathname === "/api/auth/logout") {
+      const token = (req.headers.authorization || "").replace(/^Bearer /, "");
+      await activeClient.query("UPDATE auth_sessions SET revoked_at=now() WHERE token_hash=$1", [sha256(token)]);
+      for (const [ws, liveToken] of liveClients) if (liveToken === token) { ws.close(1008, "authentication expired"); liveClients.delete(ws); }
+      return send(res, 200, { loggedOut: true });
     }
 
     const logAction = (type, data) => logActivity(type, { ...data, actor: me });
@@ -550,7 +580,7 @@ const server = http.createServer(async (req, res) => {
           }
           const t = nowIso();
           const account = {
-            id: newId(), username: uname, password: pwd,
+            id: newId(), username: uname, passwordHash: hashPassword(pwd),
             name: String(body.name || "").trim() || uname,
             role: body.role === "admin" ? "admin" : "member",
             status: body.status === "disabled" ? "disabled" : "active",
@@ -587,11 +617,12 @@ const server = http.createServer(async (req, res) => {
           target.status = body.status;
           // 禁用后失效其现有 token
           if (body.status === "disabled") {
-            for (const [tk, un] of tokens) if (un === target.username) tokens.delete(tk);
+            await revokeUserSessions(target.id);
           }
         }
         if (typeof body.password === "string" && body.password) {
-          target.password = body.password;
+          target.passwordHash = hashPassword(body.password);
+          await revokeUserSessions(target.id);
         }
         target.updatedAt = nowIso();
         db.users[index] = target;
@@ -607,7 +638,7 @@ const server = http.createServer(async (req, res) => {
           return send(res, 400, { error: "不能删除唯一的管理员" });
         }
         db.users.splice(index, 1);
-        for (const [tk, un] of tokens) if (un === target.username) tokens.delete(tk);
+        await revokeUserSessions(target.id);
         saveDb(db);
         return send(res, 200, { deleted: true, id: target.id });
       }
@@ -1062,6 +1093,24 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ---- sessions ----
+    const annotationRoute = pathname.match(/^\/api\/sessions\/([^/]+)\/messages\/([^/]+)\/annotation$/);
+    if (annotationRoute && method === "POST") {
+      const session = db.sessions.find(item => item.id === annotationRoute[1]);
+      const target = session?.messages.find(item => item.id === annotationRoute[2]);
+      if (!target) return send(res, 404, { error: "消息不存在" });
+      if (target.role !== "assistant") return send(res, 422, { error: "只能标注 assistant 消息" });
+      const body = await readBody(req);
+      const allowedTags = ["准确", "不准确", "偏题", "幻觉", "过于冗长", "过于简略", "格式错误"];
+      if (!Number.isInteger(body.rating) || body.rating < 1 || body.rating > 5 || !Array.isArray(body.tags) || body.tags.some(tag => !allowedTags.includes(tag))) return send(res, 422, { error: "评分或标签无效" });
+      const tags = [...new Set(body.tags)];
+      const at = nowIso();
+      const result = await activeClient.query("INSERT INTO message_annotations(id,session_id,message_id,reviewer_id,rating,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$6) ON CONFLICT (session_id,message_id,reviewer_id) WHERE reviewer_id IS NOT NULL DO UPDATE SET rating=EXCLUDED.rating,updated_at=EXCLUDED.updated_at RETURNING id", [newId(), session.id, target.id, me.id, body.rating, at]);
+      const id = result.rows[0].id;
+      await activeClient.query("DELETE FROM annotation_tags WHERE annotation_id=$1", [id]);
+      for (const tag of tags) await activeClient.query("INSERT INTO annotation_tags(annotation_id,tag) VALUES($1,$2)", [id, tag]);
+      const annotation = await annotationView(activeClient, session.id, target.id, me.id);
+      return send(res, 200, annotation);
+    }
     if (pathname === "/api/sessions" && method === "GET") {
       const items = db.sessions.map((s) => ({
         id: s.id, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt,
@@ -1076,28 +1125,197 @@ const server = http.createServer(async (req, res) => {
       const s = db.sessions.find((x) => x.id === sess[1]);
       if (!s) return send(res, 404, { error: "session not found" });
       const title = (s.messages.find((m) => m.role === "user")?.content || "（无标题）").slice(0, 40);
-      return send(res, 200, { ...s, title, messageCount: s.messages.length });
+      const annotated = [];
+      for (const item of s.messages) annotated.push(item.role === "assistant" ? { ...item, annotation: await annotationView(activeClient, s.id, item.id, me.id) } : item);
+      return send(res, 200, { ...s, messages: annotated, title, messageCount: s.messages.length });
     }
     // web 端上报会话（预留联动入口）
     if (pathname === "/api/sessions/ingest" && method === "POST") {
       const body = await readBody(req);
-      const s = {
-        id: body.id || newId(),
-        userId: body.userId || "unknown",
-        createdAt: nowIso(), updatedAt: nowIso(),
-        messages: Array.isArray(body.messages) ? body.messages : [],
-      };
+      if (!Array.isArray(body.messages)) return send(res, 422, { error: "messages 必须是数组" });
+      const existing = body.id ? db.sessions.find(item => item.id === body.id) : null;
+      const seen = new Set();
+      const incoming = [];
+      for (const item of body.messages) {
+        if (!item || !["user", "assistant"].includes(item.role) || typeof item.content !== "string" || (item.id !== undefined && (typeof item.id !== "string" || !item.id))) return send(res, 422, { error: "消息格式无效" });
+        if (existing && !item.id) return send(res, 422, { error: "再次上报会话时，消息必须携带首次返回的 ID" });
+        const id = item.id || newId();
+        if (seen.has(id)) return send(res, 409, { error: "同一会话内消息 ID 重复" });
+        seen.add(id);
+        incoming.push({ id, role: item.role, content: item.content, at: item.at || nowIso() });
+      }
+      if (existing) {
+        for (const item of incoming) {
+          const previous = existing.messages.find(message => message.id === item.id);
+          if (previous && (previous.role !== item.role || previous.content !== item.content || previous.at !== item.at)) return send(res, 409, { error: `已有消息不能改写：${item.id}` });
+        }
+        existing.messages.push(...incoming.filter(item => !existing.messages.some(message => message.id === item.id)));
+        existing.updatedAt = nowIso();
+        saveDb(db);
+        return send(res, 200, existing);
+      }
+      const s = { id: body.id || newId(), userId: body.userId || "unknown", createdAt: nowIso(), updatedAt: nowIso(), messages: incoming };
       db.sessions.unshift(s);
       saveDb(db);
       return send(res, 201, s);
     }
 
+    // ---- note categories ----
+    if (pathname === "/api/note-categories") {
+      if (method === "GET") return send(res, 200, { items: db.noteCategories.map(item => ({ ...item, parentId: item.parentId || null })).sort((a, b) => a.name.localeCompare(b.name, "zh-CN")) });
+      if (method === "POST") {
+        const body = await readBody(req);
+        const name = typeof body.name === "string" ? body.name.trim() : "";
+        const parentId = body.parentId || null;
+        if (!name || name.length > 60) return send(res, 400, { error: "分类名称须为 1–60 字" });
+        if (parentId && !db.noteCategories.some(item => item.id === parentId)) return send(res, 400, { error: "父分类不存在" });
+        if (db.noteCategories.some(item => (item.parentId || null) === parentId && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) return send(res, 409, { error: "同级分类名称已存在" });
+        const at = nowIso();
+        const category = { id: newId(), name, parentId, createdAt: at, updatedAt: at };
+        db.noteCategories.push(category); saveDb(db);
+        return send(res, 201, category);
+      }
+      return send(res, 405, { error: "method not allowed" });
+    }
+    const noteCategoryOne = pathname.match(/^\/api\/note-categories\/([^/]+)$/);
+    if (noteCategoryOne) {
+      const index = db.noteCategories.findIndex(item => item.id === noteCategoryOne[1]);
+      if (index < 0) return send(res, 404, { error: "分类不存在" });
+      if (method === "PATCH") {
+        const body = await readBody(req);
+        const current = db.noteCategories[index];
+        const name = body.name === undefined ? current.name : typeof body.name === "string" ? body.name.trim() : "";
+        const parentId = body.parentId === undefined ? current.parentId || null : body.parentId || null;
+        if (!name || name.length > 60) return send(res, 400, { error: "分类名称须为 1–60 字" });
+        if (parentId && !db.noteCategories.some(item => item.id === parentId)) return send(res, 400, { error: "父分类不存在" });
+        if (parentId && categoryBranch(db.noteCategories, current.id).has(parentId)) return send(res, 409, { error: "分类不能移动到自身或子分类下" });
+        if (db.noteCategories.some(item => item.id !== current.id && (item.parentId || null) === parentId && item.name.toLocaleLowerCase() === name.toLocaleLowerCase())) return send(res, 409, { error: "同级分类名称已存在" });
+        db.noteCategories[index] = { ...current, name, parentId, updatedAt: nowIso() }; saveDb(db);
+        return send(res, 200, db.noteCategories[index]);
+      }
+      if (method === "DELETE") {
+        if (db.noteCategories.some(item => item.parentId === noteCategoryOne[1])) return send(res, 409, { error: "请先移动或删除子分类" });
+        db.noteCategories.splice(index, 1);
+        for (const note of db.notes) if (note.categoryId === noteCategoryOne[1]) note.categoryId = null;
+        saveDb(db);
+        return send(res, 200, { deleted: true, id: noteCategoryOne[1] });
+      }
+      return send(res, 405, { error: "method not allowed" });
+    }
+
+    // ---- note tag catalog ----
+    const noteTagView = tag => ({ ...tag, count: noteTagUsage(db.notes, tag.name) });
+    if (pathname === "/api/note-tags") {
+      if (method === "GET") return send(res, 200, { items: db.noteTagDefinitions.map(noteTagView).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh-CN")) });
+      if (method === "POST") {
+        if (me.role !== "admin") return send(res, 403, { error: "仅管理员可管理笔记标签" });
+        const body = await readBody(req);
+        const name = validateNoteTagName(body.name);
+        const normalizedKey = noteTagKey(name);
+        if (db.noteTagDefinitions.some(tag => tag.normalizedKey === normalizedKey)) return send(res, 409, { error: "标签已存在" });
+        const at = nowIso();
+        const tag = { id: newId(), name, normalizedKey, createdAt: at, updatedAt: at };
+        db.noteTagDefinitions.push(tag); saveDb(db);
+        return send(res, 201, noteTagView(tag));
+      }
+      return send(res, 405, { error: "method not allowed" });
+    }
+    const noteTagMerge = pathname.match(/^\/api\/note-tags\/([^/]+)\/merge$/);
+    const noteTagOne = pathname.match(/^\/api\/note-tags\/([^/]+)$/);
+    if (noteTagMerge || noteTagOne) {
+      if (me.role !== "admin") return send(res, 403, { error: "仅管理员可管理笔记标签" });
+      const tag = db.noteTagDefinitions.find(item => item.id === (noteTagMerge || noteTagOne)[1]);
+      if (!tag) return send(res, 404, { error: "标签不存在" });
+      if (noteTagMerge && method === "POST") {
+        const body = await readBody(req);
+        const target = db.noteTagDefinitions.find(item => item.id === body.targetId);
+        if (!target || target.id === tag.id) return send(res, 400, { error: "请选择另一个目标标签" });
+        if (!Number.isInteger(body.expectedUsageCount) || body.expectedUsageCount < 0) return send(res, 400, { error: "请提供合并前的使用篇数" });
+        const count = noteTagUsage(db.notes, tag.name);
+        if (count !== body.expectedUsageCount) return send(res, 409, { error: `标签使用篇数已变为 ${count}，请重新确认` });
+        const at = nowIso();
+        for (const note of db.notes) if ((note.tags || []).includes(tag.name)) {
+          note.tags = note.tags.includes(target.name) ? note.tags.filter(name => name !== tag.name) : note.tags.map(name => name === tag.name ? target.name : name);
+          note.updatedAt = at;
+        }
+        db.noteTagDefinitions.splice(db.noteTagDefinitions.indexOf(tag), 1);
+        saveDb(db);
+        return send(res, 200, { sourceId: tag.id, target: noteTagView(target), affectedCount: count });
+      }
+      if (noteTagOne && method === "PATCH") {
+        const body = await readBody(req);
+        const name = validateNoteTagName(body.name);
+        const normalizedKey = noteTagKey(name);
+        if (db.noteTagDefinitions.some(item => item.id !== tag.id && item.normalizedKey === normalizedKey)) return send(res, 409, { error: "标签名称已存在，请使用合并" });
+        const oldName = tag.name;
+        tag.name = name; tag.normalizedKey = normalizedKey; tag.updatedAt = nowIso();
+        for (const note of db.notes) if ((note.tags || []).includes(oldName)) {
+          note.tags = note.tags.map(value => value === oldName ? name : value);
+          note.updatedAt = tag.updatedAt;
+        }
+        saveDb(db);
+        return send(res, 200, noteTagView(tag));
+      }
+      if (noteTagOne && method === "DELETE") {
+        const expected = Number(url.searchParams.get("expectedUsageCount"));
+        if (!url.searchParams.has("expectedUsageCount") || !Number.isInteger(expected) || expected < 0) return send(res, 400, { error: "请提供删除前的使用篇数" });
+        const count = noteTagUsage(db.notes, tag.name);
+        if (count !== expected) return send(res, 409, { error: `标签使用篇数已变为 ${count}，请重新确认` });
+        const at = nowIso();
+        for (const note of db.notes) if ((note.tags || []).includes(tag.name)) {
+          note.tags = note.tags.filter(value => value !== tag.name);
+          note.updatedAt = at;
+        }
+        db.noteTagDefinitions.splice(db.noteTagDefinitions.indexOf(tag), 1);
+        saveDb(db);
+        return send(res, 200, { deleted: true, id: tag.id, affectedCount: count });
+      }
+      return send(res, 405, { error: "method not allowed" });
+    }
+
     // ---- notes ----
+    if (pathname === "/api/knowledge-graph" && method === "GET") return send(res, 200, buildKnowledgeGraph(db));
+    if (pathname === "/api/notes/graph" && method === "GET") {
+      const nodes = db.notes.map(({ id, title }) => ({ id, title }));
+      const edges = db.notes.flatMap(note => (note.links || []).map(link => ({ sourceId: note.id, targetId: link.targetId || null, targetRef: link.targetRef, label: link.label, reason: link.targetId ? null : link.reason || "missing" })));
+      return send(res, 200, { nodes, edges });
+    }
+    const noteVersionsRoute = pathname.match(/^\/api\/notes\/([^/]+)\/versions(?:\/([^/]+))?$/);
+    if (noteVersionsRoute && method === "GET") {
+      if (!db.notes.some(note => note.id === noteVersionsRoute[1])) return send(res, 404, { error: "笔记不存在" });
+      const items = db.noteVersions.filter(item => item.noteId === noteVersionsRoute[1]).sort((a, b) => b.versionNumber - a.versionNumber);
+      if (noteVersionsRoute[2]) {
+        const version = items.find(item => item.id === noteVersionsRoute[2]);
+        return version ? send(res, 200, version) : send(res, 404, { error: "版本不存在" });
+      }
+      return send(res, 200, { items });
+    }
+    const restoreNote = pathname.match(/^\/api\/notes\/([^/]+)\/restore$/);
+    if (restoreNote && method === "POST") {
+      const note = db.notes.find(item => item.id === restoreNote[1]);
+      if (!note) return send(res, 404, { error: "笔记不存在" });
+      const body = await readBody(req);
+      const version = db.noteVersions.find(item => item.id === body.versionId && item.noteId === note.id);
+      if (!version) return send(res, 404, { error: "版本不存在" });
+      note.title = version.title;
+      note.content = version.content;
+      note.updatedAt = nowIso();
+      reconcileNoteLinks(note.id);
+      snapshotNote(note, "restore");
+      saveDb(db);
+      return send(res, 200, note);
+    }
     if (pathname === "/api/notes") {
       if (method === "GET") {
         const taskId = url.searchParams.get("taskId");
-        const items = db.notes.filter(note => !taskId || note.taskId === taskId).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
-        return send(res, 200, { items });
+        const keyword = (url.searchParams.get("keyword") || "").trim().toLocaleLowerCase();
+        const categoryId = url.searchParams.get("categoryId");
+        const categoryIds = categoryId ? categoryBranch(db.noteCategories, categoryId) : null;
+        const tags = url.searchParams.getAll("tag").filter(Boolean).map(value => db.noteTagDefinitions.find(tag => tag.normalizedKey === noteTagKey(value))?.name || value);
+        const items = db.notes.filter(note => (!taskId || note.taskId === taskId) && (!keyword || `${note.title || ""}\n${note.content || ""}`.toLocaleLowerCase().includes(keyword)) && (!categoryIds || categoryIds.has(note.categoryId)) && tags.every(tag => (note.tags || []).includes(tag))).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+        const tagCounts = new Map();
+        for (const note of db.notes) for (const tag of note.tags || []) tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
+        return send(res, 200, { items, total: items.length, tags: [...tagCounts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh-CN")) });
       }
       if (method === "POST") {
         const body = await readBody(req);
@@ -1108,9 +1326,15 @@ const server = http.createServer(async (req, res) => {
           content: typeof body.content === "string" ? body.content : "",
           taskId: body.taskId || null,
           sourceSessionId: body.sourceSessionId || null,
+          categoryId: body.categoryId || null,
+          tags: body.tags === undefined ? [] : canonicalNoteTags(db.noteTagDefinitions, body.tags),
           createdAt: t, updatedAt: t,
         };
+        if (note.categoryId && !db.noteCategories.some(item => item.id === note.categoryId)) return send(res, 400, { error: "分类不存在" });
+        if (note.sourceSessionId && !db.sessions.some(item => item.id === note.sourceSessionId)) return send(res, 400, { error: "来源会话不存在" });
         db.notes.unshift(note);
+        reconcileNoteLinks();
+        snapshotNote(note, "save");
         logAction("note", { taskId: note.taskId, title: note.title, detail: "新增学习笔记" });
         saveDb(db);
         return send(res, 201, note);
@@ -1121,19 +1345,34 @@ const server = http.createServer(async (req, res) => {
     if (noteOne) {
       const i = db.notes.findIndex((n) => n.id === noteOne[1]);
       if (i === -1) return send(res, 404, { error: "note not found" });
-      if (method === "GET") return send(res, 200, db.notes[i]);
+      if (method === "GET") {
+        const note = db.notes[i];
+        const links = (note.links || []).map(link => ({ ...link, targetTitle: db.notes.find(candidate => candidate.id === link.targetId)?.title || null, reason: link.targetId ? null : link.reason || "missing" }));
+        const backlinks = db.notes.filter(candidate => (candidate.links || []).some(link => link.targetId === note.id)).map(candidate => ({ id: candidate.id, title: candidate.title }));
+        return send(res, 200, { ...note, links, backlinks });
+      }
       if (method === "PUT" || method === "PATCH") {
         const body = await readBody(req);
         const w = {};
         if (typeof body.title === "string") w.title = body.title.trim();
         if (typeof body.content === "string") w.content = body.content;
         if ("taskId" in body) w.taskId = body.taskId || null;
-        db.notes[i] = { ...db.notes[i], ...w, updatedAt: nowIso() };
+        if ("categoryId" in body) {
+          w.categoryId = body.categoryId || null;
+          if (w.categoryId && !db.noteCategories.some(item => item.id === w.categoryId)) return send(res, 400, { error: "分类不存在" });
+        }
+        if ("tags" in body) w.tags = canonicalNoteTags(db.noteTagDefinitions, body.tags);
+        const next = { ...db.notes[i], ...w, updatedAt: nowIso() };
+        db.notes[i] = next;
+        reconcileNoteLinks();
+        snapshotNote(next, "save");
         saveDb(db);
         return send(res, 200, db.notes[i]);
       }
       if (method === "DELETE") {
         const [rm] = db.notes.splice(i, 1);
+        db.noteVersions = db.noteVersions.filter(item => item.noteId !== rm.id);
+        reconcileNoteLinks();
         saveDb(db);
         return send(res, 200, { deleted: true, id: rm.id });
       }
@@ -1201,6 +1440,53 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     return send(res, 400, { error: err instanceof Error ? err.message : "bad request" });
   }
+}
+
+async function withData(work) {
+  return serialized(async () => {
+    const client = await pool.connect();
+    activeClient = client;
+    dirty = false;
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(748201)");
+      db = await loadData(client);
+      const before = structuredClone(db);
+      const value = await work();
+      const changed = dirty;
+      if (changed) await saveData(client, before, db);
+      await client.query("COMMIT");
+      return { value, changed };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      activeClient = null;
+      db = null;
+      client.release();
+    }
+  });
+}
+
+const server = http.createServer((req, res) => {
+  if (isAssetPath(new URL(req.url, "http://localhost").pathname)) {
+    void handleAssetRequest(req, res, pool, token => lookupSession(token)).catch(error => {
+      console.error("[assets] request failed:", error);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+        res.end(JSON.stringify({ error: "图片服务不可用" }));
+      }
+    });
+    return;
+  }
+  void withData(() => handleRequest(req, res)).then(({ changed }) => {
+    const pending = res.__pending || { status: 500, payload: { error: "接口没有返回结果" } };
+    send(res, pending.status, pending.payload);
+    if (changed) notifyLive();
+  }).catch(error => {
+    console.error("[api] request failed:", error);
+    send(res, 500, { error: "数据库操作失败" });
+  });
 });
 
 // WebSocket 仅发送失效通知；数据仍由带鉴权的 /api/stats 读取。
@@ -1215,12 +1501,13 @@ server.on("upgrade", (req, socket, head) => {
 });
 liveServer.on("connection", (ws) => {
   const authTimeout = setTimeout(() => ws.close(1008, "authentication required"), 5000);
-  ws.on("message", (raw) => {
+  ws.on("message", async (raw) => {
     if (liveClients.has(ws)) return;
     let message;
     try { message = JSON.parse(String(raw)); } catch { ws.close(1008, "invalid authentication"); return; }
-    const username = message?.type === "auth" ? tokens.get(message.token) : null;
-    const user = username ? db.users.find((item) => item.username === username && item.status === "active") : null;
+    let user = null;
+    try { user = message?.type === "auth" ? await lookupSession(message.token) : null; }
+    catch { ws.close(1011, "database unavailable"); return; }
     if (!user) { ws.close(1008, "invalid authentication"); return; }
     clearTimeout(authTimeout);
     liveClients.set(ws, message.token);
@@ -1232,10 +1519,10 @@ liveServer.on("connection", (ws) => {
 notifyLive = () => {
   const payload = JSON.stringify({ type: "stats_changed" });
   for (const [ws, token] of liveClients) {
-    const username = tokens.get(token);
-    const active = username && db.users.some((user) => user.username === username && user.status === "active");
-    if (!active) { ws.close(1008, "authentication expired"); liveClients.delete(ws); continue; }
-    if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+    void lookupSession(token).then(active => {
+      if (!active) { ws.close(1008, "authentication expired"); liveClients.delete(ws); return; }
+      if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+    }).catch(() => { ws.close(1011, "database unavailable"); liveClients.delete(ws); });
   }
 };
 
@@ -1252,32 +1539,47 @@ server.on("error", (err) => {
   process.exit(1);
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`[mock] agent-admin API listening on http://127.0.0.1:${PORT}（demo: admin/admin123）`);
-  scheduleRecurrences(0);
-});
+try {
+  await assertSchemaCurrent();
+  const users = await pool.query("SELECT 1 FROM users LIMIT 1");
+  if (!users.rowCount) throw new Error("数据库尚无账号；请先运行 npm run db:import");
+  await withData(() => {
+    if (reconcileNoteLinks()) saveDb(db);
+  });
+  server.listen(PORT, "127.0.0.1", () => {
+    console.log(`[mock] PostgreSQL API listening on http://127.0.0.1:${PORT}`);
+    scheduleRecurrences(0);
+    void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error));
+    setInterval(() => { void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error)); }, 3600_000).unref();
+  });
+} catch (error) {
+  console.error("[mock] PostgreSQL 不可用或尚未迁移：", error.message);
+  await pool.end();
+  process.exit(1);
+}
 
 let recurrenceTimer;
 function scheduleRecurrences(delay) {
   clearTimeout(recurrenceTimer);
   recurrenceTimer = setTimeout(() => {
-    const before = db.tasks.length;
-    const previousSequence = db.recurringSeries.map(series => series.nextSequence);
-    const count = generateDueInstances(db, Date.now(), 100);
-    if (count) {
-      const at = nowIso();
-      for (const task of db.tasks.slice(before)) {
-        recordTaskTrendEvent(db, "create", task.id, at);
-        logActivity("create", { taskId: task.id, title: task.title, detail: `自动生成第 ${task.recurrenceIndex} 次重复任务` });
+    void withData(() => {
+      const before = db.tasks.length;
+      const previousSequence = db.recurringSeries.map(series => series.nextSequence);
+      const count = generateDueInstances(db, Date.now(), 100);
+      if (count) {
+        const at = nowIso();
+        for (const task of db.tasks.slice(before)) {
+          recordTaskTrendEvent(db, "create", task.id, at);
+          logActivity("create", { taskId: task.id, title: task.title, detail: `自动生成第 ${task.recurrenceIndex} 次重复任务` });
+        }
+        recordTaskTrendSnapshot(db, at);
       }
-      recordTaskTrendSnapshot(db, at);
-    }
-    if (count || db.recurringSeries.some((series, index) => series.nextSequence !== previousSequence[index])) saveDb(db);
-    if (count === 100) return scheduleRecurrences(0);
-    const next = db.recurringSeries
-      .filter(series => canGenerate(series, series.nextSequence))
-      .map(series => Date.parse(occurrenceDueAt(series, series.nextSequence - 1)))
-      .reduce((minimum, value) => Math.min(minimum, value), Infinity);
-    scheduleRecurrences(Number.isFinite(next) ? Math.max(0, Math.min(60_000, next - Date.now())) : 60_000);
+      if (count || db.recurringSeries.some((series, index) => series.nextSequence !== previousSequence[index])) saveDb(db);
+      const next = db.recurringSeries.filter(series => canGenerate(series, series.nextSequence))
+        .map(series => Date.parse(occurrenceDueAt(series, series.nextSequence - 1)))
+        .reduce((minimum, value) => Math.min(minimum, value), Infinity);
+      return count === 100 ? 0 : Number.isFinite(next) ? Math.max(0, Math.min(60_000, next - Date.now())) : 60_000;
+    }).then(({ value, changed }) => { if (changed) notifyLive(); scheduleRecurrences(value); })
+      .catch(error => { console.error("[mock] recurrence failed:", error); scheduleRecurrences(60_000); });
   }, delay);
 }

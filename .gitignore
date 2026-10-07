@@ -4,6 +4,8 @@ dist-ssr
 *.local
 .DS_Store
 mock/db.json
+mock/db-backups/
+mock/uploads/
 .npm
 eslintcache
 .env

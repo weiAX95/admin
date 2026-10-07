@@ -10,6 +10,7 @@ import ts from "typescript";
 import { PDFDocument } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { prepareCsvImport } from "../mock/task-csv-import.mjs";
+import { createPgTestServer } from "./pg-helper.mjs";
 
 async function importTs(relative) {
   const source = fs.readFileSync(new URL(relative, import.meta.url), "utf8");
@@ -76,6 +77,25 @@ test("CSV import remaps internal dependencies and leaves copied recurrence inact
   assert.equal(skipped.skipped, 2);
 });
 
+test("full task snapshot CSV round-trips as new copies without restoring system identity", () => {
+  const sourceSeries = { id: "old-series", frequency: "monthly", interval: 1, endType: "count", endCount: 3, anchorDueAt: "2025-01-31T00:00:00Z", active: true, snapshot: { title: "旧任务" } };
+  const source = [
+    { id: "old-a", title: "中文任务,一", description: "含\n换行", category: "基础", phase: "基础", status: "done", effectiveStatus: "done", blockedBy: [], dependencyIds: [], ownerId: "old-user", plannedStartDate: "", progress: 100, manualProgress: 55, estimatedHours: 1.5, completionCycles: [{ completedAt: "2025-01-31T00:00:00Z" }], activeCycleStartedAt: "", completedAt: "2025-01-31T00:00:00Z", legacyCompletionUnknown: false, checklist: [{ id: "old-check", text: "检查", done: true, order: 0 }], version: 5, priority: "high", dueDate: "2025-01-31T00:00:00Z", notes: "笔记", resources: [], tags: ["复习"], createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-31T00:00:00Z", recurringSeriesId: "old-series", recurrenceIndex: 1 },
+    { id: "old-b", title: "后续任务", description: "", category: "基础", phase: "基础", status: "todo", effectiveStatus: "blocked", blockedBy: [{ id: "old-a", title: "中文任务,一" }], dependencyIds: ["old-a"], ownerId: "old-user", plannedStartDate: "", progress: 0, manualProgress: 0, estimatedHours: null, completionCycles: [], activeCycleStartedAt: "", completedAt: null, legacyCompletionUnknown: false, checklist: [], version: 3, priority: "medium", dueDate: "", notes: "", resources: [], tags: [], createdAt: "2025-01-01T00:00:00Z", updatedAt: "2025-01-31T00:00:00Z", recurringSeriesId: "", recurrenceIndex: undefined },
+  ];
+  const exported = csv.exportTaskCsv(source, csv.SNAPSHOT_FIELDS, { "old-series": sourceSeries });
+  const parsed = csv.parseCsv(exported);
+  const rows = csv.mapCsvRows(parsed, csv.autoMapHeaders(parsed.headers));
+  const imported = prepareCsvImport({ tasks: [] }, rows, { id: "new-user", role: "admin" }, false, "2026-01-01T00:00:00Z");
+  assert.equal(imported.imported, 2);
+  assert.notEqual(imported.tasks[0].id, "old-a");
+  assert.equal(imported.tasks[0].ownerId, "new-user");
+  assert.equal(imported.tasks[0].version, 1);
+  assert.equal(imported.tasks[0].description, "含\n换行");
+  assert.equal(imported.tasks[1].dependencyIds[0], imported.tasks[0].id);
+  assert.equal(imported.series[0].active, false);
+});
+
 test("bundled Chinese font embeds into a downloadable PDF", async () => {
   const bytes = await readFile(new URL("../public/fonts/NotoSansCJKsc-Regular.otf", import.meta.url));
   const pdf = await PDFDocument.create();
@@ -88,14 +108,7 @@ test("bundled Chinese font embeds into a downloadable PDF", async () => {
 });
 
 test("CSV API rejects invalid batch atomically, imports 100 rows and keeps JSON import", async t => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "admin-csv-api-"));
-  const socket = net.createServer();
-  await new Promise(resolve => socket.listen(0, "127.0.0.1", resolve));
-  const port = socket.address().port;
-  await new Promise(resolve => socket.close(resolve));
-  const child = spawn(process.execPath, ["mock/server.mjs"], { cwd: path.resolve(import.meta.dirname, ".."), env: { ...process.env, MOCK_PORT: String(port), MOCK_DB_FILE: path.join(directory, "db.json") }, stdio: "ignore" });
-  t.after(async () => { child.kill(); await rm(directory, { recursive: true, force: true }); });
-  const base = `http://127.0.0.1:${port}/api`;
+  const { base } = await createPgTestServer(t);
   let token = "";
   const request = async (method, route, body) => {
     const response = await fetch(`${base}${route}`, { method, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });

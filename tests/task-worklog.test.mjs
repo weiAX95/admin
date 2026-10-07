@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import net from "node:net";
+import { createPgTestServer } from "./pg-helper.mjs";
 import { workVariance } from "../mock/task-worklog.mjs";
 
 async function freePort() {
@@ -25,15 +26,7 @@ test("variance includes only estimated tasks with actual entries and highlights 
 });
 
 test("linked records, time entries, completion cycles, and stats use separate persisted data", async t => {
-  const directory = await mkdtemp(path.join(tmpdir(), "admin-worklog-"));
-  const port = await freePort();
-  const child = spawn(process.execPath, ["mock/server.mjs"], {
-    cwd: path.resolve(import.meta.dirname, ".."),
-    env: { ...process.env, MOCK_PORT: String(port), MOCK_DB_FILE: path.join(directory, "db.json") },
-    stdio: "ignore",
-  });
-  t.after(async () => { child.kill(); await rm(directory, { recursive: true, force: true }); });
-  const base = `http://127.0.0.1:${port}/api`;
+  const { base } = await createPgTestServer(t);
   let token = "";
   const call = async (method, route, body) => {
     const response = await fetch(`${base}${route}`, { method, headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });

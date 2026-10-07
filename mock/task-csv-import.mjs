@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { applyTaskProgress, normalizeChecklist } from "./task-checklist.mjs";
 import { applyCompletionTransition } from "./task-worklog.mjs";
-import { canUseDependency, validateDependencies, validatePlan } from "./task-dependencies.mjs";
-import { parseDueAt, snapshotTask } from "./recurring.mjs";
+import { validateDependencies, validatePlan } from "./task-dependencies.mjs";
+import { parseDueAt, snapshotTask, validateRecurrence } from "./recurring.mjs";
 
 const STATUSES = ["todo", "in_progress", "done", "blocked"];
 const PRIORITIES = ["low", "medium", "high"];
@@ -33,7 +33,9 @@ function buildTask(raw, actor, at, id) {
   if (raw.recurrenceIndex !== undefined && (!Number.isInteger(raw.recurrenceIndex) || raw.recurrenceIndex < 1)) throw new Error("recurrenceIndex 无效");
   if (raw.recurringSeriesId) {
     const series = raw.recurrenceSeries;
-    if (typeof raw.recurringSeriesId !== "string" || !series || typeof series !== "object" || !["daily", "weekly", "monthly"].includes(series.frequency) || !Number.isInteger(series.interval) || series.interval < 1 || !["never", "count", "date"].includes(series.endType) || !parseDueAt(series.anchorDueAt)) throw new Error("重复序列元数据无效");
+    const anchorDueAt = parseDueAt(series?.anchorDueAt);
+    if (typeof raw.recurringSeriesId !== "string" || !series || typeof series !== "object" || !anchorDueAt) throw new Error("重复序列元数据无效");
+    validateRecurrence(series, anchorDueAt, Date.now(), { anchorDueAt });
   }
   const checklist = normalizeChecklist((raw.checklist || []).map(item => ({ text: item?.text, done: item?.done })));
   const task = {
@@ -55,6 +57,7 @@ export function prepareCsvImport(db, rows, actor, skipInvalid = false, at = new 
   const candidates = [];
   const sourceIds = new Map();
   const recurrenceIndexes = new Set();
+  const recurrenceRules = new Map();
   const seenRows = new Set();
   for (const row of rows) {
     if (!Number.isInteger(row?.rowNumber) || row.rowNumber < 2 || seenRows.has(row.rowNumber)) throw new Error("CSV 行号无效或重复");
@@ -73,9 +76,14 @@ export function prepareCsvImport(db, rows, actor, skipInvalid = false, at = new 
       const sourceId = typeof raw?.id === "string" ? raw.id.trim() : "";
       const task = buildTask(raw, actor, at, sourceIds.get(sourceId) || randomUUID());
       if (raw.recurringSeriesId) {
+        const source = raw.recurrenceSeries;
+        const rule = JSON.stringify([source.frequency, source.interval, source.endType, source.endCount ?? null, source.endDate ?? null, source.anchorDueAt]);
+        const previousRule = recurrenceRules.get(raw.recurringSeriesId);
+        if (previousRule && previousRule !== rule) throw new Error("同一重复序列的配置不一致");
         const marker = `${raw.recurringSeriesId}:${raw.recurrenceIndex || 1}`;
         if (recurrenceIndexes.has(marker)) throw new Error("同一重复序列的次数重复");
         recurrenceIndexes.add(marker);
+        recurrenceRules.set(raw.recurringSeriesId, rule);
       }
       candidates.push({ rowNumber: number, raw, task });
     } catch (error) { issues.set(number, error instanceof Error ? error.message : "任务无效"); }
@@ -107,13 +115,10 @@ export function prepareCsvImport(db, rows, actor, skipInvalid = false, at = new 
     let series = seriesBySource.get(sourceId);
     if (!series) {
       const source = item.raw.recurrenceSeries;
+      const rule = validateRecurrence(source, source.anchorDueAt, Date.now(), { anchorDueAt: parseDueAt(source.anchorDueAt) });
       series = {
         id: randomUUID(), ownerId: actor.id, firstTaskId: item.task.id,
-        frequency: source.frequency, interval: Number.isInteger(source.interval) && source.interval > 0 ? source.interval : 1,
-        endType: ["never", "count", "date"].includes(source.endType) ? source.endType : "never",
-        endCount: Number.isInteger(source.endCount) ? source.endCount : null,
-        endDate: typeof source.endDate === "string" ? source.endDate : null,
-        anchorDueAt: parseDueAt(source.anchorDueAt), snapshot: source.snapshot && typeof source.snapshot === "object" ? structuredClone(source.snapshot) : snapshotTask(item.task),
+        ...rule, snapshot: source.snapshot && typeof source.snapshot === "object" && !Array.isArray(source.snapshot) ? structuredClone(source.snapshot) : snapshotTask(item.task),
         nextSequence: 2, active: false, version: 1, createdAt: at, updatedAt: at,
       };
       seriesBySource.set(sourceId, series);

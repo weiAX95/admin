@@ -7,6 +7,7 @@ import {
 } from "@ant-design/icons";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { clearAuth, getStoredUser } from "../api/client";
+import { logout } from "../api/auth";
 import type { AuthUser } from "../types";
 
 const { Header, Sider, Content } = Layout;
@@ -76,7 +77,7 @@ export default function AdminLayout() {
           <Space size={14} className="header-account">
             <Avatar size={32} className="account-avatar">{name.slice(0, 1)}</Avatar>
             <div className="account-copy"><strong>{name}</strong><span>{user?.role === "admin" ? "管理员" : "普通成员"}</span></div>
-            <Button type="text" icon={<LogoutOutlined />} onClick={() => { clearAuth(); navigate("/login", { replace: true }); }}>
+            <Button type="text" icon={<LogoutOutlined />} onClick={() => { void logout().catch(() => undefined).finally(() => { clearAuth(); navigate("/login", { replace: true }); }); }}>
               <span className="logout-label">退出</span>
             </Button>
           </Space>

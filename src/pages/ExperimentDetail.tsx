@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Alert, Card, Descriptions, Spin, Typography } from "antd";
+import { Alert, Card, Descriptions, Spin } from "antd";
 import { Link, useParams } from "react-router-dom";
 import { getExperiment } from "../api/experiments";
 import type { Experiment } from "../types";
+import MarkdownContent from "../components/MarkdownContent";
 
 export default function ExperimentDetail() {
   const { id } = useParams();
@@ -23,7 +24,7 @@ export default function ExperimentDetail() {
       { key: "time", label: "创建时间", children: new Date(experiment.createdAt).toLocaleString("zh-CN", { hour12: false }) },
       { key: "params", label: "参数", children: experiment.params || "未填写" },
     ]} />
-    <div className="task-detail-section"><h4>Prompt</h4><Typography.Paragraph className="linked-detail-content">{experiment.prompt || "暂无内容"}</Typography.Paragraph></div>
-    <div className="task-detail-section"><h4>结果观察</h4><Typography.Paragraph className="linked-detail-content">{experiment.result || "暂无结果观察"}</Typography.Paragraph></div>
+    <div className="task-detail-section"><h4>Prompt</h4><MarkdownContent content={experiment.prompt || "暂无内容"} /></div>
+    <div className="task-detail-section"><h4>结果观察</h4><MarkdownContent content={experiment.result || "暂无结果观察"} /></div>
   </Card>;
 }

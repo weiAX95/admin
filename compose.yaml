@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin_local_only
+      POSTGRES_DB: agent_admin
+    ports:
+      - "55432:5432"
+    volumes:
+      - admin_postgres:/var/lib/postgresql
+      - ./db/init-test.sql:/docker-entrypoint-initdb.d/01-test.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d agent_admin"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+volumes:
+  admin_postgres:

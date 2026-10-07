@@ -151,6 +151,13 @@ export interface SessionMessage {
   role: "user" | "assistant";
   content: string;
   at: string;
+  annotation?: MessageAnnotationView;
+}
+
+export type MessageAnnotationTag = "准确" | "不准确" | "偏题" | "幻觉" | "过于冗长" | "过于简略" | "格式错误";
+export interface MessageAnnotationView {
+  mine: { rating: number; tags: MessageAnnotationTag[]; updatedAt: string } | null;
+  summary: { averageRating: number | null; ratingCount: number; tags: { tag: MessageAnnotationTag; count: number }[] };
 }
 
 export interface SessionSummary {
@@ -174,9 +181,36 @@ export interface Note {
   content: string;
   taskId: string | null;
   sourceSessionId: string | null;
+  categoryId: string | null;
+  tags: string[];
   createdAt: string;
   updatedAt: string;
 }
+export interface NoteCategory { id: string; name: string; parentId: string | null; createdAt: string; updatedAt: string; }
+export interface NoteTagDefinition { id: string; name: string; normalizedKey: string; count: number; createdAt: string; updatedAt: string; }
+export interface NoteListResponse { items: Note[]; total: number; tags: { name: string; count: number }[]; }
+export interface NoteQuery { taskId?: string; keyword?: string; categoryId?: string; tags?: string[]; }
+export interface NoteLink {
+  label: string;
+  targetId: string | null;
+  targetRef: string;
+  targetTitle?: string | null;
+  reason: "missing" | "ambiguous" | null;
+  order: number;
+}
+export interface NoteDetailData extends Note {
+  links: NoteLink[];
+  backlinks: { id: string; title: string }[];
+}
+export interface NoteGraphData {
+  nodes: { id: string; title: string }[];
+  edges: { sourceId: string; targetId: string | null; targetRef: string; label: string; reason: string | null }[];
+}
+export interface KnowledgeGraphData {
+  nodes: { id: string; entityId: string; type: "note" | "task" | "session"; title: string; summary: string; referenceCount: number; missing: boolean }[];
+  edges: { sourceId: string; targetId: string; type: "reference" | "association" | "source"; missing: boolean }[];
+}
+export interface NoteVersion { id: string; noteId: string; versionNumber: number; title: string; content: string; reason: "baseline" | "save" | "restore"; createdAt: string; }
 
 export type NotePayload = Partial<Omit<Note, "id" | "createdAt" | "updatedAt">>;
 

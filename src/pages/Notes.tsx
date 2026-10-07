@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   App,
   Button,
@@ -11,46 +11,81 @@ import {
   Space,
   Table,
   Tag,
+  Tree,
   Typography,
 } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { PlusOutlined, ApartmentOutlined, SettingOutlined } from "@ant-design/icons";
+import { Link } from "react-router-dom";
 import type { ColumnsType } from "antd/es/table";
-import { createNote, deleteNote, listNotes, updateNote } from "../api/notes";
+import { createNote, deleteNote, listNoteCategories, listNoteTags, listNotes, updateNote } from "../api/notes";
 import { listTasks } from "../api/tasks";
-import type { LearningTask, Note, NotePayload } from "../types";
+import type { AuthUser, LearningTask, Note, NoteCategory, NotePayload, NoteTagDefinition } from "../types";
+import { getStoredUser } from "../api/client";
+import MarkdownEditor from "../components/MarkdownEditor";
+import NoteCategoryManager, { categoryPath } from "../components/NoteCategoryManager";
+import NoteTagManager, { type NoteTagChange } from "../components/NoteTagManager";
+import { markdownSummary } from "../utils/markdown-summary";
+import { downloadBlob, notesZip } from "../utils/noteExport";
 
 interface Props {
   open: boolean;
   initial: Note | null;
   tasks: LearningTask[];
+  notes?: Note[];
+  categories?: NoteCategory[];
   defaultTaskId?: string;
+  prefill?: Partial<NotePayload>;
+  suppressSuccess?: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (note: Note) => void;
 }
+const EMPTY_NOTES: Note[] = [];
+const EMPTY_CATEGORIES: NoteCategory[] = [];
+type CategoryTreeNode = { key: string; title: string; children: CategoryTreeNode[] };
 
-export function NoteFormDrawer({ open, initial, tasks, defaultTaskId, onClose, onSaved }: Props) {
+export function NoteFormDrawer({ open, initial, tasks, notes = EMPTY_NOTES, categories = EMPTY_CATEGORIES, defaultTaskId, prefill, suppressSuccess = false, onClose, onSaved }: Props) {
   const [form] = Form.useForm<NotePayload>();
   const [saving, setSaving] = useState(false);
+  const [catalogue, setCatalogue] = useState<Note[]>([]);
+  const [categoryCatalogue, setCategoryCatalogue] = useState<NoteCategory[]>([]);
+  const [tagCatalogue, setTagCatalogue] = useState<NoteTagDefinition[]>([]);
   const { message } = App.useApp();
+
+  useEffect(() => {
+    if (!open) return;
+    if (notes.length) { setCatalogue(notes); return; }
+    let alive = true;
+    listNotes().then(result => { if (alive) setCatalogue(result.items); }).catch(() => { if (alive) setCatalogue([]); });
+    return () => { alive = false; };
+  }, [open, notes]);
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    listNoteTags().then(result => { if (alive) setTagCatalogue(result.items); }).catch(() => { if (alive) setTagCatalogue([]); });
+    return () => { alive = false; };
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    if (categories.length) { setCategoryCatalogue(categories); return; }
+    let alive = true;
+    listNoteCategories().then(result => { if (alive) setCategoryCatalogue(result.items); }).catch(() => { if (alive) setCategoryCatalogue([]); });
+    return () => { alive = false; };
+  }, [open, categories]);
 
   useEffect(() => {
     if (!open) return;
     form.resetFields();
     if (initial) form.setFieldsValue(initial);
-    else form.setFieldsValue({ title: "", content: "", taskId: defaultTaskId || null });
-  }, [open, initial, defaultTaskId, form]);
+    else form.setFieldsValue({ title: "", content: "", taskId: defaultTaskId || null, categoryId: null, tags: [], ...prefill });
+  }, [open, initial, defaultTaskId, prefill, form]);
 
   const handleFinish = async (values: NotePayload) => {
     setSaving(true);
     try {
-      if (initial) {
-        await updateNote(initial.id, values);
-        message.success("已更新笔记");
-      } else {
-        await createNote(values);
-        message.success("已创建笔记");
-      }
-      onSaved();
+      const payload = { ...values, taskId: values.taskId || null, categoryId: values.categoryId || null };
+      const saved = initial ? await updateNote(initial.id, payload) : await createNote(payload);
+      if (!suppressSuccess) message.success(initial ? "已更新笔记" : "已创建笔记");
+      onSaved(saved);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "保存失败");
     } finally {
@@ -61,7 +96,7 @@ export function NoteFormDrawer({ open, initial, tasks, defaultTaskId, onClose, o
   return (
     <Drawer
       title={initial ? "编辑笔记" : "新建笔记"}
-      width={480}
+      width="min(1050px, 100vw)"
       open={open}
       onClose={onClose}
       extra={
@@ -71,6 +106,7 @@ export function NoteFormDrawer({ open, initial, tasks, defaultTaskId, onClose, o
       }
     >
       <Form form={form} layout="vertical" onFinish={handleFinish}>
+        <Form.Item name="sourceSessionId" hidden><Input type="hidden" /></Form.Item>
         <Form.Item
           name="title"
           label="标题"
@@ -85,8 +121,14 @@ export function NoteFormDrawer({ open, initial, tasks, defaultTaskId, onClose, o
             options={tasks.map((t) => ({ value: t.id, label: t.title }))}
           />
         </Form.Item>
+        <Form.Item name="categoryId" label="分类">
+          <Select allowClear placeholder="选择分类（可选）" options={categoryCatalogue.map(item => ({ value: item.id, label: categoryPath(item.id, categoryCatalogue) }))} />
+        </Form.Item>
+        <Form.Item name="tags" label="标签">
+          <Select mode="tags" tokenSeparators={[","]} placeholder="输入标签后回车，可添加多个" options={tagCatalogue.map(tag => ({ value: tag.name, label: tag.count ? `${tag.name} · ${tag.count} 篇` : tag.name }))} />
+        </Form.Item>
         <Form.Item name="content" label="内容">
-          <Input.TextArea rows={8} placeholder="学习笔记内容" />
+          <MarkdownEditor rows={16} notes={catalogue} enableWikiLinks placeholder="学习笔记内容，支持 Markdown 和 [[笔记标题]] 引用" />
         </Form.Item>
       </Form>
     </Drawer>
@@ -96,29 +138,104 @@ export function NoteFormDrawer({ open, initial, tasks, defaultTaskId, onClose, o
 export default function Notes() {
   const { message } = App.useApp();
   const [items, setItems] = useState<Note[]>([]);
+  const [categories, setCategories] = useState<NoteCategory[]>([]);
+  const [tagDefinitions, setTagDefinitions] = useState<NoteTagDefinition[]>([]);
+  const [tagCloud, setTagCloud] = useState<{ name: string; count: number }[]>([]);
   const [tasks, setTasks] = useState<LearningTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [editing, setEditing] = useState<Note | null>(null);
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [tagManagerOpen, setTagManagerOpen] = useState(false);
+  const [exportingZip, setExportingZip] = useState(false);
+  const [searchInput, setSearchInput] = useState("");
+  const [keyword, setKeyword] = useState("");
+  const [categoryId, setCategoryId] = useState<string | null>(null);
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const requestSequence = useRef(0);
+  const isAdmin = getStoredUser<AuthUser>()?.role === "admin";
+
+  useEffect(() => {
+    if (!searchInput.trim()) { setKeyword(""); return; }
+    const timer = window.setTimeout(() => setKeyword(searchInput.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchInput]);
+
+  const refreshCategories = useCallback(async () => {
+    try {
+      const result = await listNoteCategories();
+      setCategories(result.items);
+      setCategoryId(current => current && !result.items.some(item => item.id === current) ? null : current);
+    } catch (error) { message.error(error instanceof Error ? error.message : "加载分类失败"); }
+  }, [message]);
+
+  const refreshTags = useCallback(async () => {
+    try { setTagDefinitions((await listNoteTags()).items); }
+    catch (error) { message.error(error instanceof Error ? error.message : "加载标签失败"); }
+  }, [message]);
 
   const load = useCallback(async () => {
+    const sequence = ++requestSequence.current;
     setLoading(true);
     try {
-      const res = await listNotes();
+      const res = await listNotes({ keyword, categoryId: categoryId || undefined, tags: selectedTags });
+      if (sequence !== requestSequence.current) return;
       setItems(res.items);
+      setTagCloud(res.tags);
     } catch (err) {
-      message.error(err instanceof Error ? err.message : "加载笔记失败");
+      if (sequence === requestSequence.current) message.error(err instanceof Error ? err.message : "加载笔记失败");
     } finally {
-      setLoading(false);
+      if (sequence === requestSequence.current) setLoading(false);
     }
-  }, [message]);
+  }, [message, keyword, categoryId, selectedTags]);
 
   useEffect(() => {
     void load();
+  }, [load]);
+  useEffect(() => {
+    void refreshCategories();
+    void refreshTags();
     listTasks({})
       .then((res) => setTasks(res.items))
       .catch(() => setTasks([]));
-  }, [load]);
+  }, [refreshCategories, refreshTags]);
+
+  const handleTagChanged = (change: NoteTagChange) => {
+    void refreshTags();
+    if (change.from && selectedTags.includes(change.from)) {
+      setSelectedTags(current => [...new Set(current.map(name => name === change.from ? change.to : name).filter((name): name is string => Boolean(name)))]);
+    } else void load();
+  };
+
+  const categoryTree = useMemo(() => {
+    const branch = (parent: string | null): CategoryTreeNode[] => categories.filter(item => (item.parentId || null) === parent).map(item => ({ key: item.id, title: item.name, children: branch(item.id) }));
+    return branch(null);
+  }, [categories]);
+  const maxTagCount = Math.max(1, ...tagCloud.map(item => item.count));
+  const highlight = (value: string) => {
+    if (!keyword) return value;
+    const lower = value.toLocaleLowerCase();
+    const needle = keyword.toLocaleLowerCase();
+    const pieces: React.ReactNode[] = [];
+    let offset = 0;
+    let index = lower.indexOf(needle, offset);
+    while (index >= 0) {
+      if (index > offset) pieces.push(value.slice(offset, index));
+      pieces.push(<mark key={index}>{value.slice(index, index + keyword.length)}</mark>);
+      offset = index + keyword.length;
+      index = lower.indexOf(needle, offset);
+    }
+    if (!pieces.length) return value;
+    if (offset < value.length) pieces.push(value.slice(offset));
+    return <>{pieces}</>;
+  };
+  const excerpt = (note: Note) => {
+    const content = markdownSummary(note.content, Number.MAX_SAFE_INTEGER);
+    const index = content.toLocaleLowerCase().indexOf(keyword.toLocaleLowerCase());
+    const start = keyword && index > 45 ? index - 35 : 0;
+    const end = Math.min(content.length, start + 180);
+    return `${start ? "…" : ""}${content.slice(start, end)}${end < content.length ? "…" : ""}`;
+  };
 
   const taskTitle = (id: string | null) =>
     id ? tasks.find((t) => t.id === id)?.title || "已删除任务" : null;
@@ -128,9 +245,17 @@ export default function Notes() {
       await deleteNote(note.id);
       message.success("已删除");
       void load();
+      void refreshTags();
     } catch (err) {
       message.error(err instanceof Error ? err.message : "删除失败");
     }
+  };
+
+  const exportZip = async () => {
+    setExportingZip(true);
+    try { downloadBlob(await notesZip(items), `笔记导出-${new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" })}.zip`); message.success(`已导出 ${items.length} 篇笔记`); }
+    catch (error) { message.error(error instanceof Error ? error.message : "批量导出失败"); }
+    finally { setExportingZip(false); }
   };
 
   const columns: ColumnsType<Note> = [
@@ -138,7 +263,21 @@ export default function Notes() {
       title: "标题",
       dataIndex: "title",
       key: "title",
-      render: (v: string) => <Typography.Text strong>{v}</Typography.Text>,
+      render: (v: string, note) => <Space direction="vertical" size={0}><Link to={`/notes/${note.id}`}><Typography.Text strong>{highlight(v)}</Typography.Text></Link>{note.content && <Typography.Text type="secondary" className="note-list-excerpt">{highlight(excerpt(note))}</Typography.Text>}</Space>,
+    },
+    {
+      title: "分类",
+      dataIndex: "categoryId",
+      key: "categoryId",
+      width: 170,
+      render: (id: string | null) => <Typography.Text type="secondary">{categoryPath(id, categories)}</Typography.Text>,
+    },
+    {
+      title: "标签",
+      dataIndex: "tags",
+      key: "tags",
+      width: 200,
+      render: (tags: string[]) => tags?.length ? tags.map(tag => <Tag key={tag}>{tag}</Tag>) : <Typography.Text type="secondary">无标签</Typography.Text>,
     },
     {
       title: "关联任务",
@@ -201,25 +340,40 @@ export default function Notes() {
         >
           新建笔记
         </Button>
+        <Link to="/notes/graph"><Button icon={<ApartmentOutlined />}>知识图谱</Button></Link>
+        <Button disabled={!items.length} loading={exportingZip} onClick={() => void exportZip()}>按当前筛选导出 ZIP（{items.length} 篇）</Button>
+        <Input.Search aria-label="搜索笔记标题和内容" allowClear placeholder="搜索标题与内容" value={searchInput} onChange={event => setSearchInput(event.target.value)} style={{ width: 250 }} />
       </Space>
-      <Table
+      <div className="notes-layout"><aside className="notes-sidebar" aria-label="笔记分类和标签">
+        <div className="notes-sidebar-heading"><Typography.Text strong>分类</Typography.Text><Button size="small" type="text" icon={<SettingOutlined />} aria-label="管理分类" onClick={() => setCategoryManagerOpen(true)} /></div>
+        <Button type={!categoryId ? "primary" : "text"} block className="notes-all-button" onClick={() => setCategoryId(null)}>全部笔记</Button>
+        <Tree blockNode treeData={categoryTree} selectedKeys={categoryId ? [categoryId] : []} onSelect={keys => setCategoryId(keys.length ? String(keys[0]) : null)} />
+        <div className="notes-sidebar-heading"><Typography.Text strong>标签云</Typography.Text>{isAdmin && <Button size="small" type="text" icon={<SettingOutlined />} aria-label="管理笔记标签" onClick={() => setTagManagerOpen(true)} />}</div>
+        {tagCloud.length ? <div className="notes-tag-cloud">{tagCloud.map(tag => <button key={tag.name} type="button" className={selectedTags.includes(tag.name) ? "selected" : ""} style={{ fontSize: 12 + 12 * tag.count / maxTagCount }} onClick={() => setSelectedTags(current => current.includes(tag.name) ? current.filter(item => item !== tag.name) : [...current, tag.name])} title={`${tag.name} · ${tag.count} 篇`}>{tag.name}<sup>{tag.count}</sup></button>)}</div> : <Typography.Text type="secondary">暂无标签</Typography.Text>}
+        {selectedTags.length > 0 && <Button type="link" size="small" onClick={() => setSelectedTags([])}>清除标签筛选</Button>}
+      </aside><div className="notes-results"><Table
         rowKey="id"
         loading={loading}
         columns={columns}
         dataSource={items}
-        scroll={{ x: 760 }}
+        scroll={{ x: 1050 }}
         pagination={{ pageSize: 8, showSizeChanger: false }}
-      />
+        locale={{ emptyText: <div className="note-search-empty"><Typography.Text type="secondary">未找到，试试其他关键词</Typography.Text><Button type="primary" size="small" onClick={() => { setEditing(null); setDrawerOpen(true); }}>创建新笔记</Button></div> }}
+      /></div></div>
       <NoteFormDrawer
         open={drawerOpen}
         initial={editing}
         tasks={tasks}
+        categories={categories}
         onClose={() => setDrawerOpen(false)}
         onSaved={() => {
           setDrawerOpen(false);
           void load();
+          void refreshTags();
         }}
       />
+      <NoteCategoryManager open={categoryManagerOpen} categories={categories} onClose={() => setCategoryManagerOpen(false)} onChanged={() => void refreshCategories()} />
+      {isAdmin && <NoteTagManager open={tagManagerOpen} tags={tagDefinitions} onClose={() => setTagManagerOpen(false)} onChanged={handleTagChanged} />}
     </Card>
   );
 }
