@@ -76,13 +76,14 @@ function build(provider,model,messages,parameters,tool,outputKind='text') {
   }
   if(provider==='openai') {
     if(messages.some(message=>message.parts.some(part=>part.type==='video'))) throw new Error('OpenAI 当前适配器不支持视频输入');
+    if(outputKind==='image' && tool) throw new Error('OpenAI 图片生成不能同时配置自定义工具');
     const input=messages.map(message=>({role:message.role,content:message.parts.map(part=>{
       if(part.type==='text') return {type:'input_text',text:part.text};
       if(part.type==='image') return {type:'input_image',image_url:`data:${part.media.mime};base64,${part.media.base64}`};
       if(!['audio/wav','audio/mpeg'].includes(part.media.mime)) throw new Error('OpenAI 音频输入仅支持 WAV 或 MP3');
       return {type:'input_audio',input_audio:{data:part.media.base64,format:part.media.mime==='audio/wav'?'wav':'mp3'}};
     })}));
-    return {url:`${base.openai()}/responses`,body:{model,input,...(parameters.max_tokens?{max_output_tokens:parameters.max_tokens}:{}),...(tool?{tools:[{type:'function',...tool}]}:{})}};
+    return {url:`${base.openai()}/responses`,body:{model,input,...(parameters.max_tokens?{max_output_tokens:parameters.max_tokens}:{}),...(outputKind==='image'?{tools:[{type:'image_generation',output_format:'png'}],tool_choice:{type:'image_generation'}}:tool?{tools:[{type:'function',...tool}]}:{})}};
   }
   if(provider==='gemini') {
     const geminiPart=part=>part.type==='text'?{text:part.text}:part.media.fileUri?{fileData:{mimeType:part.media.mime,fileUri:part.media.fileUri}}:{inlineData:{mimeType:part.media.mime,data:part.media.base64}};
@@ -103,6 +104,11 @@ function parsed(provider,result,outputKind='text') {
     return {output,toolCalls,promptTokens:result.usage?.prompt_tokens,completionTokens:result.usage?.completion_tokens,outputParts:[]};
   }
   if(provider==='openai') {
+    if(outputKind==='image') {
+      const images=(result.output || []).filter(item=>item.type==='image_generation_call'&&item.status==='completed'&&typeof item.result==='string').map(item=>({type:'image',mimeType:'image/png',data:item.result}));
+      if(images.length!==1) throw new Error('OpenAI 图片生成未返回单张完整图片');
+      return {output:'',toolCalls:[],promptTokens:result.usage?.input_tokens,completionTokens:result.usage?.output_tokens,outputParts:images};
+    }
     const outputParts=(result.output || []).flatMap(item=>item.content || []).filter(part=>part.type==='output_text');
     const output=result.output_text || outputParts.filter(part=>part.type==='output_text').map(part=>part.text).join('\n');
     const toolCalls=(result.output || []).filter(item=>item.type==='function_call');
@@ -124,7 +130,7 @@ export async function completeWithProvider(client,{provider='legacy',model,messa
   const key=secret[provider]?.();
   if(!key) throw new Error(`${provider} 凭据未配置`);
   const media=await resolved(messages,client,provider,key);
-  if(outputKind!=='text' && !(provider==='gemini'&&['image','audio'].includes(outputKind))) throw new Error('当前供应商适配器不支持所选输出类型');
+  if(outputKind!=='text' && !(provider==='gemini'&&['image','audio'].includes(outputKind)) && !(provider==='openai'&&outputKind==='image')) throw new Error('当前供应商适配器不支持所选输出类型');
   const request=build(provider,model,media,parameters,functionSchema(toolSchema),outputKind);
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),120000);

@@ -1,5 +1,5 @@
 const defaults={input:['text'],output:['text'],tools:false};
-const allowed={legacy:{input:['text'],output:['text'],tools:false},openai:{input:['text','image','audio'],output:['text'],tools:true},qwen:{input:['text','image','audio','video'],output:['text'],tools:true},gemini:{input:['text','image','audio','video'],output:['text','image','audio'],tools:true}};
+const allowed={legacy:{input:['text'],output:['text'],tools:false},openai:{input:['text','image','audio'],output:['text','image'],tools:true},qwen:{input:['text','image','audio','video'],output:['text'],tools:true},gemini:{input:['text','image','audio','video'],output:['text','image','audio'],tools:true}};
 const priceKeys=['imageInputUsdEach','audioInputUsdPerSecond','videoInputUsdPerSecond','imageOutputUsdEach','audioOutputUsdPerSecond'];
 
 export function providerConfigured(provider) {
@@ -49,7 +49,7 @@ export function preflightOutput(model,kind='text') {
   if(!model.capabilities?.output?.includes(kind)) throw new Error(`${model.display_name} 不支持 ${kind} 输出`);
   if(kind==='image' && model.media_pricing?.imageOutputUsdEach===undefined) throw new Error(`${model.display_name} 尚未配置图片输出单价`);
   if(kind==='audio' && model.media_pricing?.audioOutputUsdPerSecond===undefined) throw new Error(`${model.display_name} 尚未配置音频输出单价`);
-  return kind==='image' ? 4*Number(model.media_pricing.imageOutputUsdEach) : kind==='audio' ? 600*Number(model.media_pricing.audioOutputUsdPerSecond) : 0;
+  return kind==='image' ? (model.provider==='openai'?1:4)*Number(model.media_pricing.imageOutputUsdEach) : kind==='audio' ? 600*Number(model.media_pricing.audioOutputUsdPerSecond) : 0;
 }
 
 export function mediaCost(usage,pricing) {

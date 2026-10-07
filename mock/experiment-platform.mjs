@@ -99,6 +99,7 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
       const usages=[];
       preflightOutput(model,variant.parameters.output_kind || 'text');
       for(const prompt of prompts) {
+        if(variant.parameters.output_kind==='image' && model.provider==='openai' && toolSchema) throw new Error('OpenAI 图片生成不能同时配置自定义工具');
         if(variant.parameters.output_kind==='audio' && (prompt.system.trim() || toolSchema || prompt.messages.some(message=>message.role!=='user' && (message.content?.trim() || message.parts?.length) || (message.parts || []).some(part=>part.type!=='text')))) throw new Error('Gemini TTS 仅支持用户纯文本输入，不能带系统提示、媒体或工具');
         usages.push(await preflightMedia(client,prompt.messages,model,toolSchema));
       }

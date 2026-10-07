@@ -5,7 +5,7 @@ import type { MediaPricing, ModelCapabilities, ModelConfig, PlatformConfig } fro
 
 type ModelDraft={displayName:string;apiModel:string;provider:ModelConfig['provider'];capabilities:ModelCapabilities;mediaPricing:MediaPricing;inputUsdPerMillion:number;outputUsdPerMillion:number;active:boolean};
 const providerOptions=[{value:'legacy',label:'兼容文本 API'},{value:'openai',label:'OpenAI'},{value:'qwen',label:'千问'},{value:'gemini',label:'Gemini'}];
-const outputOptions=(provider:ModelConfig['provider'] | undefined)=>['text',...(provider==='gemini'?['image','audio']:[])].map(value=>({value,label:value}));
+const outputOptions=(provider:ModelConfig['provider'] | undefined)=>['text',...(['gemini','openai'].includes(provider || '')?['image']:[]),...(provider==='gemini'?['audio']:[])].map(value=>({value,label:value}));
 const modalityOptions=(provider:ModelConfig['provider'] | undefined)=>['text',...(provider==='legacy'?[]:provider==='openai'?['image','audio']:['image','audio','video'])].map(value=>({value,label:value}));
 
 export default function ExperimentPlatformSettings({ open, onClose }: { open: boolean; onClose: () => void }) {
