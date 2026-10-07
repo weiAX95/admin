@@ -30,13 +30,17 @@ Docker Compose 将开发库映射到本机 `55432` 端口，并初始化独立�
 docker compose exec -T postgres pg_dump -U admin -Fc agent_admin > agent_admin.dump
 ```
 
-恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、35 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
+恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、38 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
 
 Markdown 图片经 `/api/assets` 上传并保存到 `mock/uploads/`（可用 `ASSET_DIR` 调整）。图片仅登录后可读取，支持 PNG/JPEG/WebP/GIF，每张上限 10 MB；超过 24 小时且未被当前笔记、任务或实验内容引用的图片会自动清理。**备份时需同时保存 PostgreSQL 和附件目录**，只恢复数据库会导致图片 URL 失效。笔记引用以 `[[标题]]` 编写；唯一匹配时保存为 `[[标题|id:笔记ID]]`，改名仍指向同一笔记，删除目标后显示悬空占位。
 
 笔记分类由 `/api/note-categories` 管理，可建立多级目录；笔记标签独立于任务标签。编辑笔记时可输入新标签，或从包含零使用标签的目录中选择；目录将英文大小写和首尾空格不同的名称归为同一标签。`GET /api/note-tags` 返回标签及使用篇数；管理员可通过 `POST /api/note-tags` 创建空标签、`PATCH /api/note-tags/:id` 重命名、`POST /api/note-tags/:id/merge` 合并及 `DELETE /api/note-tags/:id` 删除。合并请求体需包含 `targetId` 和 `expectedUsageCount`；删除请求需带同名查询参数，使用篇数变化时返回 409，页面需重新确认。`GET /api/notes` 支持 `keyword`、`categoryId`、可重复的 `tag` 和 `taskId` 参数，分类筛选包含子分类，多标签取交集。当前本地 API 在 PostgreSQL 请求工作集中过滤，后续定向 SQL 查询可再优化。会话行内选中文字后可创建带 `sourceSessionId` 的笔记。
 
 `/notes/graph` 展示笔记、任务和会话的知识图谱；`GET /api/knowledge-graph` 从当前数据生成节点及引用、任务关联、来源会话三种边。笔记详情的“历史版本”读取 `/api/notes/:id/versions`，保存和回滚都会追加包含标题与正文的快照；旧笔记迁移时仅把当时内容作为第 1 版基线，不推断更早历史。笔记详情可下载 Markdown、HTML 或 PDF，笔记列表的 ZIP 导出覆盖当前搜索、分类和标签筛选结果的全部笔记，每篇为独立 Markdown 文件。HTML 会净化原生 HTML 并内嵌本地附件图片；PDF 使用中文字体分页绘制 Markdown 结构和语法高亮的代码行。
+
+`/notes/reviews` 是每个账号独立的复习面板。新笔记与新账号自动建立计划；旧笔记在执行 `008_note_reviews` 迁移当天开始第一个周期。到期日按上海日历计算，服务在当天 09:00 生成站内通知；正文变化或正文回滚让所有账号从 1 天间隔重新开始，标题、分类和标签修改不重启。完成复习依次进入 2、4、7、15、30 天，之后保持 30 天。`GET /api/note-reviews` 查询今日及逾期项目，`POST /api/note-reviews/:noteId/complete` 带当前 `generation` 防止重复提交；`GET /api/notifications` 查询站内提醒，`POST /api/notifications/:id/read` 标记已读。
+
+邮件提醒由账号在复习面板填写邮箱并启用，设置经 `/api/account/review-settings` 保存；SMTP 由 `.env.example` 中的 `SMTP_HOST`、`SMTP_PORT`、`SMTP_FROM`（可选 `SMTP_USER`、`SMTP_PASSWORD`）配置。未配置 SMTP 时站内提醒仍正常，待发送邮件保留并在服务配置后尝试发送；失败状态和错误保留在数据库并按退避间隔重试。邮件投递属于至少一次语义：服务在 SMTP 已接收但尚未记录成功时崩溃，重试可能产生重复邮件。**本地 API 必须持续运行才能在 09:00 准时触发**；停机期间遗漏的提醒会在下次启动补建。新建笔记还可选用五种内置 Markdown 模板，正文保存后可自由编辑。
 
 ## 验证与构建
 

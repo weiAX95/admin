@@ -11,6 +11,7 @@ import Notes from "./pages/Notes";
 import Experiments from "./pages/Experiments";
 import NoteDetail from "./pages/NoteDetail";
 import NoteGraph from "./pages/NoteGraph";
+import NoteReviews from "./pages/NoteReviews";
 import ExperimentDetail from "./pages/ExperimentDetail";
 import Accounts from "./pages/Accounts";
 import Login from "./pages/Login";
@@ -62,6 +63,7 @@ export default function App() {
                 <Route path="/sessions" element={<Sessions />} />
                 <Route path="/notes" element={<Notes />} />
                 <Route path="/notes/graph" element={<NoteGraph />} />
+                <Route path="/notes/reviews" element={<NoteReviews />} />
                 <Route path="/notes/:id" element={<NoteDetail />} />
                 <Route path="/experiments" element={<Experiments />} />
                 <Route path="/experiments/:id" element={<ExperimentDetail />} />

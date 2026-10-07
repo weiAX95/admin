@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)和[笔记版本迁移](../db/migrations/007_note_versions.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **35 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)和[复习提醒迁移](../db/migrations/008_note_reviews.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **38 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 页面如何读写数据
 
@@ -82,7 +82,7 @@ flowchart LR
 
 | 表 | 当前内容与关键关系 | 对应页面或功能 |
 | --- | --- | --- |
-| `users` | 管理端账号、密码哈希、角色和启用状态。 | `/login`、`/accounts` |
+| `users` | 管理端账号、密码哈希、角色、启用状态及个人复习邮件设置。 | `/login`、`/accounts`、`/notes/reviews` |
 | `auth_sessions` | 登录令牌哈希、到期与撤销时间；`user_id` 外键，删除账号时级联删除。 | 登录、退出、HTTP／WebSocket 鉴权 |
 | `sessions` | 聊天端上报的会话；`external_user_id` 是外部用户标识。 | `/sessions` |
 | `session_messages` | 会话中的 user／assistant 消息，保留顺序和首次确定的 ID；`session_id` 外键。 | 会话行内预览 |
@@ -100,6 +100,12 @@ flowchart LR
   Notes -->|"FK note_id；删除笔记时级联"| NoteTags["note_tags"]
   TagDefinitions["note_tag_definitions"] -->|"FK tag；改名／删除时级联"| NoteTags
   Notes -->|"FK note_id；删除笔记时级联"| Versions["note_versions"]
+  Users["users"] -->|"FK user_id；删除账号时级联"| ReviewProgress["note_review_progress"]
+  Notes -->|"FK note_id；删除笔记时级联"| ReviewProgress
+  Users -->|"FK user_id；删除账号时级联"| ReviewEvents["note_review_events"]
+  Notes -->|"FK note_id；删除笔记时级联"| ReviewEvents
+  Users -->|"FK user_id；删除账号时级联"| ReviewNotices["note_review_notifications"]
+  Notes -->|"FK note_id；删除笔记时级联"| ReviewNotices
   Notes -. "notes.task_id" .-> Tasks["tasks"]
   Notes -. "notes.source_session_id" .-> Sessions["sessions"]
   Experiments["experiments"] -. "experiments.task_id" .-> Tasks
@@ -124,6 +130,9 @@ flowchart LR
 | `note_tags` | 笔记独立的多标签；`note_id` 和 `tag` 均有外键。 | `/notes` 标签云与筛选 |
 | `note_links` | 笔记正文的双向引用；来源和目标均有外键，目标删除时保留悬空引用。 | `/notes/:id`、`/notes/graph` |
 | `note_versions` | 每次保存或回滚产生的标题／正文快照；`note_id` 外键，删除笔记时级联删除。 | `/notes/:id` 历史版本、对比与回滚 |
+| `note_review_progress` | 每账号每笔记一行；保存间隔阶段、轮次和到期日，账号与笔记均为级联删除外键。 | `/notes/reviews` |
+| `note_review_events` | 每次完成复习的不可重复记录；账号、笔记均为级联删除外键，账号＋笔记＋轮次唯一。 | 复习面板勾选及历史核验 |
+| `note_review_notifications` | 到期站内提醒、已读状态和邮件投递状态；账号、笔记均为级联删除外键，账号＋笔记＋轮次唯一。 | 顶部铃铛、邮件重试 |
 | `media_assets` | 图片 MIME、大小、上传时间；文件存本地附件目录，内容字段通过 URL 逻辑引用。 | Markdown 编辑器及详情预览 |
 | `experiments` | 实验记录；`task_id` 为逻辑关联。 | `/experiments`、`/experiments/:id`、任务详情“关联” |
 | `activity` | 创建、修改、完成等活动摘要；任务和操作者 ID 为逻辑关联。 | 仪表盘最近活动、任务早期活动 |
@@ -133,4 +142,4 @@ flowchart LR
 | `schema_migrations` | 已执行的 SQL 迁移版本与时间。 | `npm run db:migrate` |
 | `data_imports` | 旧 JSON 导入文件的哈希与导入时间，防止重复导入。 | `npm run db:import` |
 
-三个表组分别列出 15、6、14 张表，合计 35 张。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。
+三个表组分别列出 15、6、17 张表，合计 38 张。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。

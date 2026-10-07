@@ -26,6 +26,8 @@ import { extractWikiLinks, normalizeWikiLinks } from "./wiki-links.mjs";
 import { cleanupAssets, handleAssetRequest, isAssetPath } from "./media-assets.mjs";
 import { canonicalNoteTags, noteTagKey, noteTagUsage, validateNoteTagName } from "./note-tags.mjs";
 import { buildKnowledgeGraph } from "./knowledge-graph.mjs";
+import { initializeNoteReviews, initializeUserReviews, resetNoteReviews, completeNoteReview, createDueReviewNotifications, shanghaiDate, addCalendarDays, reminderTime } from "./note-reviews.mjs";
+import { deliverReviewEmails, smtpConfigured } from "./review-mailer.mjs";
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -227,6 +229,8 @@ let db;
 let activeClient;
 let dirty = false;
 const saveDb = () => { dirty = true; };
+let afterSaveTasks = [];
+const afterSave = task => afterSaveTasks.push(task);
 let requestTail = Promise.resolve();
 function serialized(work) {
   const current = requestTail.then(work, work);
@@ -486,6 +490,49 @@ async function handleRequest(req, res) {
       return send(res, 200, { loggedOut: true });
     }
 
+    if (pathname === "/api/account/review-settings") {
+      if (method === "GET") return send(res, 200, { email: me.reviewEmail || "", emailEnabled: Boolean(me.reviewEmailEnabled), smtpConfigured: smtpConfigured() });
+      if (method === "PUT") {
+        const body = await readBody(req);
+        const email = typeof body.email === "string" ? body.email.trim() : "";
+        if (email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return send(res, 400, { error: "邮箱格式无效" });
+        if (typeof body.emailEnabled !== "boolean") return send(res, 400, { error: "emailEnabled 必须是布尔值" });
+        if (body.emailEnabled && !email) return send(res, 400, { error: "开启邮件提醒前请填写邮箱" });
+        me.reviewEmail = email || null;
+        me.reviewEmailEnabled = body.emailEnabled;
+        me.updatedAt = nowIso();
+        saveDb(db);
+        afterSave(client => client.query("UPDATE note_review_notifications SET email_status='skipped',email_next_attempt_at=NULL WHERE user_id=$1 AND email_status IN ('pending','failed') AND ($2::boolean=false OR email_to IS DISTINCT FROM $3)", [me.id, body.emailEnabled, email || null]));
+        return send(res, 200, { email, emailEnabled: body.emailEnabled, smtpConfigured: smtpConfigured() });
+      }
+      return send(res, 405, { error: "method not allowed" });
+    }
+    if (pathname === "/api/note-reviews" && method === "GET") {
+      const today = shanghaiDate(new Date());
+      const rows = (await activeClient.query("SELECT p.note_id AS id,n.title,p.step,p.generation,to_char(p.due_on,'YYYY-MM-DD') AS due_on,p.last_reviewed_at FROM note_review_progress p JOIN notes n ON n.id=p.note_id WHERE p.user_id=$1 AND p.due_on <= $2 ORDER BY p.due_on,n.title", [me.id, today])).rows;
+      return send(res, 200, { items: rows.map(row => ({ noteId: row.id, title: row.title, step: row.step, generation: row.generation, dueOn: row.due_on, lastReviewedAt: row.last_reviewed_at })), today });
+    }
+    const completeReviewRoute = pathname.match(/^\/api\/note-reviews\/([^/]+)\/complete$/);
+    if (completeReviewRoute && method === "POST") {
+      const body = await readBody(req);
+      if (!Number.isInteger(body.generation) || body.generation < 1) return send(res, 400, { error: "generation 无效" });
+      const result = await completeNoteReview(activeClient, me.id, completeReviewRoute[1], body.generation);
+      if (result.status === "missing") return send(res, 404, { error: "复习计划不存在" });
+      if (result.status === "conflict") return send(res, 409, { error: "该笔记已复习或计划已更新，请刷新列表" });
+      if (result.status === "early") return send(res, 400, { error: "尚未到复习日期" });
+      return send(res, 200, result);
+    }
+    if (pathname === "/api/notifications" && method === "GET") {
+      const items = (await activeClient.query("SELECT r.id,r.note_id AS note_id,n.title,to_char(r.due_on,'YYYY-MM-DD') AS due_on,r.created_at,r.read_at,r.email_status FROM note_review_notifications r JOIN notes n ON n.id=r.note_id WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 100", [me.id])).rows;
+      const unread = (await activeClient.query("SELECT count(*)::integer AS count FROM note_review_notifications WHERE user_id=$1 AND read_at IS NULL", [me.id])).rows[0].count;
+      return send(res, 200, { items: items.map(item => ({ id: item.id, noteId: item.note_id, title: item.title, dueOn: item.due_on, createdAt: item.created_at, readAt: item.read_at, emailStatus: item.email_status })), unread });
+    }
+    const readNotificationRoute = pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
+    if (readNotificationRoute && method === "POST") {
+      const result = await activeClient.query("UPDATE note_review_notifications SET read_at=coalesce(read_at,now()) WHERE id=$1 AND user_id=$2 RETURNING id", [readNotificationRoute[1], me.id]);
+      return result.rowCount ? send(res, 200, { id: readNotificationRoute[1], read: true }) : send(res, 404, { error: "通知不存在" });
+    }
+
     const logAction = (type, data) => logActivity(type, { ...data, actor: me });
     const dependencyStates = () => new Map(projectTasks(db.tasks).map(task => [task.id, task.blockedBy.length > 0]));
     const logReleasedDependencies = previous => {
@@ -588,6 +635,7 @@ async function handleRequest(req, res) {
           };
           db.users.push(account);
           saveDb(db);
+          afterSave(client => initializeUserReviews(client, account.id));
           return send(res, 201, publicUser(account));
         }
         return send(res, 405, { error: "method not allowed" });
@@ -1298,11 +1346,13 @@ async function handleRequest(req, res) {
       const version = db.noteVersions.find(item => item.id === body.versionId && item.noteId === note.id);
       if (!version) return send(res, 404, { error: "版本不存在" });
       note.title = version.title;
+      const contentChanged = note.content !== version.content;
       note.content = version.content;
       note.updatedAt = nowIso();
       reconcileNoteLinks(note.id);
       snapshotNote(note, "restore");
       saveDb(db);
+      if (contentChanged) afterSave(client => resetNoteReviews(client, note.id));
       return send(res, 200, note);
     }
     if (pathname === "/api/notes") {
@@ -1337,6 +1387,7 @@ async function handleRequest(req, res) {
         snapshotNote(note, "save");
         logAction("note", { taskId: note.taskId, title: note.title, detail: "新增学习笔记" });
         saveDb(db);
+        afterSave(client => initializeNoteReviews(client, note.id));
         return send(res, 201, note);
       }
       return send(res, 405, { error: "method not allowed" });
@@ -1362,11 +1413,13 @@ async function handleRequest(req, res) {
           if (w.categoryId && !db.noteCategories.some(item => item.id === w.categoryId)) return send(res, 400, { error: "分类不存在" });
         }
         if ("tags" in body) w.tags = canonicalNoteTags(db.noteTagDefinitions, body.tags);
+        const contentChanged = w.content !== undefined && w.content !== db.notes[i].content;
         const next = { ...db.notes[i], ...w, updatedAt: nowIso() };
         db.notes[i] = next;
         reconcileNoteLinks();
         snapshotNote(next, "save");
         saveDb(db);
+        if (contentChanged) afterSave(client => resetNoteReviews(client, next.id));
         return send(res, 200, db.notes[i]);
       }
       if (method === "DELETE") {
@@ -1447,6 +1500,7 @@ async function withData(work) {
     const client = await pool.connect();
     activeClient = client;
     dirty = false;
+    afterSaveTasks = [];
     try {
       await client.query("BEGIN");
       await client.query("SELECT pg_advisory_xact_lock(748201)");
@@ -1455,6 +1509,7 @@ async function withData(work) {
       const value = await work();
       const changed = dirty;
       if (changed) await saveData(client, before, db);
+      for (const task of afterSaveTasks) await task(client);
       await client.query("COMMIT");
       return { value, changed };
     } catch (error) {
@@ -1551,6 +1606,21 @@ try {
     scheduleRecurrences(0);
     void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error));
     setInterval(() => { void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error)); }, 3600_000).unref();
+    const runReviewJobs = async () => {
+      try {
+        const { value } = await withData(() => createDueReviewNotifications(activeClient));
+        if (value) notifyLive();
+        await deliverReviewEmails(pool);
+      } catch (error) { console.error("[reviews] reminder job failed:", error); }
+      finally {
+        const now = Date.now();
+        const today = shanghaiDate(now);
+        const todayReminder = reminderTime(today);
+        const nextReminder = todayReminder > now ? todayReminder : reminderTime(addCalendarDays(today, 1));
+        setTimeout(runReviewJobs, Math.max(1000, Math.min(60_000, nextReminder - now))).unref();
+      }
+    };
+    runReviewJobs();
   });
 } catch (error) {
   console.error("[mock] PostgreSQL 不可用或尚未迁移：", error.message);

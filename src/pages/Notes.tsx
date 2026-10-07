@@ -26,6 +26,7 @@ import NoteCategoryManager, { categoryPath } from "../components/NoteCategoryMan
 import NoteTagManager, { type NoteTagChange } from "../components/NoteTagManager";
 import { markdownSummary } from "../utils/markdown-summary";
 import { downloadBlob, notesZip } from "../utils/noteExport";
+import { NOTE_TEMPLATES } from "../utils/noteTemplates";
 
 interface Props {
   open: boolean;
@@ -46,6 +47,7 @@ type CategoryTreeNode = { key: string; title: string; children: CategoryTreeNode
 export function NoteFormDrawer({ open, initial, tasks, notes = EMPTY_NOTES, categories = EMPTY_CATEGORIES, defaultTaskId, prefill, suppressSuccess = false, onClose, onSaved }: Props) {
   const [form] = Form.useForm<NotePayload>();
   const [saving, setSaving] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState<string | undefined>();
   const [catalogue, setCatalogue] = useState<Note[]>([]);
   const [categoryCatalogue, setCategoryCatalogue] = useState<NoteCategory[]>([]);
   const [tagCatalogue, setTagCatalogue] = useState<NoteTagDefinition[]>([]);
@@ -75,6 +77,7 @@ export function NoteFormDrawer({ open, initial, tasks, notes = EMPTY_NOTES, cate
   useEffect(() => {
     if (!open) return;
     form.resetFields();
+    setSelectedTemplate(undefined);
     if (initial) form.setFieldsValue(initial);
     else form.setFieldsValue({ title: "", content: "", taskId: defaultTaskId || null, categoryId: null, tags: [], ...prefill });
   }, [open, initial, defaultTaskId, prefill, form]);
@@ -106,6 +109,13 @@ export function NoteFormDrawer({ open, initial, tasks, notes = EMPTY_NOTES, cate
       }
     >
       <Form form={form} layout="vertical" onFinish={handleFinish}>
+        {!initial && <Form.Item label="笔记模板"><Select allowClear disabled={Boolean(prefill?.content)} value={selectedTemplate} placeholder={prefill?.content ? "已有预填内容" : "从模板开始（可选）"} options={NOTE_TEMPLATES.map(item => ({ value: item.id, label: item.name }))} onChange={value => {
+          const previousContent = NOTE_TEMPLATES.find(item => item.id === selectedTemplate)?.content;
+          const currentContent = form.getFieldValue("content");
+          setSelectedTemplate(value);
+          const template = NOTE_TEMPLATES.find(item => item.id === value);
+          if (template && (!currentContent || currentContent === previousContent)) form.setFieldsValue({ content: template.content });
+        }} /></Form.Item>}
         <Form.Item name="sourceSessionId" hidden><Input type="hidden" /></Form.Item>
         <Form.Item
           name="title"

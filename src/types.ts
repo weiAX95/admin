@@ -213,6 +213,9 @@ export interface KnowledgeGraphData {
 export interface NoteVersion { id: string; noteId: string; versionNumber: number; title: string; content: string; reason: "baseline" | "save" | "restore"; createdAt: string; }
 
 export type NotePayload = Partial<Omit<Note, "id" | "createdAt" | "updatedAt">>;
+export interface ReviewItem { noteId: string; title: string; step: number; generation: number; dueOn: string; lastReviewedAt: string | null; }
+export interface ReviewNotification { id: string; noteId: string; title: string; dueOn: string; createdAt: string; readAt: string | null; emailStatus: "skipped" | "pending" | "sending" | "sent" | "failed"; }
+export interface ReviewSettings { email: string; emailEnabled: boolean; smtpConfigured: boolean; }
 
 /* ------------------------------ 实验记录 ------------------------------ */
 

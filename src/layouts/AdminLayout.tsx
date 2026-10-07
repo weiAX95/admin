@@ -1,14 +1,16 @@
-import { useState } from "react";
-import { Avatar, Button, Drawer, Layout, Menu, Space, Typography } from "antd";
+import { useCallback, useEffect, useState } from "react";
+import { Avatar, Badge, Button, Drawer, Empty, Layout, Menu, Popover, Space, Typography } from "antd";
 import {
-  DashboardOutlined, ExperimentOutlined, FileTextOutlined, LogoutOutlined,
+  BellOutlined, DashboardOutlined, ExperimentOutlined, FileTextOutlined, LogoutOutlined,
   MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined, MessageOutlined,
   ProfileOutlined, RocketOutlined, TeamOutlined,
 } from "@ant-design/icons";
-import { Outlet, useLocation, useNavigate } from "react-router-dom";
-import { clearAuth, getStoredUser } from "../api/client";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { clearAuth, getStoredUser, getToken } from "../api/client";
 import { logout } from "../api/auth";
 import type { AuthUser } from "../types";
+import type { ReviewNotification } from "../types";
+import { listNotifications, markNotificationRead } from "../api/reviews";
 
 const { Header, Sider, Content } = Layout;
 const MENU_ITEMS = [
@@ -16,6 +18,7 @@ const MENU_ITEMS = [
   { key: "/tasks", icon: <ProfileOutlined />, label: "学习任务" },
   { key: "/sessions", icon: <MessageOutlined />, label: "会话记录" },
   { key: "/notes", icon: <FileTextOutlined />, label: "学习笔记" },
+  { key: "/notes/reviews", icon: <BellOutlined />, label: "复习面板" },
   { key: "/experiments", icon: <ExperimentOutlined />, label: "实验记录" },
 ];
 const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号管理" };
@@ -24,6 +27,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/tasks": { title: "学习任务", description: "从目标到行动，让每一项学习计划有迹可循。", section: "学习工作台" },
   "/sessions": { title: "会话记录", description: "回顾与 Agent 的对话，将有价值的回答沉淀为知识。", section: "学习工作台" },
   "/notes": { title: "学习笔记", description: "整理思考、记录心得，建立自己的知识积累。", section: "学习工作台" },
+  "/notes/reviews": { title: "复习面板", description: "按计划回顾笔记，让知识留下来。", section: "学习工作台" },
   "/experiments": { title: "实验记录", description: "记录提示词、模型与结果，让每一次尝试都成为经验。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
 };
@@ -33,6 +37,28 @@ export default function AdminLayout() {
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [notifications, setNotifications] = useState<ReviewNotification[]>([]);
+  const [unread, setUnread] = useState(0);
+  const refreshNotifications = useCallback(() => { void listNotifications().then(result => { setNotifications(result.items); setUnread(result.unread); }).catch(() => undefined); }, []);
+  useEffect(() => {
+    refreshNotifications();
+    const interval = window.setInterval(() => { if (!document.hidden) refreshNotifications(); }, 30000);
+    const visible = () => { if (!document.hidden) refreshNotifications(); };
+    document.addEventListener("visibilitychange", visible);
+    return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", visible); };
+  }, [refreshNotifications]);
+  useEffect(() => {
+    if (!getToken()) return;
+    const url = new URL("/api/live", window.location.href);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(url);
+    socket.onopen = () => socket.send(JSON.stringify({ type: "auth", token: getToken() }));
+    socket.onmessage = event => {
+      try { if (JSON.parse(String(event.data)).type === "stats_changed") refreshNotifications(); }
+      catch { /* Ignore malformed optional live events; polling remains active. */ }
+    };
+    return () => socket.close();
+  }, [refreshNotifications]);
   const user = getStoredUser<AuthUser>();
   const menuItems = user?.role === "admin" ? [...MENU_ITEMS, ACCOUNTS_ITEM] : MENU_ITEMS;
   const selected = menuItems.map((m) => m.key)
@@ -75,6 +101,13 @@ export default function AdminLayout() {
             <span className="header-breadcrumb">工作空间 <span>/</span> <strong>{page.section}</strong></span>
           </Space>
           <Space size={14} className="header-account">
+            <Popover trigger="click" placement="bottomRight" title="复习提醒" content={<div style={{ width: 320, maxHeight: 360, overflowY: "auto" }}>
+              {notifications.length ? notifications.map(item => <div key={item.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--ant-color-border-secondary)" }}>
+                <Space><Link to={`/notes/${item.noteId}`} onClick={() => { if (!item.readAt) void markNotificationRead(item.id).then(refreshNotifications); }}>{item.title}</Link>{!item.readAt && <Badge status="processing" />}</Space>
+                <div><Typography.Text type="secondary">到期 {item.dueOn}</Typography.Text></div>
+              </div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无复习提醒" />}
+              <Button type="link" onClick={() => navigate("/notes/reviews")}>打开复习面板</Button>
+            </div>}><Button type="text" aria-label={`复习提醒，未读 ${unread} 条`} icon={<Badge count={unread} size="small"><BellOutlined /></Badge>} onClick={refreshNotifications} /></Popover>
             <Avatar size={32} className="account-avatar">{name.slice(0, 1)}</Avatar>
             <div className="account-copy"><strong>{name}</strong><span>{user?.role === "admin" ? "管理员" : "普通成员"}</span></div>
             <Button type="text" icon={<LogoutOutlined />} onClick={() => { void logout().catch(() => undefined).finally(() => { clearAuth(); navigate("/login", { replace: true }); }); }}>

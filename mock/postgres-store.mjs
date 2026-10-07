@@ -16,7 +16,7 @@ const snake = name => name.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}
 const spec = (name, table, fields, children = []) => ({ name, table, fields, children });
 const child = (name, table, fields, parentColumn, orderField = "item_order") => ({ name, table, fields, parentColumn, orderField });
 const specs = [
-  spec("users", "users", ["id", "username", ["passwordHash", "password_hash"], "name", "role", "status", "createdAt", "updatedAt"]),
+  spec("users", "users", ["id", "username", ["passwordHash", "password_hash"], "name", "role", "status", "reviewEmail", "reviewEmailEnabled", "createdAt", "updatedAt"]),
   spec("tasks", "tasks", ["id", "title", "description", "category", "phase", "status", "priority", "dueDate", "plannedStartDate", "notes", "progress", "manualProgress", "estimatedHours", "ownerId", "version", "activeCycleStartedAt", "legacyCompletionUnknown", "createdAt", "updatedAt", "recurringSeriesId", "recurrenceIndex"], [
     child("checklist", "task_checklist_items", ["id", "text", "done"], "task_id"),
     child("dependencyIds", "task_dependencies", [["value", "dependency_id"]], "task_id"),
@@ -65,6 +65,7 @@ async function upsert(client, table, fields, item, conflict = "id") {
 }
 
 function prepareParent(entity, name) {
+  if (name === "users") return { ...entity, reviewEmailEnabled: entity.reviewEmailEnabled ?? false };
   if (name !== "recurringSeries") return entity;
   const snapshot = entity.snapshot || {};
   return { ...entity, snapshotTitle: snapshot.title, snapshotDescription: snapshot.description, snapshotCategory: snapshot.category, snapshotPhase: snapshot.phase, snapshotPriority: snapshot.priority, snapshotEstimatedHours: snapshot.estimatedHours };
@@ -215,6 +216,9 @@ export async function importJson(client, data, sourceHash) {
   initializeTaskTrends(data);
   const empty = Object.fromEntries([...specs.map(item => [item.name, []]), ["legacyActivityIds", []], ["taskTrendEvents", []], ["taskTrendSnapshots", []]]);
   await saveData(client, empty, data);
+  // The schema migration runs before a JSON import, so seed review plans for
+  // the imported accounts and notes inside this same import transaction.
+  await client.query("INSERT INTO note_review_progress(user_id,note_id,started_on,due_on) SELECT u.id,n.id,(now() AT TIME ZONE 'Asia/Shanghai')::date,(now() AT TIME ZONE 'Asia/Shanghai')::date+1 FROM users u CROSS JOIN notes n ON CONFLICT DO NOTHING");
   await client.query("INSERT INTO data_imports(source_hash) VALUES($1)", [sourceHash]);
   const imported = await loadData(client);
   for (const key of Object.keys(empty)) if ((data[key] || []).length !== (imported[key] || []).length) throw new Error(`${key} 导入数量不一致`);
