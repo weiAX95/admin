@@ -36,6 +36,7 @@ import { recoverExperimentJobs, runExperimentJobs } from "./experiment-runner.mj
 import { handleExperimentEvaluation, syncEvaluationCandidate } from "./experiment-evaluation.mjs";
 import { handleEvaluationReviews } from "./evaluation-review-api.mjs";
 import { handleEvaluationSchedules, processDueEvaluationSchedules } from "./evaluation-schedules.mjs";
+import { handleEvaluationReportSharing, handlePublicEvaluationReport, canReadSharedEvaluationMedia } from "./evaluation-report-sharing.mjs";
 import { canReadSharedExperimentAsset, handleExperimentSharing, handlePublicExperimentShare } from "./experiment-sharing.mjs";
 import { deliverAppEmails } from "./app-notifications.mjs";
 import { handleExperimentSchedules, processDueExperimentSchedules } from "./experiment-schedules.mjs";
@@ -473,6 +474,8 @@ async function handleRequest(req, res) {
   try {
     const publicShare = await handlePublicExperimentShare({ pathname, method, client: activeClient });
     if (publicShare) return send(res, publicShare.status, publicShare.data);
+    const publicEvaluationReport = await handlePublicEvaluationReport({ pathname, method, client: activeClient });
+    if (publicEvaluationReport) return send(res, publicEvaluationReport.status, publicEvaluationReport.data);
     // ---- 登录（免鉴权）----
     if (method === "POST" && pathname === "/api/auth/login") {
       const body = await readBody(req);
@@ -505,6 +508,8 @@ async function handleRequest(req, res) {
     if (reviewResponse) return send(res, reviewResponse.status, reviewResponse.data);
     const evaluationScheduleResponse = await handleEvaluationSchedules({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (evaluationScheduleResponse) return send(res, evaluationScheduleResponse.status, evaluationScheduleResponse.data);
+    const evaluationReportShareResponse = await handleEvaluationReportSharing({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (evaluationReportShareResponse) return send(res, evaluationReportShareResponse.status, evaluationReportShareResponse.data);
     const sharingResponse = await handleExperimentSharing({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (sharingResponse) return send(res, sharingResponse.status, sharingResponse.data);
     const scheduleResponse = await handleExperimentSchedules({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
@@ -1581,7 +1586,7 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (isPromptMediaPath(new URL(req.url,"http://localhost").pathname)) {
-    void handlePromptMedia(req,res,pool,token=>lookupSession(token)).catch(error=>{
+    void handlePromptMedia(req,res,pool,token=>lookupSession(token),(shareToken,assetId)=>canReadSharedEvaluationMedia(pool,shareToken,assetId)).catch(error=>{
       console.error('[prompt-media] request failed:',error);
       if (!res.headersSent) {res.writeHead(500,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify({error:'提示词媒体服务不可用'}));}
     });

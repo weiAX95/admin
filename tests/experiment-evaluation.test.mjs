@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { createPgTestServer } from './pg-helper.mjs';
 
 test('versioned dataset regression, annotations, candidate pool, chains and costs', async t => {
@@ -43,6 +44,29 @@ test('versioned dataset regression, annotations, candidate pool, chains and cost
   assert.equal(report.data.passRate,1);
   assert.deepEqual(report.data.degraded,[]);
   assert.equal(report.data.byDifficulty.length,2);
+  const preview=await request(admin,`/evaluation/reports/${regression.data.batchId}/share-preview`);
+  assert.equal(preview.status,200);
+  assert.equal(preview.data.cases[0].expectedOutput.parts[0].text,'正确答案');
+  assert.equal((await request(member,`/evaluation/reports/${regression.data.batchId}/share-preview`)).status,403);
+  const share=await request(admin,`/evaluation/reports/${regression.data.batchId}/shares`,'POST',{expiry:'1h'});
+  assert.equal(share.status,201);
+  const stored=(await api.client.query('SELECT token_hash FROM evaluation_report_shares WHERE id=$1',[share.data.id])).rows[0];
+  assert.notEqual(stored.token_hash,share.data.token);
+  const publicPath=`/public/evaluation-reports/${share.data.token}`;
+  assert.equal((await request(null,publicPath)).data.report.cases.length,2);
+  const media=await fetch(`${api.base}/prompt-media`,{method:'POST',headers:{Authorization:`Bearer ${admin}`,'X-Media-Kind':'image','Content-Type':'image/gif'},body:Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=','base64')});
+  assert.equal(media.status,201);
+  const mediaId=(await media.json()).id;
+  const caseId=(await api.client.query('SELECT case_id FROM experiment_runs WHERE batch_id=$1 LIMIT 1',[regression.data.batchId])).rows[0].case_id;
+  await api.client.query('INSERT INTO evaluation_case_assets(case_id,asset_id) VALUES($1,$2)',[caseId,mediaId]);
+  assert.equal((await fetch(`${api.base}/prompt-media/${mediaId}?share=${share.data.token}`)).status,200);
+  assert.equal((await fetch(`${api.base}/prompt-media/${mediaId}?share=${crypto.randomUUID()}`)).status,401);
+  await api.client.query("UPDATE evaluation_report_shares SET expires_at=now()-interval '1 second' WHERE id=$1",[share.data.id]);
+  assert.equal((await request(null,publicPath)).data.error,'分享已过期');
+  assert.equal((await fetch(`${api.base}/prompt-media/${mediaId}?share=${share.data.token}`)).status,401);
+  const liveShare=await request(admin,`/evaluation/reports/${regression.data.batchId}/shares`,'POST',{expiry:'24h'});
+  assert.equal((await request(admin,`/evaluation/report-shares/${liveShare.data.id}/revoke`,'POST',{})).status,200);
+  assert.equal((await request(null,`/public/evaluation-reports/${liveShare.data.token}`)).data.error,'分享已撤销');
   const leaderboard=await request(admin,`/evaluation/leaderboard?datasetVersionId=${versionId}&metricVersionId=default-v1&weights=${encodeURIComponent(JSON.stringify({accuracy:0.4,latency:0.3,tokens:0.3}))}`);
   assert.equal(leaderboard.status,200);
   assert.equal(leaderboard.data.items[0].apiModel,'test');

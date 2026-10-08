@@ -66,11 +66,11 @@ function summary(values) {
   return { min: sorted[0], q1: percentile(0.25), median: percentile(0.5), q3: percentile(0.75), max: sorted.at(-1), count: sorted.length };
 }
 
-async function regressionReport(client, batchId) {
+export async function regressionReport(client, batchId) {
   const batch = (await client.query('SELECT * FROM experiment_batches WHERE id=$1 AND kind=$2', [batchId, 'regression'])).rows[0];
   if (!batch) return fail('回归批次不存在', 404);
   const metric = (await client.query('SELECT * FROM experiment_metric_versions WHERE id=$1', [batch.metric_version_id])).rows[0];
-  const rows = (await client.query('SELECT r.id,r.case_id,r.variant_id,r.status,r.auto_score,r.latency_ms,r.completion_tokens,r.output,r.error,c.case_key,c.variables,c.input_payload,c.context_payload,c.difficulty,c.category,m.passed,m.rule_score,m.judge_score,m.metric_details FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1 ORDER BY c.case_key', [batch.id, batch.metric_version_id])).rows;
+  const rows = (await client.query('SELECT r.id,r.case_id,r.variant_id,v.label AS variant_label,r.status,r.auto_score,r.latency_ms,r.completion_tokens,r.output,r.output_parts,r.request_messages,r.error,c.case_key,c.variables,c.input_payload,c.expected_payload,c.reference_answer,c.context_payload,c.difficulty,c.category,m.passed,m.rule_score,m.judge_score,m.metric_details FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id JOIN experiment_variants v ON v.id=r.variant_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1 ORDER BY c.case_key', [batch.id, batch.metric_version_id])).rows;
   const baseline = (await client.query('SELECT r.auto_score,r.status,c.case_key,c.variables,c.input_payload,c.context_payload FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.batch_id=$1', [batch.baseline_batch_id])).rows;
   const baselineByCase = new Map(baseline.map(item => [item.case_key, item]));
   const currentKeys = new Set(rows.map(row => row.case_key));
@@ -79,7 +79,7 @@ async function regressionReport(client, batchId) {
     const prior = baselineByCase.get(row.case_key);
     const comparisonStatus = !prior ? 'added' : caseInputFingerprint(prior) !== caseInputFingerprint(row) ? 'input_changed' : prior.auto_score === null || prior.status !== 'completed' ? 'baseline_unscored' : 'comparable';
     const baselineScore = comparisonStatus === 'comparable' ? prior.auto_score : null;
-    return { caseId: row.case_id, caseKey: row.case_key, variantId: row.variant_id, score: row.auto_score, baselineScore, comparisonStatus, delta: row.auto_score === null || baselineScore === null ? null : Number((row.auto_score - baselineScore).toFixed(3)), passed: row.passed, status: row.status, difficulty: row.difficulty || '未分类', category: row.category || '未分类', ruleScore: row.rule_score, judgeScore: row.judge_score, metricDetails: row.metric_details, output: row.output, error: row.error };
+    return { caseId: row.case_id, caseKey: row.case_key, variantId: row.variant_id, variantLabel: row.variant_label, score: row.auto_score, baselineScore, comparisonStatus, delta: row.auto_score === null || baselineScore === null ? null : Number((row.auto_score - baselineScore).toFixed(3)), passed: row.passed, status: row.status, difficulty: row.difficulty || '未分类', category: row.category || '未分类', ruleScore: row.rule_score, judgeScore: row.judge_score, metricDetails: row.metric_details, input: row.input_payload, context: row.context_payload, expectedOutput: row.expected_payload || row.reference_answer, requestMessages: row.request_messages, output: row.output, outputParts: row.output_parts, error: row.error };
   });
   const scored = compared.filter(item => item.score !== null && item.status === 'completed');
   const strata = field => [...new Set(compared.map(item => item[field]))].map(value => { const group = scored.filter(item => item[field] === value); return { name: value, count: group.length, passRate: group.length ? group.filter(item => item.passed).length / group.length : null, averageScore: group.length ? group.reduce((sum,item) => sum + item.score,0)/group.length : null }; });

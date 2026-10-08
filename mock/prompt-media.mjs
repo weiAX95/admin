@@ -67,11 +67,14 @@ export async function inspectPromptMedia(file,kind) {
   return {mime,duration};
 }
 
-export async function handlePromptMedia(req,res,pool,lookupSession) {
+export async function handlePromptMedia(req,res,pool,lookupSession,canReadSharedMedia = async () => false) {
   const pathname=new URL(req.url,'http://localhost').pathname;
   const token=/^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1];
   const account=await lookupSession(token);
-  if (!account) return json(res,401,{error:'请先登录'});
+  const match=pathname.match(route);
+  const shareToken=new URL(req.url,'http://localhost').searchParams.get('share');
+  const shared=match && req.method==='GET' && shareToken ? await canReadSharedMedia(shareToken,match[1]) : false;
+  if (!account && !shared) return json(res,401,{error:'请先登录'});
   if (pathname==='/api/prompt-media' && req.method==='POST') {
     const kind=req.headers['x-media-kind'];
     if (!Object.hasOwn(limits,kind)) return json(res,400,{error:'媒体类型无效'});
@@ -92,7 +95,6 @@ export async function handlePromptMedia(req,res,pool,lookupSession) {
       return json(res,201,{id,url:`/api/prompt-media/${id}`,kind,mimeType:mime,byteSize:bytes,durationSeconds:duration});
     } catch(error){await fsp.unlink(temp).catch(()=>{});return json(res,error.status || 500,{error:error.status?error.message:'媒体保存失败'});}
   }
-  const match=pathname.match(route);
   if (match && req.method==='GET') {
     const record=(await pool.query('SELECT mime_type,byte_size FROM prompt_media_assets WHERE id=$1',[match[1]])).rows[0];
     if (!record) return json(res,404,{error:'媒体不存在'});

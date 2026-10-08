@@ -22,6 +22,7 @@ import EvaluationSchedules from "./pages/EvaluationSchedules";
 import ExperimentRegressionReport from "./pages/ExperimentRegressionReport";
 import ExperimentChain from "./pages/ExperimentChain";
 import SharedExperiment from "./pages/SharedExperiment";
+import SharedEvaluationReport from "./pages/SharedEvaluationReport";
 import ExperimentSchedules from "./pages/ExperimentSchedules";
 import Prompts from "./pages/Prompts";
 import PromptDetail from "./pages/PromptDetail";
@@ -68,6 +69,7 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/share/experiments/:token" element={<SharedExperiment />} />
+            <Route path="/share/evaluation-reports/:token" element={<SharedEvaluationReport />} />
             <Route element={<RequireAuth />}>
               <Route element={<AdminLayout />}>
                 <Route path="/" element={<Dashboard />} />
