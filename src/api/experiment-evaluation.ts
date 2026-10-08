@@ -1,17 +1,22 @@
 import { http } from './client';
 
 export interface MetricVersion { id: string; name: string; version: number; rule_type: string; pass_threshold: number; regression_threshold: number }
-export interface Dataset { id: string; name: string; latest_version_id: string; latest_version: number }
-export interface DatasetCase { caseKey: string; variables: Record<string,string>; referenceAnswer?: string; difficulty?: string; category?: string }
+export interface Dataset { id: string; name: string; latest_version_id: string; latest_version: number; folder_id?: string | null; parent_version_id?: string | null }
+export interface DatasetPart { type: 'text' | 'image' | 'audio' | 'video'; text?: string; assetId?: string }
+export interface DatasetCase { caseKey: string; variables?: Record<string,string>; input?: string | { parts: DatasetPart[] }; expectedOutput?: string | { parts: DatasetPart[] }; referenceAnswer?: string; context?: { role: string; parts: DatasetPart[] }[]; tags?: string[]; difficulty?: number | string; category?: string; source?: 'manual' | 'session_extract' | 'qa_import'; expectedTools?: { name: string; arguments: Record<string,unknown> }[] }
 export interface RegressionReport { batchId: string; status: string; datasetVersionId: string; baselineBatchId: string; metricVersionId: string; passThreshold: number; regressionThreshold: number; total: number; scored: number; passRate: number | null; box: { min: number; q1: number; median: number; q3: number; max: number; count: number } | null; degraded: { caseKey: string; variantId: string; score: number; baselineScore: number; delta: number; difficulty: string; category: string }[]; byDifficulty: { name: string; count: number; passRate: number | null; averageScore: number | null }[]; byCategory: { name: string; count: number; passRate: number | null; averageScore: number | null }[]; cases: { caseKey: string; variantId: string; score: number | null; baselineScore: number; delta: number | null; passed: boolean | null; difficulty: string; category: string; ruleScore: number | null; judgeScore: number | null }[] }
 export interface Annotation { mine: { rating: number; tags: string[] } | null; summary: { averageRating: number | null; ratingCount: number; tags: { tag: string; count: number }[] } }
 
 export const listMetricVersions = () => http.get<{ items: MetricVersion[] }>('/experiment-metrics');
 export const listDatasets = () => http.get<{ items: Dataset[] }>('/experiment-datasets');
 export const listBaselines = (datasetVersionId: string, metricVersionId: string) => http.get<{ items: { id: string; created_at: string; experiment_title: string }[] }>('/experiment-baselines', { datasetVersionId, metricVersionId });
-export const createDataset = (name: string, cases: DatasetCase[]) => http.post<{ id: string; version: { id: string } }>('/experiment-datasets', { name, cases });
+export const createDataset = (name: string, cases: DatasetCase[], folderId?: string) => http.post<{ id: string; version: { id: string } }>('/experiment-datasets', { name, cases, folderId });
 export const getDatasetVersions = (id: string) => http.get<{ items: { id: string; version: number }[] }>(`/experiment-datasets/${id}/versions`);
+export const getDatasetVersion = (id: string) => http.get<{ id: string; cases: Record<string,unknown>[] }>(`/experiment-dataset-versions/${id}`);
 export const createDatasetVersion = (id: string, cases: DatasetCase[]) => http.post<{ id: string; version: number }>(`/experiment-datasets/${id}/versions`, { cases });
+export const createDatasetSubset = (id: string, versionId: string, name: string, caseKeys: string[], folderId?: string) => http.post<{ id: string }>(`/evaluation/datasets/${id}/subset`, { versionId, name, caseKeys, folderId });
+export const listEvaluationFolders = () => http.get<{ items: { id: string; name: string; parent_id: string | null }[] }>('/evaluation/folders');
+export const createEvaluationFolder = (name: string, parentId?: string) => http.post<{ id: string }>('/evaluation/folders', { name, parentId });
 export const runDataset = (id: string, payload: { datasetVersionId: string; metricVersionId: string; variantIds?: string[] }) => http.post<{ batchId: string }>(`/experiment-definitions/${id}/dataset-run`, payload);
 export const runRegression = (id: string, payload: { datasetVersionId: string; baselineBatchId: string; metricVersionId: string; variantIds?: string[] }) => http.post<{ batchId: string }>(`/experiment-definitions/${id}/regression`, payload);
 export const getRegressionReport = (id: string) => http.get<RegressionReport>(`/experiment-batches/${id}/report`);

@@ -1,27 +1,49 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
 import { createBatch } from './experiment-platform.mjs';
+import { promptMediaPath } from './prompt-media.mjs';
+import { validateEvaluationCases, referencedAssetIds } from './evaluation-datasets.mjs';
+import { BUILT_IN_METRICS, TOKENIZER_VERSION } from './evaluation-metrics.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
 const fail = (error, status = 400) => ok({ error }, status);
 const allowedTags = new Set(['幻觉','不完整','格式错误','推理错误','完美','偏题','冗余']);
 
-function validatedCases(cases) {
-  if (!Array.isArray(cases) || !cases.length || cases.length > 500) throw new Error('数据集版本须含 1–500 条用例');
-  const keys = new Set();
-  return cases.map((item, index) => {
-    const key = String(item.caseKey || '').trim();
-    if (!key || keys.has(key)) throw new Error(`第 ${index + 1} 条用例 ID 缺失或重复`);
-    keys.add(key);
-    if (!item.variables || typeof item.variables !== 'object' || Array.isArray(item.variables) || Object.values(item.variables).some(value => typeof value !== 'string')) throw new Error(`第 ${index + 1} 条变量必须是字符串映射`);
-    return { id: uuid(), key, variables: item.variables, referenceAnswer: typeof item.referenceAnswer === 'string' ? item.referenceAnswer : null, difficulty: item.difficulty ? String(item.difficulty).slice(0, 50) : null, category: item.category ? String(item.category).slice(0, 50) : null };
-  });
+const validatedCases = validateEvaluationCases;
+const GLOBAL_MEDIA_LIMIT = 10 * 1024 ** 3;
+const DATASET_MEDIA_LIMIT = 5 * 1024 ** 3;
+async function validateAssets(client, datasetId, cases) {
+  const ids = [...referencedAssetIds(cases)];
+  if (!ids.length) return;
+  const assets = (await client.query('SELECT id,kind,byte_size,uploaded_by FROM prompt_media_assets WHERE id=ANY($1::text[])', [ids])).rows;
+  if (assets.length !== ids.length) throw new Error('部分媒体附件不存在');
+  const newBytes = assets.reduce((sum, asset) => sum + Number(asset.byte_size), 0);
+  if (newBytes > DATASET_MEDIA_LIMIT) throw new Error('单数据集媒体引用超过 5 GB');
+  const existing = (await client.query('SELECT DISTINCT a.asset_id,p.byte_size FROM evaluation_case_assets a JOIN prompt_media_assets p ON p.id=a.asset_id JOIN experiment_dataset_cases c ON c.id=a.case_id JOIN experiment_dataset_versions v ON v.id=c.dataset_version_id WHERE v.dataset_id=$1', [datasetId])).rows;
+  const existingIds = new Set(existing.map(row => row.asset_id));
+  if (existing.reduce((sum, row) => sum + Number(row.byte_size), 0) + assets.filter(asset => !existingIds.has(asset.id)).reduce((sum, asset) => sum + Number(asset.byte_size), 0) > DATASET_MEDIA_LIMIT) throw new Error('单数据集媒体配额不足');
+  const global = (await client.query('SELECT DISTINCT a.asset_id,p.byte_size FROM evaluation_case_assets a JOIN prompt_media_assets p ON p.id=a.asset_id')).rows;
+  const globalIds = new Set(global.map(row => row.asset_id));
+  if (global.reduce((sum, row) => sum + Number(row.byte_size), 0) + assets.filter(asset => !globalIds.has(asset.id)).reduce((sum, asset) => sum + Number(asset.byte_size), 0) > GLOBAL_MEDIA_LIMIT) throw new Error('评测媒体总配额不足');
+  const stat = await fs.statfs(promptMediaPath(ids[0]));
+  const free = Number(stat.bavail) * Number(stat.bsize), total = Number(stat.blocks) * Number(stat.bsize);
+  if (free < total * 0.2) throw new Error('磁盘剩余空间不足 20%');
 }
 
 async function insertVersion(client, datasetId, version, cases) {
+  const items = validatedCases(cases);
+  await validateAssets(client, datasetId, items);
   const id = uuid();
   await client.query('INSERT INTO experiment_dataset_versions(id,dataset_id,version) VALUES($1,$2,$3)', [id, datasetId, version]);
-  for (const item of validatedCases(cases)) await client.query('INSERT INTO experiment_dataset_cases(id,dataset_version_id,case_key,variables,reference_answer,difficulty,category) VALUES($1,$2,$3,$4,$5,$6,$7)', [item.id, id, item.key, JSON.stringify(item.variables), item.referenceAnswer, item.difficulty, item.category]);
+  for (let index = 0; index < items.length; index += 500) {
+    const chunk = items.slice(index, index + 500);
+    await client.query(`INSERT INTO experiment_dataset_cases(id,dataset_version_id,case_key,variables,reference_answer,difficulty,category,input_payload,expected_payload,context_payload,tags,difficulty_score,source,expected_tools)
+      SELECT item.id,$2,item.key,item.variables,item.reference_answer,item.difficulty,item.category,item.input,item.expected,item.context,item.tags,item.difficulty_score,item.source,item.expected_tools
+      FROM jsonb_to_recordset($1::jsonb) AS item(id text,key text,variables jsonb,reference_answer text,difficulty text,category text,input jsonb,expected jsonb,context jsonb,tags text[],difficulty_score smallint,source text,expected_tools jsonb)`, [JSON.stringify(chunk.map(item => ({ id: item.id, key: item.key, variables: item.variables, reference_answer: item.referenceAnswer, difficulty: item.difficulty, category: item.category, input: item.input, expected: item.expected, context: item.context, tags: item.tags, difficulty_score: item.difficultyScore, source: item.source, expected_tools: item.expectedTools }))), id]);
+    const links = chunk.flatMap(item => [...referencedAssetIds([item])].map(assetId => ({ case_id: item.id, asset_id: assetId })));
+    if (links.length) await client.query('INSERT INTO evaluation_case_assets(case_id,asset_id) SELECT case_id,asset_id FROM jsonb_to_recordset($1::jsonb) AS item(case_id text,asset_id text)', [JSON.stringify(links)]);
+  }
   return { id, datasetId, version };
 }
 
@@ -52,7 +74,51 @@ function titleSimilarity(left, right) {
   return [...a].filter(value => b.has(value)).length / (new Set([...a,...b]).size);
 }
 
-export async function handleExperimentEvaluation({ pathname, method, client, me, readBody, url }) {
+export async function handleExperimentEvaluation(context) {
+  const { client } = context;
+  await client.query('SAVEPOINT evaluation_request');
+  try {
+    const result = await handleExperimentEvaluationInner(context);
+    await client.query('RELEASE SAVEPOINT evaluation_request');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK TO SAVEPOINT evaluation_request');
+    await client.query('RELEASE SAVEPOINT evaluation_request');
+    return fail(error instanceof Error ? error.message : '评测操作失败');
+  }
+}
+
+async function handleExperimentEvaluationInner({ pathname, method, client, me, readBody, url }) {
+  if (pathname === '/api/evaluation/metrics' && method === 'GET') return ok({ tokenizerVersion: TOKENIZER_VERSION, builtIns: BUILT_IN_METRICS, bertScoreEnabled: process.env.EVALUATION_BERTSCORE_ENABLED === 'true' });
+  if (pathname === '/api/evaluation/folders') {
+    if (method === 'GET') return ok({ items: (await client.query('SELECT * FROM evaluation_folders ORDER BY name,id')).rows });
+    if (method === 'POST') {
+      const body = await readBody();
+      if (!String(body.name || '').trim() || String(body.name).length > 120) return fail('文件夹名称须为 1–120 字');
+      if (body.parentId && !(await client.query('SELECT 1 FROM evaluation_folders WHERE id=$1', [body.parentId])).rowCount) return fail('父文件夹不存在', 404);
+      const id = uuid();
+      await client.query('INSERT INTO evaluation_folders(id,name,parent_id,created_by) VALUES($1,$2,$3,$4)', [id, body.name.trim(), body.parentId || null, me.id]);
+      return ok({ id }, 201);
+    }
+  }
+  const folderRoute = pathname.match(/^\/api\/evaluation\/folders\/([^/]+)$/);
+  if (folderRoute && me.role === 'admin') {
+    if (method === 'PATCH') {
+      const body = await readBody();
+      if (!String(body.name || '').trim() || String(body.name).length > 120) return fail('文件夹名称须为 1–120 字');
+      if (body.parentId) {
+        const descendants = (await client.query('WITH RECURSIVE branch AS (SELECT id FROM evaluation_folders WHERE id=$1 UNION ALL SELECT f.id FROM evaluation_folders f JOIN branch b ON f.parent_id=b.id) SELECT id FROM branch', [folderRoute[1]])).rows;
+        if (descendants.some(row => row.id === body.parentId)) return fail('文件夹不能移入自身或子文件夹');
+      }
+      const result = await client.query('UPDATE evaluation_folders SET name=$2,parent_id=$3 WHERE id=$1 RETURNING id', [folderRoute[1], body.name.trim(), body.parentId || null]);
+      return result.rowCount ? ok(result.rows[0]) : fail('文件夹不存在', 404);
+    }
+    if (method === 'DELETE') {
+      const result = await client.query('DELETE FROM evaluation_folders WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM evaluation_folders WHERE parent_id=$1) AND NOT EXISTS(SELECT 1 FROM experiment_datasets WHERE folder_id=$1) RETURNING id', [folderRoute[1]]);
+      return result.rowCount ? ok({ deleted: true }) : fail('文件夹非空或不存在', 409);
+    }
+  }
+  if (folderRoute) return fail('仅管理员可管理文件夹', 403);
   if (pathname === '/api/experiment-baselines' && method === 'GET') {
     const datasetVersionId = url.searchParams.get('datasetVersionId');
     const metricVersionId = url.searchParams.get('metricVersionId');
@@ -65,10 +131,11 @@ export async function handleExperimentEvaluation({ pathname, method, client, me,
     if (method === 'POST') {
       if (me.role !== 'admin') return fail('仅管理员可配置指标', 403);
       const body = await readBody();
-      if (!body.name?.trim() || !['token_f1','exact'].includes(body.ruleType) || typeof body.passThreshold !== 'number' || body.passThreshold < 0 || body.passThreshold > 5 || typeof body.regressionThreshold !== 'number' || body.regressionThreshold < 0 || body.regressionThreshold > 5 || !body.judgePrompt?.trim()) return fail('指标配置无效');
+      if (!body.name?.trim() || !['token_f1','exact','bleu','rouge_l','tool_selection','parameter_accuracy','bertscore'].includes(body.ruleType) || typeof body.passThreshold !== 'number' || body.passThreshold < 0 || body.passThreshold > 5 || typeof body.regressionThreshold !== 'number' || body.regressionThreshold < 0 || body.regressionThreshold > 5 || !body.judgePrompt?.trim()) return fail('指标配置无效');
+      if (body.ruleType === 'bertscore' && process.env.EVALUATION_BERTSCORE_ENABLED !== 'true') return fail('BERTScore worker 尚未启用', 409);
       const version = (await client.query('SELECT COALESCE(max(version),0)+1 AS next FROM experiment_metric_versions WHERE name=$1', [body.name.trim()])).rows[0].next;
       const id = uuid();
-      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt) VALUES($1,$2,$3,$4,$5,$6,$7)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt]);
+      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION]);
       return ok({ id, version }, 201);
     }
   }
@@ -77,13 +144,27 @@ export async function handleExperimentEvaluation({ pathname, method, client, me,
     if (method === 'POST') {
       const body = await readBody();
       if (!body.name?.trim()) return fail('数据集名称为必填');
-      let cases;
-      try { cases = validatedCases(body.cases); } catch (error) { return fail(error.message); }
+      try { validatedCases(body.cases); } catch (error) { return fail(error.message); }
+      if (body.folderId && !(await client.query('SELECT 1 FROM evaluation_folders WHERE id=$1', [body.folderId])).rowCount) return fail('文件夹不存在', 404);
       const id = uuid();
-      await client.query('INSERT INTO experiment_datasets(id,name,owner_id) VALUES($1,$2,$3)', [id, body.name.trim(), me.id]);
-      const version = await insertVersion(client, id, 1, cases.map(item => ({ caseKey: item.key, variables: item.variables, referenceAnswer: item.referenceAnswer, difficulty: item.difficulty, category: item.category })));
+      await client.query('INSERT INTO experiment_datasets(id,name,owner_id,folder_id,parent_version_id) VALUES($1,$2,$3,$4,$5)', [id, body.name.trim(), me.id, body.folderId || null, body.parentVersionId || null]);
+      const version = await insertVersion(client, id, 1, body.cases);
       return ok({ id, name: body.name.trim(), version }, 201);
     }
+  }
+  const subsetRoute = pathname.match(/^\/api\/evaluation\/datasets\/([^/]+)\/subset$/);
+  if (subsetRoute && method === 'POST') {
+    const body = await readBody();
+    const parent = (await client.query('SELECT v.*,d.owner_id FROM experiment_dataset_versions v JOIN experiment_datasets d ON d.id=v.dataset_id WHERE v.id=$1 AND v.dataset_id=$2', [body.versionId, subsetRoute[1]])).rows[0];
+    if (!parent) return fail('源版本不存在', 404);
+    if (me.role !== 'admin' && parent.owner_id !== me.id) return fail('无权创建子集', 403);
+    if (!Array.isArray(body.caseKeys) || !body.caseKeys.length || body.caseKeys.length > 10000 || !String(body.name || '').trim()) return fail('请选择用例及子集名称');
+    const cases = (await client.query('SELECT * FROM experiment_dataset_cases WHERE dataset_version_id=$1 AND case_key=ANY($2::text[])', [parent.id, body.caseKeys])).rows;
+    if (cases.length !== new Set(body.caseKeys).size) return fail('部分用例不在源版本内');
+    const id = uuid();
+    await client.query('INSERT INTO experiment_datasets(id,name,owner_id,folder_id,parent_version_id) VALUES($1,$2,$3,$4,$5)', [id, body.name.trim(), me.id, body.folderId || null, parent.id]);
+    const version = await insertVersion(client, id, 1, cases.map(row => ({ caseKey: row.case_key, variables: row.variables, input: row.input_payload, expectedOutput: row.expected_payload, context: row.context_payload, tags: row.tags, difficulty: row.difficulty_score ?? row.difficulty, category: row.category, source: row.source, expectedTools: row.expected_tools })));
+    return ok({ id, version }, 201);
   }
   const datasetRoute = pathname.match(/^\/api\/experiment-datasets\/([^/]+)\/versions$/);
   if (datasetRoute) {
@@ -102,7 +183,7 @@ export async function handleExperimentEvaluation({ pathname, method, client, me,
   if (versionRoute && method === 'GET') {
     const version = (await client.query('SELECT * FROM experiment_dataset_versions WHERE id=$1', [versionRoute[1]])).rows[0];
     if (!version) return fail('版本不存在', 404);
-    const cases = (await client.query('SELECT id,case_key,variables,reference_answer,difficulty,category FROM experiment_dataset_cases WHERE dataset_version_id=$1 ORDER BY case_key', [version.id])).rows;
+    const cases = (await client.query('SELECT id,case_key,variables,reference_answer,difficulty,category,input_payload,expected_payload,context_payload,tags,difficulty_score,source,expected_tools FROM experiment_dataset_cases WHERE dataset_version_id=$1 ORDER BY case_key', [version.id])).rows;
     return ok({ ...version, cases });
   }
   const datasetRunRoute = pathname.match(/^\/api\/experiment-definitions\/([^/]+)\/(dataset-run|regression)$/);

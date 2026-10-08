@@ -433,12 +433,17 @@
 ### 7. Evaluation（评测中心）
 
 - [ ] **7.1 评测数据集管理**
+  - [x] 已接通文件夹、不可变版本、固定版本子集和 10,000 条用例的批量写入；旧实验数据集接口继续可用
+  - [x] CSV／JSONL 在页面解析、列映射及错误行预览，确认时由服务端再次校验；支持 UTF-8／GBK
+  - [ ] 继续完善媒体附件配额的管理员配置和完整服务端导入错误报告
   - [ ] 每条数据：input（用户消息）、expectedOutput（golden answer，可选）、context（前置对话数组）、tags[]、difficulty（1-5）、source（manual/session_extract/qa_import）
   - [ ] 数据集按文件夹组织；支持创建子集（从主集筛选部分数据）
   - [ ] CSV/JSONL 导入：解析 → 字段映射 → 预览 → 确认导入
   - [ ] 数据集版本管理：每次编辑生成版本快照
   - [ ] AC：单数据集最大 10,000 条
 - [ ] **7.2 评测指标定义**
+  - [x] Exact、F1、BLEU、ROUGE-L、工具选择、工具参数的确定性计算及延迟分位数／输出 token 汇总函数已有单元测试
+  - [ ] 将工具和效率指标接入运行结果；实现隔离 Python 指标与 BERTScore worker（当前 2 GB 主机默认关闭）
   - [ ] 文本指标：Exact Match、F1、BLEU、ROUGE-L、BERTScore
   - [ ] 工具调用指标：Tool Selection Accuracy（工具名是否匹配）、Parameter Accuracy（参数是否正确）
   - [ ] 效率指标：平均延迟 P50/P95/P99、平均输出 token 数

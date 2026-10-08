@@ -1,21 +1,10 @@
 import crypto from 'node:crypto';
+import { scoreBuiltIn } from './evaluation-metrics.mjs';
 
-const clean = text => String(text || '').trim().toLocaleLowerCase();
-function words(text) {
-  const segmenter = new Intl.Segmenter('zh-CN', { granularity: 'word' });
-  return [...segmenter.segment(clean(text))].filter(item => item.isWordLike).map(item => item.segment);
-}
 export function ruleScore(output, reference, type) {
   if (reference === null || reference === undefined || !String(reference).trim()) return null;
-  if (type === 'exact') return clean(output) === clean(reference) ? 5 : 0;
-  const expected = words(reference), actual = words(output);
-  if (!expected.length || !actual.length) return 0;
-  const counts = new Map();
-  for (const word of expected) counts.set(word, (counts.get(word) || 0) + 1);
-  let overlap = 0;
-  for (const word of actual) { const count = counts.get(word) || 0; if (count) { overlap++; counts.set(word, count - 1); } }
-  const precision = overlap / actual.length, recall = overlap / expected.length;
-  return precision + recall ? Math.round(5 * 2 * precision * recall / (precision + recall) * 1000) / 1000 : 0;
+  if (['exact','token_f1','bleu','rouge_l'].includes(type)) return Math.round(5000 * scoreBuiltIn(type, { output, expectedOutput: reference })) / 1000;
+  return null;
 }
 export function combineScores(rule, judge) {
   if (typeof judge !== 'number' || !Number.isFinite(judge) || judge < 0 || judge > 5) return null;

@@ -71,6 +71,7 @@ body { min-width: 320px; -webkit-font-smoothing: antialiased; }
 .ant-table-cell .ant-typography-secondary { line-height: 1.6; }
 .ant-table-cell .ant-btn-link { padding-inline: 5px; }
 .ant-table-cell .ant-progress { min-width: 90px; }
+.evaluation-invalid-row > td { background: color-mix(in srgb, var(--ant-color-error, #ff4d4f) 10%, transparent) !important; }
 .ant-tag { border-radius: 5px; font-size: 11px; padding: 1px 7px; }
 .ant-btn, .ant-input, .ant-input-affix-wrapper, .ant-select-selector { transition: background .18s, border-color .18s, box-shadow .18s; }
 .ant-input::placeholder, .ant-select-selection-placeholder { color: #818aa3 !important; }
