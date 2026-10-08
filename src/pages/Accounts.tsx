@@ -1,3 +1,4 @@
+import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useState } from "react";
 import {
   App,
@@ -137,6 +138,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
 }
 
 export default function Accounts() {
+  const { pageSize } = useSettings();
   const { message } = App.useApp();
   const [items, setItems] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
@@ -288,7 +290,7 @@ export default function Accounts() {
         columns={columns}
         dataSource={items}
         scroll={{ x: 900 }}
-        pagination={{ pageSize: 8, showSizeChanger: false }}
+        pagination={{ pageSize, showSizeChanger: false }}
       />
       <AccountFormDrawer
         open={drawerOpen}

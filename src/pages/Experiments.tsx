@@ -1,3 +1,4 @@
+import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useState } from "react";
 import {
   App,
@@ -128,6 +129,7 @@ export function ExperimentFormDrawer({ open, initial, tasks, defaultTaskId, onCl
 }
 
 export default function Experiments() {
+  const { pageSize } = useSettings();
   const { message } = App.useApp();
   const navigate = useNavigate();
   const [searchParams,setSearchParams]=useSearchParams();
@@ -288,7 +290,7 @@ export default function Experiments() {
         columns={columns}
         dataSource={items}
         scroll={{ x: 900 }}
-        pagination={{ pageSize: 8, showSizeChanger: false }}
+        pagination={{ pageSize, showSizeChanger: false }}
       />
       <ExperimentFormDrawer
         open={drawerOpen}

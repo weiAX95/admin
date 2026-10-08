@@ -41,6 +41,7 @@ import { canReadSharedExperimentAsset, handleExperimentSharing, handlePublicExpe
 import { deliverAppEmails } from "./app-notifications.mjs";
 import { handleExperimentSchedules, processDueExperimentSchedules } from "./experiment-schedules.mjs";
 import { handlePrompts } from "./prompts.mjs";
+import { getGlobalSettings, handleSystemSettings } from "./system-settings.mjs";
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -476,6 +477,8 @@ async function handleRequest(req, res) {
     if (publicShare) return send(res, publicShare.status, publicShare.data);
     const publicEvaluationReport = await handlePublicEvaluationReport({ pathname, method, client: activeClient });
     if (publicEvaluationReport) return send(res, publicEvaluationReport.status, publicEvaluationReport.data);
+    const publicSettings = await handleSystemSettings({ pathname, method, client: activeClient, me: null });
+    if (publicSettings) return send(res, publicSettings.status, publicSettings.data);
     // ---- 登录（免鉴权）----
     if (method === "POST" && pathname === "/api/auth/login") {
       const body = await readBody(req);
@@ -487,7 +490,8 @@ async function handleRequest(req, res) {
         return send(res, 403, { error: "账号已被禁用，请联系管理员" });
       }
       const token = crypto.randomBytes(32).toString("hex");
-      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+interval '7 days')", [sha256(token), account.id]);
+      const { sessionHours } = await getGlobalSettings(activeClient);
+      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3 * interval '1 hour'))", [sha256(token), account.id, sessionHours]);
       return send(res, 200, { token, user: publicUser(account) });
     }
 
@@ -496,6 +500,9 @@ async function handleRequest(req, res) {
     if (!username) return send(res, 401, { error: "未登录或登录已过期" });
     const me = db.users.find((u) => u.username === username) || null;
     if (!me) return send(res, 401, { error: "登录账号不存在，请重新登录" });
+
+    const settingsResponse = await handleSystemSettings({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (settingsResponse) return send(res, settingsResponse.status, settingsResponse.data);
 
     const promptResponse = await handlePrompts({ pathname, method, client: activeClient, me, readBody: () => readBody(req), url });
     if (promptResponse) return send(res, promptResponse.status, promptResponse.data);
@@ -1606,6 +1613,7 @@ const server = http.createServer((req, res) => {
     const pending = res.__pending || { status: 500, payload: { error: "接口没有返回结果" } };
     send(res, pending.status, pending.payload);
     if (changed) notifyLive();
+    if (req.method === 'PUT' && new URL(req.url, 'http://localhost').pathname.startsWith('/api/settings/') && pending.status === 200) notifyLive('settings_changed');
   }).catch(error => {
     console.error("[api] request failed:", error);
     send(res, 500, { error: "数据库操作失败" });
@@ -1639,8 +1647,8 @@ liveServer.on("connection", (ws) => {
   ws.on("close", () => { clearTimeout(authTimeout); liveClients.delete(ws); });
   ws.on("error", () => { clearTimeout(authTimeout); liveClients.delete(ws); });
 });
-notifyLive = () => {
-  const payload = JSON.stringify({ type: "stats_changed" });
+notifyLive = (type = 'stats_changed') => {
+  const payload = JSON.stringify({ type });
   for (const [ws, token] of liveClients) {
     void lookupSession(token).then(active => {
       if (!active) { ws.close(1008, "authentication expired"); liveClients.delete(ws); return; }

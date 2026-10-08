@@ -4,9 +4,11 @@ import { ArrowRightOutlined, ExperimentOutlined, LockOutlined, ProfileOutlined, 
 import { useNavigate } from "react-router-dom";
 import { login } from "../api/auth";
 import { setAuth } from "../api/client";
+import { useSettings } from "../components/SettingsProvider";
 
 interface LoginForm { username: string; password: string }
 export default function Login() {
+  const { brand, refresh } = useSettings();
   const [loading, setLoading] = useState(false);
   const { message } = App.useApp();
   const navigate = useNavigate();
@@ -15,6 +17,7 @@ export default function Login() {
     try {
       const res = await login(values.username, values.password);
       setAuth(res.token, res.user);
+      await refresh();
       message.success("登录成功");
       navigate("/", { replace: true });
     } catch (err) { message.error(err instanceof Error ? err.message : "登录失败"); }
@@ -24,7 +27,7 @@ export default function Login() {
     <main className="login-page">
       <div className="login-shell">
         <section className="login-story">
-          <div className="login-brand"><span className="brand-mark"><RocketOutlined /></span><strong>Agent 学习管理端</strong></div>
+          <div className="login-brand"><span className="brand-mark">{brand.logoUrl ? <img src={brand.logoUrl} alt="" style={{ width: 30, height: 30, objectFit: 'contain' }} /> : <RocketOutlined />}</span><strong>{brand.systemName}</strong></div>
           <div className="login-intro"><span className="page-eyebrow">YOUR LEARNING WORKSPACE</span>
             <h1>把每一次探索，<br />变成持续的进步<span>。</span></h1>
             <p>规划学习路径，沉淀对话与思考。<br />在一个工作空间里，连接目标、知识与实践。</p>

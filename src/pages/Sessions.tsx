@@ -1,3 +1,4 @@
+import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useState } from "react";
 import { App, Button, Card, Empty, Modal, Select, Space, Spin, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -10,6 +11,7 @@ import { NoteFormDrawer } from "./Notes";
 import type { LearningTask, MessageAnnotationTag, NotePayload, SessionDetail, SessionMessage, SessionSummary } from "../types";
 
 export default function Sessions() {
+  const { pageSize } = useSettings();
   const [searchParams] = useSearchParams();
   const requestedSessionId = searchParams.get("sessionId");
   const { message } = App.useApp();
@@ -95,7 +97,7 @@ export default function Sessions() {
   };
 
   return <Card className="collection-card" title={<span className="collection-title">会话列表<span className="collection-count">{items.length} 条</span></span>}>
-    <Table rowKey="id" loading={loading} columns={columns} dataSource={items} scroll={{ x: 760 }} pagination={{ pageSize: 8, showSizeChanger: false, current: page, onChange: setPage }}
+    <Table rowKey="id" loading={loading} columns={columns} dataSource={items} scroll={{ x: 760 }} pagination={{ pageSize, showSizeChanger: false, current: page, onChange: setPage }}
       onRow={row => ({ onClick: () => toggle(row.id), className: "session-clickable-row" })}
       expandable={{ expandedRowRender: expandedRow, expandedRowKeys: expandedId ? [expandedId] : [], showExpandColumn: false, onExpand: (_, row) => toggle(row.id) }} />
     <Modal title="关联到学习任务" open={linkMsg !== null} onCancel={() => { setLinkMsg(null); setLinkSessionId(null); setLinkTaskId(undefined); }}

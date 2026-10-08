@@ -3,7 +3,7 @@ import { Avatar, Badge, Button, Drawer, Empty, Layout, Menu, Popover, Space, Typ
 import {
   BellOutlined, DashboardOutlined, ExperimentOutlined, FileTextOutlined, LogoutOutlined,
   MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined, MessageOutlined,
-  ProfileOutlined, RocketOutlined, TeamOutlined,
+  ProfileOutlined, RocketOutlined, SettingOutlined, TeamOutlined,
 } from "@ant-design/icons";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { clearAuth, getStoredUser, getToken } from "../api/client";
@@ -11,6 +11,7 @@ import { logout } from "../api/auth";
 import type { AuthUser } from "../types";
 import type { ReviewNotification } from "../types";
 import { listNotifications, markNotificationRead } from "../api/reviews";
+import { useSettings } from "../components/SettingsProvider";
 
 const { Header, Sider, Content } = Layout;
 const MENU_ITEMS = [
@@ -27,6 +28,7 @@ const MENU_ITEMS = [
   { key: "/prompts", icon: <FileTextOutlined />, label: "提示词库" },
 ];
 const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号管理" };
+const SETTINGS_ITEM = { key: "/settings", icon: <SettingOutlined />, label: "系统设置" };
 const EVALUATION_ADMIN_ITEM = { key: "/evaluation/candidates", icon: <ExperimentOutlined />, label: "评测候选池" };
 const EVALUATION_ALERTS_ITEM = { key: "/evaluation/alerts", icon: <BellOutlined />, label: "退化告警" };
 const PAGE_META: Record<string, { title: string; description: string; section: string }> = {
@@ -44,9 +46,11 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/evaluation/alerts": { title: "退化告警", description: "查看可比用例的逐指标下降并导出退化列表。", section: "评测中心" },
   "/prompts": { title: "提示词库", description: "管理版本、变量与提示词结构。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
+  "/settings": { title: "系统设置", description: "配置工作空间与个人偏好。", section: "系统管理" },
 };
 
 export default function AdminLayout() {
+  const { brand, refresh } = useSettings();
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
@@ -68,22 +72,26 @@ export default function AdminLayout() {
     const socket = new WebSocket(url);
     socket.onopen = () => socket.send(JSON.stringify({ type: "auth", token: getToken() }));
     socket.onmessage = event => {
-      try { if (JSON.parse(String(event.data)).type === "stats_changed") refreshNotifications(); }
+      try {
+        const type = JSON.parse(String(event.data)).type;
+        if (type === "stats_changed") refreshNotifications();
+        if (type === "settings_changed") void refresh();
+      }
       catch { /* Ignore malformed optional live events; polling remains active. */ }
     };
     return () => socket.close();
-  }, [refreshNotifications]);
+  }, [refreshNotifications, refresh]);
   const user = getStoredUser<AuthUser>();
-  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, ACCOUNTS_ITEM] : MENU_ITEMS;
+  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, ACCOUNTS_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, SETTINGS_ITEM];
   const selected = menuItems.map((m) => m.key)
     .filter((k) => k === "/" ? location.pathname === "/" : location.pathname.startsWith(k))
     .sort((a, b) => b.length - a.length)[0] || "/";
   const page = PAGE_META[selected];
   const name = user?.name || user?.username || "未登录";
-  const brand = (
+  const brandNode = (
     <div className="sidebar-brand">
-      <span className="brand-mark"><RocketOutlined /></span>
-      <div className="brand-copy"><strong>Agent 学习管理端</strong><span>LEARNING WORKSPACE</span></div>
+      <span className="brand-mark">{brand.logoUrl ? <img src={brand.logoUrl} alt="" style={{ width: 30, height: 30, objectFit: 'contain' }} /> : <RocketOutlined />}</span>
+      <div className="brand-copy"><strong>{brand.systemName}</strong><span>LEARNING WORKSPACE</span></div>
     </div>
   );
   const menu = (
@@ -94,7 +102,7 @@ export default function AdminLayout() {
     <Layout className="admin-shell">
       <Sider className="admin-sidebar" theme="dark" width={240} collapsedWidth={80}
         collapsed={collapsed} breakpoint="lg" onBreakpoint={setCollapsed}>
-        {brand}
+        {brandNode}
         <div className="sidebar-label">工作空间</div>
         {menu}
         <div className="sidebar-bottom">
@@ -105,7 +113,7 @@ export default function AdminLayout() {
           </Button>
         </div>
       </Sider>
-      <Drawer className="mobile-navigation" title={brand} placement="left" width={280}
+      <Drawer className="mobile-navigation" title={brandNode} placement="left" width={280}
         open={mobileOpen} onClose={() => setMobileOpen(false)}>{menu}</Drawer>
       <Layout className="admin-main">
         <Header className="admin-header">
@@ -139,7 +147,7 @@ export default function AdminLayout() {
               <div className="workspace-badge"><span className="status-dot" />学习工作空间</div>
             </div>
             <Outlet />
-            <footer className="workspace-footer">Agent 学习管理端 <span>让学习与实践形成闭环</span></footer>
+            <footer className="workspace-footer">{brand.systemName} <span>让学习与实践形成闭环</span></footer>
           </div>
         </Content>
       </Layout>

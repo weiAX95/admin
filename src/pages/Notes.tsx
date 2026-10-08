@@ -1,3 +1,4 @@
+import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   App,
@@ -146,6 +147,7 @@ export function NoteFormDrawer({ open, initial, tasks, notes = EMPTY_NOTES, cate
 }
 
 export default function Notes() {
+  const { pageSize } = useSettings();
   const { message } = App.useApp();
   const [items, setItems] = useState<Note[]>([]);
   const [categories, setCategories] = useState<NoteCategory[]>([]);
@@ -367,7 +369,7 @@ export default function Notes() {
         columns={columns}
         dataSource={items}
         scroll={{ x: 1050 }}
-        pagination={{ pageSize: 8, showSizeChanger: false }}
+        pagination={{ pageSize, showSizeChanger: false }}
         locale={{ emptyText: <div className="note-search-empty"><Typography.Text type="secondary">未找到，试试其他关键词</Typography.Text><Button type="primary" size="small" onClick={() => { setEditing(null); setDrawerOpen(true); }}>创建新笔记</Button></div> }}
       /></div></div>
       <NoteFormDrawer

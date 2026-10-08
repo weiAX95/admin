@@ -5,6 +5,13 @@
   --muted: #9ca3bb;
   --accent: #9582ff;
 }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --surface: #fff;
+  --line: #dfe3eb;
+  --muted: #586174;
+  --accent: var(--brand-primary, #9582ff);
+}
 * { box-sizing: border-box; }
 body { min-width: 320px; -webkit-font-smoothing: antialiased; }
 ::selection { background: #51447d; color: #fff; }
@@ -14,6 +21,18 @@ body { min-width: 320px; -webkit-font-smoothing: antialiased; }
 ::-webkit-scrollbar-thumb { background: #343b52; border-radius: 10px; }
 ::-webkit-scrollbar-thumb:hover { background: #505975; }
 .admin-shell { min-height: 100vh; }
+:root[data-density="compact"] .admin-content .ant-card-body { padding: 14px; }
+:root[data-density="compact"] .admin-content { padding: 20px; }
+:root[data-theme="light"] .admin-main { background: #f4f6fb; }
+:root[data-theme="light"] .admin-shell .admin-header { background: #ffffffee; }
+:root[data-theme="light"] .header-breadcrumb strong { color: #30384a; }
+:root[data-theme="light"] .workspace-badge, :root[data-theme="light"] .dashboard-filter .ant-segmented { background: #fff; color: #475166; }
+:root[data-theme="light"] .ant-form-item-label > label { color: #30384a !important; }
+:root[data-theme="light"] .login-page { background: #f4f6fb; }
+:root[data-theme="light"] .login-panel { background: #fff; }
+:root[data-theme="light"] .login-panel h2 { color: #222c42; }
+:root[data-theme="light"] .login-panel .ant-input-affix-wrapper { background: #fff; }
+:root[data-theme="light"] .session-message-content { color: #30384a; }
 .admin-shell .admin-sidebar { background: #101320; border-right: 1px solid var(--line); position: sticky; top: 0; height: 100vh; flex-shrink: 0; }
 .admin-sidebar .ant-layout-sider-children { display: flex; flex-direction: column; }
 .sidebar-brand { display: flex; align-items: center; gap: 12px; padding: 28px 22px 30px; overflow: hidden; }

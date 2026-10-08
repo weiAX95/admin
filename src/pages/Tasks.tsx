@@ -1,3 +1,4 @@
+import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -111,6 +112,7 @@ function noteExcerpt(notes: string, keyword: string) {
 }
 
 export default function Tasks() {
+  const { pageSize } = useSettings();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { message, modal } = App.useApp();
@@ -526,7 +528,7 @@ export default function Tasks() {
           getCheckboxProps: () => ({ disabled: bulkBusy }),
         }}
         scroll={{ x: 1100 }}
-        pagination={{ pageSize: 8, showSizeChanger: false }}
+        pagination={{ pageSize, showSizeChanger: false }}
       /> : view === "gantt" ? <Spin spinning={loading}><TaskGantt tasks={sortedItems} onRefresh={() => refresh(query)} /></Spin> : <Spin spinning={loading}><TaskKanban tasks={sortedItems} onRefresh={() => refresh(query)} /></Spin>}
 
       {view === "table" && selectedKeys.length > 0 && <div className="task-bulk-bar" role="region" aria-label="批量操作">
