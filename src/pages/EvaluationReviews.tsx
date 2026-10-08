@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, App, Button, Card, Empty, Form, InputNumber, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Empty, Form, InputNumber, Modal, Select, Space, Table, Tag, Typography, theme } from 'antd';
 import { listAccounts } from '../api/accounts';
 import { assignAdjudicator, createReviewTask, getReviewInbox, getReviewReport, listReviewableBatches, listReviewTasks, saveReviewScore } from '../api/evaluationReviews';
 import type { ReviewInbox, ReviewReport, ReviewTask } from '../api/evaluationReviews';
@@ -12,6 +12,7 @@ const initialScore: Score = { accuracy: 5, completeness: 5, brevity: 5, safety: 
 
 export default function EvaluationReviews() {
   const { message } = App.useApp();
+  const { token } = theme.useToken();
   const admin = getStoredUser<Account>()?.role === 'admin';
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -73,6 +74,10 @@ export default function EvaluationReviews() {
     {selected && admin && report && <Card title="管理员一致性报告">
       <Space wrap><Tag>已完成双人评分 {report.reviewedPairs} 条</Tag><Tag color={report.qualityWarning ? 'orange' : 'green'}>总体 Kappa：{report.overallKappa === null ? '暂无数据' : report.overallKappa.toFixed(3)}</Tag><Tag color="orange">待仲裁 {report.disputes.filter(item => !item.adjudicated).length} 条</Tag></Space>
       <Table style={{ marginTop: 16 }} rowKey="dimension" pagination={false} dataSource={dimensions.map(dimension => ({ dimension: dimension.label, value: report.kappa[dimension.key] }))} columns={[{ title: '维度', dataIndex: 'dimension' }, { title: '二次加权 Kappa', render: (_, row) => row.value === null ? '暂无数据' : row.value.toFixed(3) }]} />
+      <Typography.Title level={5}>Kappa 分维度分布</Typography.Title>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:12}}>{dimensions.map(dimension=>{const value=report.kappa[dimension.key];return <div key={dimension.key} title={`${dimension.label} Kappa：${value===null?'暂无数据':value.toFixed(3)}`}><Typography.Text>{dimension.label} · {value===null?'—':value.toFixed(3)}</Typography.Text><div style={{height:12,marginTop:6,background:token.colorFillSecondary,borderRadius:6}}><div style={{height:'100%',width:`${Math.max(0,Math.min(100,(value??0)*100))}%`,background:value!==null&&value<0.6?token.colorWarning:token.colorPrimary,borderRadius:6}} /></div></div>})}</div>
+      <Typography.Title level={5} style={{marginTop:20}}>评分分布</Typography.Title>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(11,minmax(0,1fr))',gap:5,alignItems:'end',height:120}}>{report.distribution.map(item=><div key={item.score} title={`${item.score} 分：${item.count} 条`} style={{height:'100%',display:'flex',flexDirection:'column',justifyContent:'end',textAlign:'center'}}><div style={{minHeight:item.count?3:0,height:`${report.reviewedPairs?item.count/report.reviewedPairs*85:0}%`,background:token.colorPrimary,borderRadius:3}}/><Typography.Text style={{fontSize:11}}>{item.score}</Typography.Text></div>)}</div>
       <Typography.Title level={5}>争议条目</Typography.Title><Table size="small" rowKey="runId" pagination={{ pageSize: 10 }} dataSource={report.disputes} columns={[{ title: '运行 ID', dataIndex: 'runId' }, { title: '差异维度', render: (_, item) => item.dimensions.join('、') }, { title: '状态', render: (_, item) => item.adjudicated ? '已仲裁' : '待仲裁' }]} />
       {report.disputes.some(item => !item.adjudicated) && <Space><Select aria-label="选择仲裁员" value={adjudicatorId} onChange={setAdjudicatorId} style={{ width: 240 }} options={accounts.filter(account => account.status === 'active').map(account => ({ value: account.id, label: account.name }))} /><Button disabled={!adjudicatorId} onClick={() => { if (!adjudicatorId) return; void assignAdjudicator(selected, adjudicatorId).then(() => { message.success('仲裁员已指派'); return refreshTask(selected); }).catch(cause => message.error(cause.message)); }}>指派仲裁员</Button></Space>}
     </Card>}
