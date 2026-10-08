@@ -1,0 +1,1 @@
+ALTER TABLE experiment_metric_versions ADD COLUMN goal_ranges jsonb NOT NULL DEFAULT '{"accuracy":{"min":0,"max":5,"higher":true},"latency":{"min":0,"max":10000,"higher":false},"tokens":{"min":0,"max":4096,"higher":false}}'::jsonb;

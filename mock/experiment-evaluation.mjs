@@ -4,6 +4,7 @@ import { createBatch } from './experiment-platform.mjs';
 import { promptMediaPath } from './prompt-media.mjs';
 import { validateEvaluationCases, referencedAssetIds, caseInputFingerprint } from './evaluation-datasets.mjs';
 import { BUILT_IN_METRICS, TOKENIZER_VERSION, summarizeEfficiency } from './evaluation-metrics.mjs';
+import { rankModels, validateGoalRanges } from './evaluation-ranking.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -108,6 +109,16 @@ export async function handleExperimentEvaluation(context) {
 }
 
 async function handleExperimentEvaluationInner({ pathname, method, client, me, readBody, url }) {
+  if (pathname === '/api/evaluation/leaderboard' && method === 'GET') {
+    const datasetVersionId = url.searchParams.get('datasetVersionId'), metricVersionId = url.searchParams.get('metricVersionId');
+    if (!datasetVersionId || !metricVersionId) return fail('请选择固定数据集和指标版本');
+    const metric = (await client.query('SELECT goal_ranges FROM experiment_metric_versions WHERE id=$1', [metricVersionId])).rows[0];
+    if (!metric) return fail('指标版本不存在', 404);
+    let weights;
+    try { weights = JSON.parse(url.searchParams.get('weights') || '{"accuracy":0.4,"latency":0.3,"tokens":0.3}'); } catch { return fail('权重格式无效'); }
+    const rows = (await client.query("SELECT r.model_id,r.api_model,r.auto_score,r.latency_ms,r.completion_tokens FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id WHERE b.dataset_version_id=$1 AND b.metric_version_id=$2 AND r.status='completed'", [datasetVersionId,metricVersionId])).rows;
+    try { return ok({ datasetVersionId,metricVersionId,...rankModels(rows,metric.goal_ranges,weights) }); } catch (error) { return fail(error.message); }
+  }
   if (pathname === '/api/evaluation/candidates' && method === 'GET') {
     if (me.role !== 'admin') return fail('仅管理员可审核候选池', 403);
     const status = url.searchParams.get('status') || 'pending';
@@ -192,9 +203,11 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
       const body = await readBody();
       if (!body.name?.trim() || !['token_f1','exact','bleu','rouge_l','tool_selection','parameter_accuracy','bertscore'].includes(body.ruleType) || typeof body.passThreshold !== 'number' || body.passThreshold < 0 || body.passThreshold > 5 || typeof body.regressionThreshold !== 'number' || body.regressionThreshold < 0 || body.regressionThreshold > 5 || !body.judgePrompt?.trim()) return fail('指标配置无效');
       if (body.ruleType === 'bertscore' && process.env.EVALUATION_BERTSCORE_ENABLED !== 'true') return fail('BERTScore worker 尚未启用', 409);
+      let goalRanges;
+      try { goalRanges = validateGoalRanges(body.goalRanges); } catch (error) { return fail(error.message); }
       const version = (await client.query('SELECT COALESCE(max(version),0)+1 AS next FROM experiment_metric_versions WHERE name=$1', [body.name.trim()])).rows[0].next;
       const id = uuid();
-      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION]);
+      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version,goal_ranges) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION,JSON.stringify(goalRanges)]);
       return ok({ id, version }, 201);
     }
   }

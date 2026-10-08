@@ -35,6 +35,7 @@ import { handleExperimentPlatform } from "./experiment-platform.mjs";
 import { recoverExperimentJobs, runExperimentJobs } from "./experiment-runner.mjs";
 import { handleExperimentEvaluation, syncEvaluationCandidate } from "./experiment-evaluation.mjs";
 import { handleEvaluationReviews } from "./evaluation-review-api.mjs";
+import { handleEvaluationSchedules, processDueEvaluationSchedules } from "./evaluation-schedules.mjs";
 import { canReadSharedExperimentAsset, handleExperimentSharing, handlePublicExperimentShare } from "./experiment-sharing.mjs";
 import { deliverAppEmails } from "./app-notifications.mjs";
 import { handleExperimentSchedules, processDueExperimentSchedules } from "./experiment-schedules.mjs";
@@ -502,6 +503,8 @@ async function handleRequest(req, res) {
     if (evaluationResponse) return send(res, evaluationResponse.status, evaluationResponse.data);
     const reviewResponse = await handleEvaluationReviews({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (reviewResponse) return send(res, reviewResponse.status, reviewResponse.data);
+    const evaluationScheduleResponse = await handleEvaluationSchedules({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (evaluationScheduleResponse) return send(res, evaluationScheduleResponse.status, evaluationScheduleResponse.data);
     const sharingResponse = await handleExperimentSharing({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (sharingResponse) return send(res, sharingResponse.status, sharingResponse.data);
     const scheduleResponse = await handleExperimentSchedules({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
@@ -1694,7 +1697,7 @@ try {
       catch (error) { console.error("[experiments] schedule failed:", error); }
     };
     void runSchedules();
-    setInterval(() => { void runSchedules(); }, 1000).unref();
+    setInterval(() => { void runSchedules(); void processDueEvaluationSchedules(pool).catch(error => console.error('[evaluation-schedules] processing failed:',error)); }, 1000).unref();
   });
 } catch (error) {
   console.error("[mock] PostgreSQL 不可用或尚未迁移：", error.message);

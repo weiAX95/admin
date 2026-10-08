@@ -21,6 +21,8 @@ const MENU_ITEMS = [
   { key: "/notes/reviews", icon: <BellOutlined />, label: "复习面板" },
   { key: "/experiments", icon: <ExperimentOutlined />, label: "实验记录" },
   { key: "/evaluation/reviews", icon: <ProfileOutlined />, label: "人工评测" },
+  { key: "/evaluation/leaderboard", icon: <ExperimentOutlined />, label: "模型排行榜" },
+  { key: "/evaluation/schedules", icon: <BellOutlined />, label: "定时评测" },
   { key: "/prompts", icon: <FileTextOutlined />, label: "提示词库" },
 ];
 const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号管理" };
@@ -34,6 +36,8 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/experiments": { title: "实验记录", description: "记录提示词、模型与结果，让每一次尝试都成为经验。", section: "学习工作台" },
   "/evaluation/reviews": { title: "人工评测", description: "独立评分、仲裁争议，检验评测结果的可靠性。", section: "评测中心" },
   "/evaluation/candidates": { title: "评测候选池", description: "审核高质量反馈，发布新的评测数据集版本。", section: "评测中心" },
+  "/evaluation/leaderboard": { title: "模型排行榜", description: "在固定数据集和指标版本上比较模型质量与效率。", section: "评测中心" },
+  "/evaluation/schedules": { title: "定时评测", description: "按账号时区安排每日或每周评测，并管理已提交的周期。", section: "评测中心" },
   "/prompts": { title: "提示词库", description: "管理版本、变量与提示词结构。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
 };

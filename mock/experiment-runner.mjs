@@ -49,6 +49,8 @@ export async function finalizeExperimentBatch(pool, batchId) {
         const schedule = (await client.query('UPDATE experiment_schedules SET failure_streak=CASE WHEN $2=$3 THEN 0 ELSE failure_streak+1 END,active=CASE WHEN $2<>$3 AND failure_streak+1>=3 THEN false ELSE active END,updated_at=now() WHERE id=$1 RETURNING owner_id,failure_streak,active', [occurrence.schedule_id,batch.status,'completed'])).rows[0];
         if (schedule && !schedule.active && schedule.failure_streak >= 3) await notifyUser(client,schedule.owner_id,'schedule_paused',occurrence.schedule_id,`${title}：调度已暂停`,'连续三个调度周期失败，请检查模型配置和运行错误。','/experiments/schedules');
       }
+      const evaluationOccurrence = (await client.query("UPDATE evaluation_schedule_occurrences SET status=$2 WHERE batch_id=$1 AND status='queued' RETURNING id", [batch.id,batch.status])).rows[0];
+      if (evaluationOccurrence && batch.status !== 'completed') for (const admin of (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_schedule_failed',evaluationOccurrence.id,`${title}：定时评测部分失败`,'部分用例重试后仍失败，已保留成功结果。','/evaluation/schedules');
     }
     await client.query('COMMIT');
     return batch;

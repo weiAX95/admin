@@ -43,6 +43,9 @@ test('versioned dataset regression, annotations, candidate pool, chains and cost
   assert.equal(report.data.passRate,1);
   assert.deepEqual(report.data.degraded,[]);
   assert.equal(report.data.byDifficulty.length,2);
+  const leaderboard=await request(admin,`/evaluation/leaderboard?datasetVersionId=${versionId}&metricVersionId=default-v1&weights=${encodeURIComponent(JSON.stringify({accuracy:0.4,latency:0.3,tokens:0.3}))}`);
+  assert.equal(leaderboard.status,200);
+  assert.equal(leaderboard.data.items[0].apiModel,'test');
   const nextVersion=await request(admin,`/experiment-datasets/${dataset.data.id}/versions`,'POST',{cases:[{caseKey:'case-1',variables:{question:'问好'},referenceAnswer:'正确答案',difficulty:'简单',category:'基础'},{caseKey:'case-2',variables:{question:'变更输入'},referenceAnswer:'正确答案',difficulty:'困难',category:'进阶'},{caseKey:'case-3',variables:{question:'新增'},referenceAnswer:'正确答案'}]});
   assert.equal(nextVersion.status,201);
   const cross=await request(admin,`/experiment-definitions/${peer.id}/regression`,'POST',{datasetVersionId:nextVersion.data.id,metricVersionId:'default-v1',baselineBatchId:baseline.data.batchId,variantIds:[peer.variants[0].id]});
