@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Avatar, Badge, Button, Drawer, Empty, Layout, Menu, Popover, Space, Typography } from "antd";
+import { Alert, Avatar, Badge, Button, Drawer, Empty, Layout, Menu, Popover, Space, Typography } from "antd";
 import {
   BellOutlined, DashboardOutlined, ExperimentOutlined, FileTextOutlined, LogoutOutlined,
   MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined, MessageOutlined,
@@ -12,6 +12,7 @@ import type { AuthUser } from "../types";
 import type { ReviewNotification } from "../types";
 import { listNotifications, markNotificationRead } from "../api/reviews";
 import { useSettings } from "../components/SettingsProvider";
+import { getVersionInfo, type VersionInfo } from "../api/version-info";
 
 const { Header, Sider, Content } = Layout;
 const MENU_ITEMS = [
@@ -56,6 +57,7 @@ export default function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifications, setNotifications] = useState<ReviewNotification[]>([]);
+  const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [unread, setUnread] = useState(0);
   const refreshNotifications = useCallback(() => { void listNotifications().then(result => { setNotifications(result.items); setUnread(result.unread); }).catch(() => undefined); }, []);
   useEffect(() => {
@@ -65,6 +67,13 @@ export default function AdminLayout() {
     document.addEventListener("visibilitychange", visible);
     return () => { window.clearInterval(interval); document.removeEventListener("visibilitychange", visible); };
   }, [refreshNotifications]);
+  useEffect(() => {
+    const refreshVersion = () => { void getVersionInfo().then(setVersionInfo).catch(() => undefined); };
+    refreshVersion();
+    const soon = window.setTimeout(refreshVersion, 6000);
+    const interval = window.setInterval(refreshVersion, 30 * 60 * 1000);
+    return () => { window.clearTimeout(soon); window.clearInterval(interval); };
+  }, []);
   useEffect(() => {
     if (!getToken()) return;
     const url = new URL("/api/live", window.location.href);
@@ -139,6 +148,7 @@ export default function AdminLayout() {
         </Header>
         <Content className="admin-content">
           <div className="content-inner">
+            {versionInfo?.latest && <Alert type="info" showIcon style={{ marginBottom: 20 }} message={<span>新版本 {versionInfo.latest.version} 可用。<a href={versionInfo.latest.url} target="_blank" rel="noopener noreferrer">查看正式 Release</a></span>} />}
             <div className="page-heading">
               <div><span className="page-eyebrow">AGENT / {page.section}</span>
                 <Typography.Title level={2}>{page.title}</Typography.Title>

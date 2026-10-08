@@ -2,6 +2,8 @@
 
 管理员可在 `/settings` 修改品牌、默认显示参数和新登录有效期；每个账号可在同页修改自己的主题、主色及密度。`032_system_settings.sql` 会在 `npm run db:migrate` 中执行。会话有效期默认为 24 小时，仅影响新登录；旧令牌保留原到期时间。设置写入使用版本号，遇到冲突请刷新后重试。全站英文文案、统一日期展示及完整亮色图表适配仍在后续开发中。
 
+更新日志保存在 `CHANGELOG.json`，每个当前版本都必须有中英文标题及变更列表；`npm run build` 会校验。页面从服务端获取 GitHub 最新正式 Release，缓存 30 分钟；无 Release 或离线时不会显示更新提示。
+
 Agent 学习管理端，使用 React、TypeScript、Vite 与 Ant Design，提供学习任务、笔记、实验、会话记录和统计看板。开发 API 使用 PostgreSQL 持久化。
 
 ## 本地运行

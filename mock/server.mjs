@@ -43,6 +43,7 @@ import { handleExperimentSchedules, processDueExperimentSchedules } from "./expe
 import { handlePrompts } from "./prompts.mjs";
 import { getGlobalSettings, handleSystemSettings } from "./system-settings.mjs";
 import { handleModelConnections } from './model-connections.mjs';
+import { checkLatestRelease, versionInfo } from './version-info.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -506,6 +507,10 @@ async function handleRequest(req, res) {
     if (settingsResponse) return send(res, settingsResponse.status, settingsResponse.data);
     const connectionResponse = await handleModelConnections({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (connectionResponse) return send(res, connectionResponse.status, connectionResponse.data);
+    if (pathname === '/api/settings/version' && method === 'GET') {
+      void checkLatestRelease();
+      return send(res, 200, versionInfo());
+    }
 
     const promptResponse = await handlePrompts({ pathname, method, client: activeClient, me, readBody: () => readBody(req), url });
     if (promptResponse) return send(res, promptResponse.status, promptResponse.data);

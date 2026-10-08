@@ -6,6 +6,7 @@ import { getStoredUser, getToken } from '../api/client';
 import type { AuthUser } from '../types';
 import { useSettings } from '../components/SettingsProvider';
 import ModelConnectionsSettings from '../components/ModelConnectionsSettings';
+import { getVersionInfo, type VersionInfo } from '../api/version-info';
 
 const languageOptions = [{ value: 'zh-CN', label: '简体中文' }, { value: 'en-US', label: 'English' }];
 const dateOptions = ['YYYY-MM-DD', 'MM/DD/YYYY', 'DD/MM/YYYY'].map(value => ({ value, label: value }));
@@ -16,6 +17,7 @@ export default function Settings() {
   const [global, setGlobal] = useState<GlobalSettings | null>(null);
   const [personal, setPersonal] = useState<Preferences | null>(null);
   const [saving, setSaving] = useState(false);
+  const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [globalForm] = Form.useForm<GlobalSettings>();
   const [personalForm] = Form.useForm<Preferences>();
   const logoPreview = Form.useWatch('logoUrl', globalForm);
@@ -26,6 +28,7 @@ export default function Settings() {
     personalForm.setFieldsValue(p);
   };
   useEffect(() => { void load().catch(error => message.error(error.message)); }, []);
+  useEffect(() => { void getVersionInfo().then(setVersionInfo).catch(() => undefined); }, []);
   const saveGlobal = async (values: GlobalSettings) => {
     if (!global) return;
     setSaving(true);
@@ -87,6 +90,12 @@ export default function Settings() {
         </Row>
         <Button type="primary" htmlType="submit" loading={saving}>保存个人偏好</Button>
       </Form>
+    </Card>
+    <Card title="更新日志" extra={<Typography.Text type="secondary">当前版本 v{versionInfo?.currentVersion || '—'}</Typography.Text>}>
+      {versionInfo?.changelog.map(entry => {
+        const copy = (personal?.language || brand.defaultLanguage) === 'en-US' ? entry.en : entry.zh;
+        return <div key={entry.version} style={{ marginBottom: 20 }}><Typography.Title level={5}>v{entry.version} · {copy.title}</Typography.Title><Typography.Text type="secondary">{entry.date}</Typography.Text><ul>{copy.changes.map(change => <li key={change}>{change}</li>)}</ul></div>;
+      })}
     </Card>
   </Space>;
 }

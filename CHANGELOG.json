@@ -1,0 +1,14 @@
+[
+  {
+    "version": "0.1.0",
+    "date": "2026-10-09",
+    "zh": {
+      "title": "本地学习工作空间",
+      "changes": ["提供任务、笔记、会话、实验与评测的本地管理能力", "加入 PostgreSQL 持久化、系统设置与加密模型连接"]
+    },
+    "en": {
+      "title": "Local learning workspace",
+      "changes": ["Manage tasks, notes, sessions, experiments and evaluations locally", "Add PostgreSQL persistence, system settings and encrypted model connections"]
+    }
+  }
+]
