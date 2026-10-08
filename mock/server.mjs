@@ -34,6 +34,7 @@ import { deliverReviewEmails, smtpConfigured } from "./review-mailer.mjs";
 import { handleExperimentPlatform } from "./experiment-platform.mjs";
 import { recoverExperimentJobs, runExperimentJobs } from "./experiment-runner.mjs";
 import { handleExperimentEvaluation } from "./experiment-evaluation.mjs";
+import { handleEvaluationReviews } from "./evaluation-review-api.mjs";
 import { canReadSharedExperimentAsset, handleExperimentSharing, handlePublicExperimentShare } from "./experiment-sharing.mjs";
 import { deliverAppEmails } from "./app-notifications.mjs";
 import { handleExperimentSchedules, processDueExperimentSchedules } from "./experiment-schedules.mjs";
@@ -499,6 +500,8 @@ async function handleRequest(req, res) {
     if (platformResponse) return send(res, platformResponse.status, platformResponse.data);
     const evaluationResponse = await handleExperimentEvaluation({ pathname, method, client: activeClient, me, readBody: () => readBody(req), url });
     if (evaluationResponse) return send(res, evaluationResponse.status, evaluationResponse.data);
+    const reviewResponse = await handleEvaluationReviews({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (reviewResponse) return send(res, reviewResponse.status, reviewResponse.data);
     const sharingResponse = await handleExperimentSharing({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (sharingResponse) return send(res, sharingResponse.status, sharingResponse.data);
     const scheduleResponse = await handleExperimentSchedules({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });

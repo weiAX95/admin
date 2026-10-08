@@ -2,8 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createBatch } from './experiment-platform.mjs';
 import { promptMediaPath } from './prompt-media.mjs';
-import { validateEvaluationCases, referencedAssetIds } from './evaluation-datasets.mjs';
-import { BUILT_IN_METRICS, TOKENIZER_VERSION } from './evaluation-metrics.mjs';
+import { validateEvaluationCases, referencedAssetIds, caseInputFingerprint } from './evaluation-datasets.mjs';
+import { BUILT_IN_METRICS, TOKENIZER_VERSION, summarizeEfficiency } from './evaluation-metrics.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -58,13 +58,21 @@ async function regressionReport(client, batchId) {
   const batch = (await client.query('SELECT * FROM experiment_batches WHERE id=$1 AND kind=$2', [batchId, 'regression'])).rows[0];
   if (!batch) return fail('回归批次不存在', 404);
   const metric = (await client.query('SELECT * FROM experiment_metric_versions WHERE id=$1', [batch.metric_version_id])).rows[0];
-  const rows = (await client.query('SELECT r.id,r.case_id,r.variant_id,r.status,r.auto_score,c.case_key,c.difficulty,c.category,m.passed,m.rule_score,m.judge_score FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1 ORDER BY c.case_key', [batch.id, batch.metric_version_id])).rows;
-  const baseline = (await client.query('SELECT case_id,auto_score FROM experiment_runs WHERE batch_id=$1', [batch.baseline_batch_id])).rows;
-  const baselineByCase = new Map(baseline.map(item => [item.case_id, item.auto_score]));
-  const compared = rows.map(row => ({ caseId: row.case_id, caseKey: row.case_key, variantId: row.variant_id, score: row.auto_score, baselineScore: baselineByCase.get(row.case_id), delta: row.auto_score === null ? null : Number((row.auto_score - baselineByCase.get(row.case_id)).toFixed(3)), passed: row.passed, status: row.status, difficulty: row.difficulty || '未分类', category: row.category || '未分类', ruleScore: row.rule_score, judgeScore: row.judge_score }));
+  const rows = (await client.query('SELECT r.id,r.case_id,r.variant_id,r.status,r.auto_score,r.latency_ms,r.completion_tokens,r.output,r.error,c.case_key,c.variables,c.input_payload,c.context_payload,c.difficulty,c.category,m.passed,m.rule_score,m.judge_score,m.metric_details FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1 ORDER BY c.case_key', [batch.id, batch.metric_version_id])).rows;
+  const baseline = (await client.query('SELECT r.auto_score,r.status,c.case_key,c.variables,c.input_payload,c.context_payload FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.batch_id=$1', [batch.baseline_batch_id])).rows;
+  const baselineByCase = new Map(baseline.map(item => [item.case_key, item]));
+  const currentKeys = new Set(rows.map(row => row.case_key));
+  const removed = baseline.filter(item => !currentKeys.has(item.case_key)).map(item => item.case_key);
+  const compared = rows.map(row => {
+    const prior = baselineByCase.get(row.case_key);
+    const comparisonStatus = !prior ? 'added' : caseInputFingerprint(prior) !== caseInputFingerprint(row) ? 'input_changed' : prior.auto_score === null || prior.status !== 'completed' ? 'baseline_unscored' : 'comparable';
+    const baselineScore = comparisonStatus === 'comparable' ? prior.auto_score : null;
+    return { caseId: row.case_id, caseKey: row.case_key, variantId: row.variant_id, score: row.auto_score, baselineScore, comparisonStatus, delta: row.auto_score === null || baselineScore === null ? null : Number((row.auto_score - baselineScore).toFixed(3)), passed: row.passed, status: row.status, difficulty: row.difficulty || '未分类', category: row.category || '未分类', ruleScore: row.rule_score, judgeScore: row.judge_score, metricDetails: row.metric_details, output: row.output, error: row.error };
+  });
   const scored = compared.filter(item => item.score !== null && item.status === 'completed');
   const strata = field => [...new Set(compared.map(item => item[field]))].map(value => { const group = scored.filter(item => item[field] === value); return { name: value, count: group.length, passRate: group.length ? group.filter(item => item.passed).length / group.length : null, averageScore: group.length ? group.reduce((sum,item) => sum + item.score,0)/group.length : null }; });
-  return ok({ batchId, status: batch.status, datasetVersionId: batch.dataset_version_id, baselineBatchId: batch.baseline_batch_id, metricVersionId: metric.id, passThreshold: metric.pass_threshold, regressionThreshold: metric.regression_threshold, total: compared.length, scored: scored.length, passRate: scored.length ? scored.filter(item => item.passed).length / scored.length : null, box: summary(scored.map(item => item.score)), degraded: compared.filter(item => item.delta !== null && item.delta < -metric.regression_threshold), byDifficulty: strata('difficulty'), byCategory: strata('category'), cases: compared });
+  const histogram = Array.from({ length: 5 }, (_, index) => ({ range: `${index}–${index + 1}`, count: scored.filter(item => item.score >= index && (index === 4 ? item.score <= 5 : item.score < index + 1)).length }));
+  return ok({ batchId, status: batch.status, datasetVersionId: batch.dataset_version_id, baselineBatchId: batch.baseline_batch_id, metricVersionId: metric.id, passThreshold: metric.pass_threshold, regressionThreshold: metric.regression_threshold, total: compared.length, scored: scored.length, passRate: scored.length ? scored.filter(item => item.passed).length / scored.length : null, box: summary(scored.map(item => item.score)), histogram, efficiency: summarizeEfficiency(rows.map(row => ({ latencyMs: row.latency_ms, completionTokens: row.completion_tokens }))), statusDistribution: { passed: scored.filter(item => item.passed).length, belowThreshold: scored.filter(item => !item.passed).length, failed: compared.filter(item => item.status === 'failed').length, unscored: compared.filter(item => item.status === 'completed' && item.score === null).length }, degraded: compared.filter(item => item.delta !== null && item.delta < -metric.regression_threshold).sort((a,b) => a.delta - b.delta), removedCaseKeys: removed, byDifficulty: strata('difficulty'), byCategory: strata('category'), cases: compared });
 }
 
 function titleSimilarity(left, right) {
@@ -89,6 +97,10 @@ export async function handleExperimentEvaluation(context) {
 }
 
 async function handleExperimentEvaluationInner({ pathname, method, client, me, readBody, url }) {
+  if (pathname === '/api/evaluation/alerts' && method === 'GET') {
+    if (me.role !== 'admin') return fail('仅管理员可查看退化告警', 403);
+    return ok({ items: (await client.query('SELECT * FROM evaluation_alerts ORDER BY created_at DESC LIMIT 200')).rows });
+  }
   if (pathname === '/api/evaluation/metrics' && method === 'GET') return ok({ tokenizerVersion: TOKENIZER_VERSION, builtIns: BUILT_IN_METRICS, bertScoreEnabled: process.env.EVALUATION_BERTSCORE_ENABLED === 'true' });
   if (pathname === '/api/evaluation/folders') {
     if (method === 'GET') return ok({ items: (await client.query('SELECT * FROM evaluation_folders ORDER BY name,id')).rows });
@@ -123,7 +135,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     const datasetVersionId = url.searchParams.get('datasetVersionId');
     const metricVersionId = url.searchParams.get('metricVersionId');
     if (!datasetVersionId || !metricVersionId) return fail('请选择数据集和指标版本');
-    const rows = (await client.query("SELECT b.id,b.created_at,e.title AS experiment_title FROM experiment_batches b JOIN experiments e ON e.id=b.experiment_id WHERE b.dataset_version_id=$1 AND b.metric_version_id=$2 AND b.status='completed' AND (SELECT count(*) FROM experiment_runs r WHERE r.batch_id=b.id)=(SELECT count(*) FROM experiment_dataset_cases c WHERE c.dataset_version_id=$1) AND NOT EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND (r.status<>'completed' OR r.auto_score IS NULL)) ORDER BY b.created_at DESC LIMIT 100", [datasetVersionId, metricVersionId])).rows;
+    const rows = (await client.query("SELECT b.id,b.created_at,e.title AS experiment_title FROM experiment_batches b JOIN experiments e ON e.id=b.experiment_id JOIN experiment_dataset_versions selected ON selected.id=$1 JOIN experiment_dataset_versions source ON source.id=b.dataset_version_id WHERE source.dataset_id=selected.dataset_id AND b.metric_version_id=$2 AND b.status IN ('completed','partial') AND EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status='completed' AND r.auto_score IS NOT NULL) ORDER BY b.created_at DESC LIMIT 100", [datasetVersionId, metricVersionId])).rows;
     return ok({ items: rows });
   }
   if (pathname === '/api/experiment-metrics') {

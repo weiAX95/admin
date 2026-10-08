@@ -50,3 +50,13 @@ export function referencedAssetIds(cases) {
   for (const item of cases) { visit(item.input); visit(item.expected); for (const message of item.context) visit(message); }
   return ids;
 }
+
+function canonical(value) {
+  if (Array.isArray(value)) return value.map(canonical);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+  return value;
+}
+
+export function caseInputFingerprint(row) {
+  return crypto.createHash('sha256').update(JSON.stringify(canonical({ input: row.input_payload ?? null, variables: row.variables, context: row.context_payload ?? [] }))).digest('hex');
+}

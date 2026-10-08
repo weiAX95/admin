@@ -1,10 +1,23 @@
 import { performance } from 'node:perf_hooks';
-import { parseJudge, ruleScore, saveRunMetric } from './experiment-scoring.mjs';
+import { parseJudge, saveRunMetric } from './experiment-scoring.mjs';
 import { notifyUser } from './app-notifications.mjs';
 import {completeWithProvider} from './provider-adapters.mjs';
 import {mediaCost,providerConfigured} from './model-capabilities.mjs';
 import {saveGeneratedPromptMedia} from './prompt-media.mjs';
 import fs from 'node:fs/promises';
+import { normalizeToolCalls, scoreBuiltIn, TOKENIZER_VERSION } from './evaluation-metrics.mjs';
+import { caseInputFingerprint } from './evaluation-datasets.mjs';
+import crypto from 'node:crypto';
+
+function evaluationScores(row, output, calls, latencyMs, completionTokens) {
+  const input = { output, expectedOutput: row.reference_answer, actualTools: normalizeToolCalls(calls), expectedTools: row.expected_tools };
+  const details = Object.fromEntries(['exact','token_f1','bleu','rouge_l','tool_selection','parameter_accuracy'].map(metric => [metric, scoreBuiltIn(metric, input)]));
+  details.latencyMs = latencyMs;
+  details.outputTokens = completionTokens;
+  details.tokenizerVersion = TOKENIZER_VERSION;
+  const selected = details[row.rule_type];
+  return { details, rule: typeof selected === 'number' ? Math.round(selected * 5000) / 1000 : null };
+}
 
 export function executionConfigured() { return ['legacy','openai','qwen','gemini'].some(providerConfigured); }
 
@@ -18,6 +31,19 @@ export async function finalizeExperimentBatch(pool, batchId) {
     if (['completed','partial','failed'].includes(batch.status)) {
       const title = (await client.query('SELECT title FROM experiments WHERE id=$1', [batch.experiment_id])).rows[0]?.title || '实验';
       await notifyUser(client, batch.owner_id, `experiment_${batch.status}`, batch.id, `${title}：${batch.status === 'completed' ? '执行完成' : batch.status === 'partial' ? '部分失败' : '执行失败'}`, `批次 ${batch.id} 已结束，状态：${batch.status}。`, `/experiments/${batch.experiment_id}`);
+      if (batch.kind === 'regression' && ['completed','partial'].includes(batch.status)) {
+        const setup = (await client.query('SELECT baseline_batch_id,metric_version_id FROM experiment_batches WHERE id=$1', [batch.id])).rows[0];
+        const threshold = Number((await client.query('SELECT regression_threshold FROM experiment_metric_versions WHERE id=$1', [setup.metric_version_id])).rows[0].regression_threshold);
+        const current = (await client.query('SELECT r.auto_score,c.case_key,c.input_payload,c.variables,c.context_payload FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.batch_id=$1', [batch.id])).rows;
+        const baseline = (await client.query('SELECT r.auto_score,c.case_key,c.input_payload,c.variables,c.context_payload FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.batch_id=$1', [setup.baseline_batch_id])).rows;
+        const prior = new Map(baseline.map(item => [item.case_key, item]));
+        const degraded = current.flatMap(item => { const old = prior.get(item.case_key); return old && item.auto_score !== null && old.auto_score !== null && caseInputFingerprint(item) === caseInputFingerprint(old) && old.auto_score - item.auto_score > threshold ? [{ caseKey: item.case_key, drop: Number((old.auto_score - item.auto_score).toFixed(3)) }] : []; });
+        if (degraded.length) {
+          const alertId = crypto.randomUUID();
+          const inserted = await client.query('INSERT INTO evaluation_alerts(id,batch_id,baseline_batch_id,metric_version_id,affected_count,details) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(batch_id) DO NOTHING RETURNING id', [alertId,batch.id,setup.baseline_batch_id,setup.metric_version_id,degraded.length,JSON.stringify(degraded)]);
+          if (inserted.rowCount) for (const admin of (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_regression',batch.id,`${title}：发现 ${degraded.length} 条退化用例`,'请检查回归报告中的退化幅度和失败分类。',`/experiments/${batch.experiment_id}`);
+        }
+      }
       const occurrence = (await client.query("UPDATE experiment_schedule_occurrences SET status=$2 WHERE batch_id=$1 AND status='queued' RETURNING schedule_id,id", [batch.id,batch.status])).rows[0];
       if (occurrence) {
         const schedule = (await client.query('UPDATE experiment_schedules SET failure_streak=CASE WHEN $2=$3 THEN 0 ELSE failure_streak+1 END,active=CASE WHEN $2<>$3 AND failure_streak+1>=3 THEN false ELSE active END,updated_at=now() WHERE id=$1 RETURNING owner_id,failure_streak,active', [occurrence.schedule_id,batch.status,'completed'])).rows[0];
@@ -56,17 +82,18 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
     finally { client.release(); }
   }
   await Promise.all(claimed.map(async id => {
-    const row = (await pool.query('SELECT r.*,b.metric_version_id,c.reference_answer,m.rule_type,m.judge_prompt FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiment_metric_versions m ON m.id=b.metric_version_id LEFT JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.id=$1', [id])).rows[0];
+    const row = (await pool.query('SELECT r.*,b.metric_version_id,c.reference_answer,c.expected_tools,m.rule_type,m.judge_prompt FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiment_metric_versions m ON m.id=b.metric_version_id LEFT JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.id=$1', [id])).rows[0];
     const started = performance.now();
     try {
       const parameters = { ...row.parameters };
       const outputKind=parameters.output_kind || 'text';
       delete parameters.output_kind;
       if (parameters.stop_sequences) { parameters.stop = parameters.stop_sequences; delete parameters.stop_sequences; }
-      let output=row.output, promptTokens=row.prompt_tokens, completionTokens=row.completion_tokens,outputParts=row.output_parts || [];
+      let output=row.output, promptTokens=row.prompt_tokens, completionTokens=row.completion_tokens,outputParts=row.output_parts || [],toolCalls=row.tool_calls || [],latencyMs=row.latency_ms;
       if (output === null) {
         const response=await completeWithProvider(pool,{provider:row.provider,model:row.api_model,messages:row.request_messages?.length?row.request_messages:[{role:'system',content:row.system_prompt},{role:'user',content:row.user_prompt}],parameters,toolSchema:row.tools_schema,outputKind});
-        ({output,promptTokens,completionTokens}=response);
+        ({output,promptTokens,completionTokens,toolCalls}=response);
+        latencyMs=Math.round(performance.now()-started);
         const client=await pool.connect(),created=[];
         try {
           await client.query('BEGIN');
@@ -78,11 +105,12 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
           const imageCount=outputParts.filter(part=>part.type==='image').length;
           const audioSeconds=outputParts.filter(part=>part.type==='audio').reduce((sum,part)=>sum+Number(part.durationSeconds || 0),0);
           const cost=(promptTokens*Number(row.input_price)+completionTokens*Number(row.output_price))/1_000_000+Number(row.reserved_media_cost || 0)+imageCount*Number(row.media_price_snapshot?.imageOutputUsdEach || 0)+audioSeconds*Number(row.media_price_snapshot?.audioOutputUsdPerSecond || 0);
-          await client.query('UPDATE experiment_runs SET output=$2,prompt_tokens=$3,completion_tokens=$4,latency_ms=$5,cost_usd=$6,tool_calls=$7,output_parts=$8,media_usage=$9,error=NULL WHERE id=$1',[id,output,promptTokens,completionTokens,Math.round(performance.now()-started),cost,JSON.stringify(response.toolCalls),JSON.stringify(outputParts),JSON.stringify({...row.media_usage,imageOutputCount:imageCount,audioOutputSeconds:audioSeconds})]);
+          await client.query('UPDATE experiment_runs SET output=$2,prompt_tokens=$3,completion_tokens=$4,latency_ms=$5,cost_usd=$6,tool_calls=$7,output_parts=$8,media_usage=$9,error=NULL WHERE id=$1',[id,output,promptTokens,completionTokens,latencyMs,cost,JSON.stringify(response.toolCalls),JSON.stringify(outputParts),JSON.stringify({...row.media_usage,imageOutputCount:imageCount,audioOutputSeconds:audioSeconds})]);
           await client.query('COMMIT');
         } catch(error) {await client.query('ROLLBACK').catch(()=>{});for(const file of created)await fs.unlink(file).catch(()=>{});throw error;}
         finally {client.release();}
       }
+      const scored = evaluationScores(row,output,toolCalls,latencyMs,completionTokens);
       if (row.judge_api_model) {
         try {
           const media=outputParts.filter(part=>['image','audio','video'].includes(part.type)&&part.assetId);
@@ -93,13 +121,13 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
           const judgeMedia={imageCount:media.filter(part=>part.type==='image').length,audioSeconds:media.filter(part=>part.type==='audio').reduce((sum,part)=>sum+Number(part.durationSeconds || 0),0),videoSeconds:0};
           const judgeCost = (judge.promptTokens * Number(row.judge_input_price) + judge.completionTokens * Number(row.judge_output_price)) / 1_000_000 + mediaCost(judgeMedia,row.judge_media_price_snapshot || {});
           const client=await pool.connect();
-          try { await client.query('BEGIN'); await client.query('UPDATE experiment_runs SET judge_prompt_tokens=$2,judge_completion_tokens=$3,judge_cost_usd=$4,cost_usd=cost_usd+$4 WHERE id=$1', [id, judge.promptTokens, judge.completionTokens, judgeCost]); await saveRunMetric(client, id, row.metric_version_id, outputKind==='text'?ruleScore(output, row.reference_answer, row.rule_type):null, parsed.score, parsed.reason); await client.query("UPDATE experiment_runs SET status='completed',completed_at=now() WHERE id=$1",[id]); await client.query('COMMIT'); }
+          try { await client.query('BEGIN'); await client.query('UPDATE experiment_runs SET judge_prompt_tokens=$2,judge_completion_tokens=$3,judge_cost_usd=$4,cost_usd=cost_usd+$4 WHERE id=$1', [id, judge.promptTokens, judge.completionTokens, judgeCost]); await saveRunMetric(client, id, row.metric_version_id, scored.rule, parsed.score, parsed.reason, scored.details); await client.query("UPDATE experiment_runs SET status='completed',completed_at=now() WHERE id=$1",[id]); await client.query('COMMIT'); }
           catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
-        } catch (judgeError) { await pool.query("UPDATE experiment_runs SET status='completed',score_reason=$2,completed_at=now() WHERE id=$1", [id, `Judge 评分失败：${String(judgeError.message || judgeError).slice(0, 200)}`]); }
-      } else await pool.query("UPDATE experiment_runs SET status='completed',score_reason=$2,completed_at=now() WHERE id=$1", [id,outputKind==='text'?'未配置 LLM Judge':'媒体输出暂无兼容 Judge，保留人工评分']);
+        } catch (judgeError) { const reason=`Judge 评分失败：${String(judgeError.message || judgeError).slice(0, 200)}`; await saveRunMetric(pool,id,row.metric_version_id,scored.rule,null,reason,scored.details); await pool.query("UPDATE experiment_runs SET status='completed',completed_at=now() WHERE id=$1", [id]); }
+      } else { await saveRunMetric(pool,id,row.metric_version_id,scored.rule,null,outputKind==='text'?'未配置 LLM Judge':'媒体输出暂无兼容 Judge，保留人工评分',scored.details); await pool.query("UPDATE experiment_runs SET status='completed',completed_at=now() WHERE id=$1", [id]); }
     } catch (error) {
       await pool.query("UPDATE experiment_runs SET status='failed',error=$2,latency_ms=$3,completed_at=now() WHERE id=$1", [id, String(error.message || error).slice(0, 500), Math.round(performance.now() - started)]);
-      await pool.query("UPDATE experiment_runs SET status='queued',started_at=NULL,completed_at=NULL WHERE id=$1 AND attempts <= COALESCE((SELECT s.retry_limit FROM experiment_schedule_occurrences o JOIN experiment_schedules s ON s.id=o.schedule_id WHERE o.batch_id=experiment_runs.batch_id),-1)", [id]);
+      await pool.query("UPDATE experiment_runs SET status='queued',started_at=NULL,completed_at=NULL WHERE id=$1 AND attempts <= GREATEST(retry_limit,COALESCE((SELECT s.retry_limit FROM experiment_schedule_occurrences o JOIN experiment_schedules s ON s.id=o.schedule_id WHERE o.batch_id=experiment_runs.batch_id),0))", [id]);
     }
     await finalizeExperimentBatch(pool,row.batch_id);
     onChanged();

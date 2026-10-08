@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)、[复习提醒迁移](../db/migrations/008_note_reviews.sql)、[实验执行基础迁移](../db/migrations/009_experiment_foundation.sql)、[实验评测迁移](../db/migrations/010_experiment_evaluation.sql)、[分享与调度迁移](../db/migrations/011_experiment_sharing_schedules.sql)、[数据集批次约束迁移](../db/migrations/012_experiment_dataset_batch_kind.sql)、[提示词库迁移](../db/migrations/013_prompt_library.sql)、[提示词引用与调用迁移](../db/migrations/014_prompt_references_usage.sql)、[提示词导入来源迁移](../db/migrations/015_prompt_import_sources.sql)、[提示词媒体迁移](../db/migrations/016_prompt_multimodal.sql)、[提示词归档迁移](../db/migrations/017_prompt_archive.sql)和[媒体评分价格快照迁移](../db/migrations/018_media_judge.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **69 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)、[复习提醒迁移](../db/migrations/008_note_reviews.sql)、[实验执行基础迁移](../db/migrations/009_experiment_foundation.sql)、[实验评测迁移](../db/migrations/010_experiment_evaluation.sql)、[分享与调度迁移](../db/migrations/011_experiment_sharing_schedules.sql)、[数据集批次约束迁移](../db/migrations/012_experiment_dataset_batch_kind.sql)、[提示词库迁移](../db/migrations/013_prompt_library.sql)、[提示词引用与调用迁移](../db/migrations/014_prompt_references_usage.sql)、[提示词导入来源迁移](../db/migrations/015_prompt_import_sources.sql)、[提示词媒体迁移](../db/migrations/016_prompt_multimodal.sql)、[提示词归档迁移](../db/migrations/017_prompt_archive.sql)和[媒体评分价格快照迁移](../db/migrations/018_media_judge.sql)，描述本地 API 已实现的 PostgreSQL 结构。共 **73 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 页面如何读写数据
 
@@ -185,6 +185,33 @@ flowchart LR
 | `evaluation_case_assets` | 用例与媒体附件的去重关联；两个 ID 都有外键，附件被引用时不能删除。 | 多模态用例保存、媒体配额核算 |
 
 `experiment_dataset_cases` 现在还保存结构化输入、可选结构化参考答案、上下文、标签、1–5 难度、来源及期望工具调用。旧 `variables` 和 `reference_answer` 保留供已有实验运行读取。数据集子集保留创建时的固定 `parent_version_id`，来源版本的后续编辑不会改变子集。文件夹移动只更新目录元数据；用例内容修改必须新增版本。
+
+## 自动运行、人工评测与退化告警（021–023）
+
+[021_evaluation_run_details.sql](../db/migrations/021_evaluation_run_details.sql) 给运行指标增加逐项得分详情和重试上限；[022_evaluation_alerts.sql](../db/migrations/022_evaluation_alerts.sql) 保存退化告警；[023_evaluation_human_reviews.sql](../db/migrations/023_evaluation_human_reviews.sql) 保存双盲任务、分配和评分。
+
+```mermaid
+flowchart LR
+  Batches["experiment_batches"] -->|"FK batch_id"| ReviewTasks["evaluation_review_tasks"]
+  Versions["experiment_dataset_versions"] -->|"FK dataset_version_id"| ReviewTasks
+  Users["users"] -->|"FK created_by；删除账号时置空"| ReviewTasks
+  ReviewTasks -->|"FK task_id"| Assignments["evaluation_review_assignments"]
+  Users -->|"FK reviewer_id"| Assignments
+  Assignments -->|"复合 FK task_id + reviewer_id"| Scores["evaluation_review_scores"]
+  Runs["experiment_runs"] -->|"FK run_id"| Scores
+  Batches -->|"FK batch_id；一批次一条"| Alerts["evaluation_alerts"]
+  Batches -->|"FK baseline_batch_id；删除时置空"| Alerts
+  Metrics["experiment_metric_versions"] -->|"FK metric_version_id"| Alerts
+```
+
+| 表 | 当前内容与关键关系 | 对应页面或功能 |
+| --- | --- | --- |
+| `evaluation_review_tasks` | 固定评测批次、数据集版本和四维评分标准；批次删除时级联。 | `/evaluation/reviews` |
+| `evaluation_review_assignments` | 两位主评测员及争议后指派的仲裁员；任务和账号外键。 | 双盲待评队列 |
+| `evaluation_review_scores` | 每账号每运行一份不可重复的四维 0–10 分；复合分配外键和运行外键。 | 一致性报告、争议仲裁 |
+| `evaluation_alerts` | 单个回归批次的持久退化记录；关联固定 baseline 与指标版本。 | 退化告警和站内通知 |
+
+`experiment_run_metrics.metric_details` 保存各内置指标的归一化得分、延迟与输出 token；`experiment_runs.retry_limit` 保存重试上限。跨版本比较使用 `case_key` 与输入、变量、上下文的指纹，数据库行 ID 只标识一个版本中的实例。双盲四维评分与实验输出的 1–5 星标注是不同数据，不能互相覆盖。
 
 ## 账号、会话与人工评分
 

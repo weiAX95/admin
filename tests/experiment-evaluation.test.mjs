@@ -43,6 +43,15 @@ test('versioned dataset regression, annotations, candidate pool, chains and cost
   assert.equal(report.data.passRate,1);
   assert.deepEqual(report.data.degraded,[]);
   assert.equal(report.data.byDifficulty.length,2);
+  const nextVersion=await request(admin,`/experiment-datasets/${dataset.data.id}/versions`,'POST',{cases:[{caseKey:'case-1',variables:{question:'问好'},referenceAnswer:'正确答案',difficulty:'简单',category:'基础'},{caseKey:'case-2',variables:{question:'变更输入'},referenceAnswer:'正确答案',difficulty:'困难',category:'进阶'},{caseKey:'case-3',variables:{question:'新增'},referenceAnswer:'正确答案'}]});
+  assert.equal(nextVersion.status,201);
+  const cross=await request(admin,`/experiment-definitions/${peer.id}/regression`,'POST',{datasetVersionId:nextVersion.data.id,metricVersionId:'default-v1',baselineBatchId:baseline.data.batchId,variantIds:[peer.variants[0].id]});
+  assert.equal(cross.status,202,JSON.stringify(cross.data));
+  let crossBatch;
+  for(let i=0;i<50;i++){await new Promise(resolve=>setTimeout(resolve,100));crossBatch=(await request(admin,`/experiment-batches/${cross.data.batchId}`)).data;if(crossBatch.status==='completed')break;}
+  const crossReport=await request(admin,`/experiment-batches/${cross.data.batchId}/report`);
+  assert.deepEqual(crossReport.data.cases.map(item=>item.comparisonStatus),['comparable','input_changed','added']);
+  assert.equal(crossReport.data.efficiency.count,3);
   const annotation=await request(member,`/experiment-runs/${batch.runs[0].id}/annotation`,'POST',{rating:3,tags:['推理错误']});
   assert.equal(annotation.status,200);
   const updated=await request(member,`/experiment-runs/${batch.runs[0].id}/annotation`,'POST',{rating:5,tags:['完美']});

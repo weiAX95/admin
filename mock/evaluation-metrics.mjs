@@ -78,6 +78,17 @@ export function scoreBuiltIn(metric, { output, expectedOutput, actualTools, expe
   throw new Error(`未知内置指标：${metric}`);
 }
 
+export function normalizeToolCalls(calls) {
+  return (Array.isArray(calls) ? calls : []).map(call => {
+    const source = call.function || call;
+    let args = source.arguments ?? source.args ?? {};
+    if (typeof args === 'string') {
+      try { args = JSON.parse(args); } catch { args = null; }
+    }
+    return { name: source.name, arguments: args };
+  });
+}
+
 export function summarizeEfficiency(rows) {
   const valid = rows.filter(row => Number.isFinite(row.latencyMs) && Number.isFinite(row.completionTokens));
   const latency = valid.map(row => row.latencyMs).sort((a, b) => a - b);
