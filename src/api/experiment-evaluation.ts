@@ -17,6 +17,9 @@ export const createDatasetVersion = (id: string, cases: DatasetCase[]) => http.p
 export const createDatasetSubset = (id: string, versionId: string, name: string, caseKeys: string[], folderId?: string) => http.post<{ id: string }>(`/evaluation/datasets/${id}/subset`, { versionId, name, caseKeys, folderId });
 export const listEvaluationFolders = () => http.get<{ items: { id: string; name: string; parent_id: string | null }[] }>('/evaluation/folders');
 export const createEvaluationFolder = (name: string, parentId?: string) => http.post<{ id: string }>('/evaluation/folders', { name, parentId });
+export interface EvaluationSettings { global_media_bytes: string | number; dataset_media_bytes: string | number; min_free_percent: string | number }
+export const getEvaluationSettings = () => http.get<EvaluationSettings>('/evaluation/settings');
+export const updateEvaluationSettings = (value: { globalMediaBytes: number; datasetMediaBytes: number; minFreePercent: number }) => http.put<EvaluationSettings>('/evaluation/settings', value);
 export interface RankedModel { modelId: string; apiModel: string; runCount: number; score: number; averageAccuracy: number; averageLatencyMs: number; averageOutputTokens: number }
 export const getEvaluationLeaderboard = (datasetVersionId: string, metricVersionId: string, weights: Record<string,number>) => http.get<{ items: RankedModel[]; excluded: number }>('/evaluation/leaderboard', { datasetVersionId, metricVersionId, weights: JSON.stringify(weights) });
 export const runDataset = (id: string, payload: { datasetVersionId: string; metricVersionId: string; variantIds?: string[] }) => http.post<{ batchId: string }>(`/experiment-definitions/${id}/dataset-run`, payload);

@@ -12,29 +12,29 @@ const fail = (error, status = 400) => ok({ error }, status);
 const allowedTags = new Set(['幻觉','不完整','格式错误','推理错误','完美','偏题','冗余']);
 
 const validatedCases = validateEvaluationCases;
-const GLOBAL_MEDIA_LIMIT = 10 * 1024 ** 3;
-const DATASET_MEDIA_LIMIT = 5 * 1024 ** 3;
-async function validateAssets(client, datasetId, cases) {
+async function validateAssets(client, datasetId, cases, actor) {
   const ids = [...referencedAssetIds(cases)];
   if (!ids.length) return;
+  const settings = (await client.query('SELECT * FROM evaluation_settings WHERE id=1')).rows[0];
   const assets = (await client.query('SELECT id,kind,byte_size,uploaded_by FROM prompt_media_assets WHERE id=ANY($1::text[])', [ids])).rows;
   if (assets.length !== ids.length) throw new Error('部分媒体附件不存在');
+  if (actor?.role !== 'admin' && assets.some(asset => asset.uploaded_by !== actor?.id)) throw new Error('无权引用其他账号的媒体附件');
   const newBytes = assets.reduce((sum, asset) => sum + Number(asset.byte_size), 0);
-  if (newBytes > DATASET_MEDIA_LIMIT) throw new Error('单数据集媒体引用超过 5 GB');
+  if (newBytes > Number(settings.dataset_media_bytes)) throw new Error('单数据集媒体引用超过配额');
   const existing = (await client.query('SELECT DISTINCT a.asset_id,p.byte_size FROM evaluation_case_assets a JOIN prompt_media_assets p ON p.id=a.asset_id JOIN experiment_dataset_cases c ON c.id=a.case_id JOIN experiment_dataset_versions v ON v.id=c.dataset_version_id WHERE v.dataset_id=$1', [datasetId])).rows;
   const existingIds = new Set(existing.map(row => row.asset_id));
-  if (existing.reduce((sum, row) => sum + Number(row.byte_size), 0) + assets.filter(asset => !existingIds.has(asset.id)).reduce((sum, asset) => sum + Number(asset.byte_size), 0) > DATASET_MEDIA_LIMIT) throw new Error('单数据集媒体配额不足');
+  if (existing.reduce((sum, row) => sum + Number(row.byte_size), 0) + assets.filter(asset => !existingIds.has(asset.id)).reduce((sum, asset) => sum + Number(asset.byte_size), 0) > Number(settings.dataset_media_bytes)) throw new Error('单数据集媒体配额不足');
   const global = (await client.query('SELECT DISTINCT a.asset_id,p.byte_size FROM evaluation_case_assets a JOIN prompt_media_assets p ON p.id=a.asset_id')).rows;
   const globalIds = new Set(global.map(row => row.asset_id));
-  if (global.reduce((sum, row) => sum + Number(row.byte_size), 0) + assets.filter(asset => !globalIds.has(asset.id)).reduce((sum, asset) => sum + Number(asset.byte_size), 0) > GLOBAL_MEDIA_LIMIT) throw new Error('评测媒体总配额不足');
+  if (global.reduce((sum, row) => sum + Number(row.byte_size), 0) + assets.filter(asset => !globalIds.has(asset.id)).reduce((sum, asset) => sum + Number(asset.byte_size), 0) > Number(settings.global_media_bytes)) throw new Error('评测媒体总配额不足');
   const stat = await fs.statfs(promptMediaPath(ids[0]));
   const free = Number(stat.bavail) * Number(stat.bsize), total = Number(stat.blocks) * Number(stat.bsize);
-  if (free < total * 0.2) throw new Error('磁盘剩余空间不足 20%');
+  if (free < total * Number(settings.min_free_percent) / 100) throw new Error(`磁盘剩余空间不足 ${settings.min_free_percent}%`);
 }
 
-export async function insertVersion(client, datasetId, version, cases) {
+export async function insertVersion(client, datasetId, version, cases, actor) {
   const items = validatedCases(cases);
-  await validateAssets(client, datasetId, items);
+  await validateAssets(client, datasetId, items, actor);
   const id = uuid();
   await client.query('INSERT INTO experiment_dataset_versions(id,dataset_id,version) VALUES($1,$2,$3)', [id, datasetId, version]);
   for (let index = 0; index < items.length; index += 500) {
@@ -109,6 +109,16 @@ export async function handleExperimentEvaluation(context) {
 }
 
 async function handleExperimentEvaluationInner({ pathname, method, client, me, readBody, url }) {
+  if (pathname === '/api/evaluation/settings') {
+    if (method === 'GET') return ok((await client.query('SELECT * FROM evaluation_settings WHERE id=1')).rows[0]);
+    if (method === 'PUT') {
+      if (me.role !== 'admin') return fail('仅管理员可配置评测配额',403);
+      const body = await readBody();
+      const global = body.globalMediaBytes, dataset = body.datasetMediaBytes, free = body.minFreePercent;
+      if (!Number.isSafeInteger(global) || global <= 0 || !Number.isSafeInteger(dataset) || dataset <= 0 || dataset > global || typeof free !== 'number' || !Number.isFinite(free) || free < 0 || free >= 100) return fail('配额或磁盘保留比例无效');
+      return ok((await client.query('UPDATE evaluation_settings SET global_media_bytes=$1,dataset_media_bytes=$2,min_free_percent=$3,updated_at=now() WHERE id=1 RETURNING *',[global,dataset,free])).rows[0]);
+    }
+  }
   if (pathname === '/api/evaluation/leaderboard' && method === 'GET') {
     const datasetVersionId = url.searchParams.get('datasetVersionId'), metricVersionId = url.searchParams.get('metricVersionId');
     if (!datasetVersionId || !metricVersionId) return fail('请选择固定数据集和指标版本');
@@ -137,7 +147,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     const previous = latest ? (await client.query('SELECT * FROM experiment_dataset_cases WHERE dataset_version_id=$1 ORDER BY case_key', [latest.id])).rows.map(caseFromRow) : [];
     const added = staged.map(item => ({ caseKey: `candidate-${item.id}`, input: item.input_payload, expectedOutput: item.expected_payload, context: item.context_payload, tags: item.tags, difficulty: 3, source: item.source_type === 'session' ? 'session_extract' : 'qa_import' }));
     if (previous.length + added.length > 10000) return fail('发布后超过数据集 10,000 条上限', 409);
-    const version = await insertVersion(client,dataset.id,latest ? latest.version + 1 : 1,[...previous,...added]);
+    const version = await insertVersion(client,dataset.id,latest ? latest.version + 1 : 1,[...previous,...added],me);
     await client.query("UPDATE evaluation_candidates SET status='published',published_version_id=$2,updated_at=now() WHERE id=ANY($1::text[])", [staged.map(item => item.id),version.id]);
     return ok({ versionId: version.id, published: staged.length }, 201);
   }
@@ -220,7 +230,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
       if (body.folderId && !(await client.query('SELECT 1 FROM evaluation_folders WHERE id=$1', [body.folderId])).rowCount) return fail('文件夹不存在', 404);
       const id = uuid();
       await client.query('INSERT INTO experiment_datasets(id,name,owner_id,folder_id,parent_version_id) VALUES($1,$2,$3,$4,$5)', [id, body.name.trim(), me.id, body.folderId || null, body.parentVersionId || null]);
-      const version = await insertVersion(client, id, 1, body.cases);
+      const version = await insertVersion(client, id, 1, body.cases,me);
       return ok({ id, name: body.name.trim(), version }, 201);
     }
   }
@@ -235,7 +245,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     if (cases.length !== new Set(body.caseKeys).size) return fail('部分用例不在源版本内');
     const id = uuid();
     await client.query('INSERT INTO experiment_datasets(id,name,owner_id,folder_id,parent_version_id) VALUES($1,$2,$3,$4,$5)', [id, body.name.trim(), me.id, body.folderId || null, parent.id]);
-    const version = await insertVersion(client, id, 1, cases.map(caseFromRow));
+    const version = await insertVersion(client, id, 1, cases.map(caseFromRow),me);
     return ok({ id, version }, 201);
   }
   const datasetRoute = pathname.match(/^\/api\/experiment-datasets\/([^/]+)\/versions$/);
@@ -248,7 +258,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
       const body = await readBody();
       try { validatedCases(body.cases); } catch (error) { return fail(error.message); }
       const version = (await client.query('SELECT COALESCE(max(version),0)+1 AS next FROM experiment_dataset_versions WHERE dataset_id=$1', [dataset.id])).rows[0].next;
-      return ok(await insertVersion(client, dataset.id, version, body.cases), 201);
+      return ok(await insertVersion(client, dataset.id, version, body.cases,me), 201);
     }
   }
   const versionRoute = pathname.match(/^\/api\/experiment-dataset-versions\/([^/]+)$/);

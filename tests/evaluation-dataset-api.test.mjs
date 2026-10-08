@@ -26,6 +26,23 @@ test('folder, structured import and immutable subset share stable case keys', as
   const bad = await request('/experiment-datasets', 'POST', { name: '坏附件', cases: [{ caseKey: 'x', input: { parts: [{ type: 'image', assetId: 'missing' }] } }] });
   assert.equal(bad.status, 400);
   assert.ok(!(await request('/experiment-datasets')).data.items.some(item => item.name === '坏附件'));
+  assert.equal((await request('/evaluation/settings')).status,200);
+  assert.equal((await request('/evaluation/settings','PUT',{globalMediaBytes:64,datasetMediaBytes:20,minFreePercent:20})).status,200);
+  const media=await fetch(`${api.base}/prompt-media`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'X-Media-Kind':'image','Content-Type':'image/gif'},body:Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=','base64')});
+  assert.equal(media.status,201);
+  const asset=(await media.json()).id;
+  const over=await request('/experiment-datasets','POST',{name:'超配额',cases:[{caseKey:'x',input:{parts:[{type:'image',assetId:asset}]}}]});
+  assert.equal(over.status,400);
+  assert.match(over.data.error,/配额/);
+  await request('/evaluation/settings','PUT',{globalMediaBytes:1024,datasetMediaBytes:1024,minFreePercent:20});
+  assert.equal((await request('/experiment-datasets','POST',{name:'配额内',cases:[{caseKey:'x',input:{parts:[{type:'image',assetId:asset}]}}]})).status,201);
+  const memberLogin=await fetch(`${api.base}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'member',password:'test'})});
+  const memberToken=(await memberLogin.json()).token;
+  const memberRequest=async(path,method='GET',body)=>{const response=await fetch(`${api.base}${path}`,{method,headers:{Authorization:`Bearer ${memberToken}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return{status:response.status,data:await response.json()};};
+  assert.equal((await memberRequest('/evaluation/settings','PUT',{globalMediaBytes:1,datasetMediaBytes:1,minFreePercent:0})).status,403);
+  const foreign=await memberRequest('/experiment-datasets','POST',{name:'外部附件',cases:[{caseKey:'x',input:{parts:[{type:'image',assetId:asset}]}}]});
+  assert.equal(foreign.status,400);
+  assert.match(foreign.data.error,/无权引用/);
 });
 
 test('one immutable version accepts exactly 10,000 cases', async t => {

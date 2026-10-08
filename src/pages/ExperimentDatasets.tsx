@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Alert, Button, Card, Checkbox, Form, Input, Modal, Select, Space, Table, Tag, Typography, Upload } from 'antd';
+import { App, Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography, Upload } from 'antd';
 import { Link } from 'react-router-dom';
-import { createDataset, createDatasetSubset, createDatasetVersion, createEvaluationFolder, getDatasetVersion, getDatasetVersions, listDatasets, listEvaluationFolders } from '../api/experiment-evaluation';
+import { createDataset, createDatasetSubset, createDatasetVersion, createEvaluationFolder, getDatasetVersion, getDatasetVersions, getEvaluationSettings, listDatasets, listEvaluationFolders, updateEvaluationSettings } from '../api/experiment-evaluation';
+import { getStoredUser } from '../api/client';
 import type { Dataset, DatasetCase } from '../api/experiment-evaluation';
 import { EVALUATION_FIELDS, parseEvaluationFile, previewEvaluationRows } from '../utils/evaluationImport';
 import type { EvaluationField, EvaluationImportSource } from '../utils/evaluationImport';
@@ -28,6 +29,10 @@ export default function ExperimentDatasets() {
   const [subset, setSubset] = useState<{ dataset: Dataset; versionId: string; cases: { case_key: string }[] }>();
   const [subsetKeys, setSubsetKeys] = useState<string[]>([]);
   const [subsetName, setSubsetName] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mediaGlobalGb, setMediaGlobalGb] = useState(10);
+  const [mediaDatasetGb, setMediaDatasetGb] = useState(5);
+  const [minFreePercent, setMinFreePercent] = useState(20);
   const load = useCallback(() => Promise.all([listDatasets(), listEvaluationFolders()]).then(([datasets, tree]) => { setItems(datasets.items); setFolders(tree.items); setError(''); }).catch(cause => setError(cause instanceof Error ? cause.message : '加载失败')), []);
   useEffect(() => { void load(); }, [load]);
   const preview = useMemo(() => source ? previewEvaluationRows(source) : [], [source]);
@@ -70,7 +75,10 @@ export default function ExperimentDatasets() {
     try { const detail = await getDatasetVersion(versionId); setSubset({ dataset, versionId, cases: detail.cases as { case_key: string }[] }); setSubsetKeys([]); setSubsetName(`${dataset.name} · 子集`); }
     catch (cause) { message.error(cause instanceof Error ? cause.message : '加载用例失败'); }
   };
-  return <Card title="版本化评测数据集" extra={<Space wrap><Link to="/experiments">返回实验</Link><Button onClick={() => openImport('new')}>导入 CSV／JSONL</Button><Button type="primary" onClick={() => { setName(''); setFolderId(undefined); setCasesText(example); setTarget('new'); }}>新建数据集</Button></Space>}>
+  const admin = getStoredUser<{role:string}>()?.role === 'admin';
+  const openSettings = async () => { try { const value=await getEvaluationSettings(); setMediaGlobalGb(Number(value.global_media_bytes)/1024**3); setMediaDatasetGb(Number(value.dataset_media_bytes)/1024**3); setMinFreePercent(Number(value.min_free_percent)); setSettingsOpen(true); } catch(cause) { message.error(cause instanceof Error ? cause.message : '设置加载失败'); } };
+  const saveSettings = async () => { try { await updateEvaluationSettings({globalMediaBytes:Math.round(mediaGlobalGb*1024**3),datasetMediaBytes:Math.round(mediaDatasetGb*1024**3),minFreePercent}); setSettingsOpen(false); message.success('评测媒体配额已更新'); } catch(cause) { message.error(cause instanceof Error ? cause.message : '保存失败'); } };
+  return <Card title="版本化评测数据集" extra={<Space wrap><Link to="/experiments">返回实验</Link>{admin && <Button onClick={() => void openSettings()}>媒体配额</Button>}<Button onClick={() => openImport('new')}>导入 CSV／JSONL</Button><Button type="primary" onClick={() => { setName(''); setFolderId(undefined); setCasesText(example); setTarget('new'); }}>新建数据集</Button></Space>}>
     <Typography.Paragraph type="secondary">每次保存生成不可变版本。支持最多 10,000 条文本或多模态用例；媒体使用已上传的附件 ID。</Typography.Paragraph>
     {error && <Alert type="error" message={error} showIcon />}
     <Space wrap style={{ marginBottom: 16 }}><Select allowClear placeholder="按文件夹浏览" style={{ width: 220 }} options={folderOptions} value={folderId} onChange={setFolderId} /><Input placeholder="新文件夹名称" value={folderName} onChange={event => setFolderName(event.target.value)} style={{ width: 180 }} /><Button disabled={!folderName.trim()} onClick={() => void createEvaluationFolder(folderName, folderId).then(() => { setFolderName(''); return load(); }).catch(cause => message.error(cause.message))}>创建文件夹</Button></Space>
@@ -88,5 +96,6 @@ export default function ExperimentDatasets() {
     <Modal title="从固定版本创建子集" open={Boolean(subset)} onCancel={() => setSubset(undefined)} onOk={() => { if (!subset) return; void createDatasetSubset(subset.dataset.id, subset.versionId, subsetName, subsetKeys, folderId).then(() => { message.success('子集已创建'); setSubset(undefined); return load(); }).catch(cause => message.error(cause.message)); }} okButtonProps={{ disabled: !subsetKeys.length || !subsetName.trim() }} width={720}>
       <Input aria-label="子集名称" value={subsetName} onChange={event => setSubsetName(event.target.value)} style={{ marginBottom: 12 }} /><Select mode="multiple" aria-label="选择用例" maxTagCount="responsive" value={subsetKeys} onChange={setSubsetKeys} options={subset?.cases.map(item => ({ value: item.case_key, label: item.case_key }))} style={{ width: '100%' }} placeholder="选择源版本中的用例" />
     </Modal>
+    <Modal title="评测媒体配额" open={settingsOpen} onCancel={() => setSettingsOpen(false)} onOk={() => void saveSettings()} okButtonProps={{disabled:mediaDatasetGb>mediaGlobalGb || mediaGlobalGb<=0 || mediaDatasetGb<=0}}><Form.Item label="总配额（GB）"><InputNumber min={0.001} step={1} value={mediaGlobalGb} onChange={value=>setMediaGlobalGb(value||0)} /></Form.Item><Form.Item label="单数据集配额（GB）"><InputNumber min={0.001} step={1} value={mediaDatasetGb} onChange={value=>setMediaDatasetGb(value||0)} /></Form.Item><Form.Item label="磁盘最小空闲比例（%）"><InputNumber min={0} max={99} value={minFreePercent} onChange={value=>setMinFreePercent(value||0)} /></Form.Item></Modal>
   </Card>;
 }
