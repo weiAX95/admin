@@ -73,7 +73,8 @@ test("review plans are per user, reset on content edits, and complete once per g
   assert.equal((await api.client.query("SELECT generation,step FROM note_review_progress WHERE user_id='admin' AND note_id='old'")).rows[0].generation, previousGeneration + 1);
   assert.equal((await api.client.query("SELECT step FROM note_review_progress WHERE user_id='admin' AND note_id='old'")).rows[0].step, 0);
   await call(admin, "/notes/old", "DELETE");
-  assert.equal((await api.client.query("SELECT count(*)::int AS count FROM note_review_progress WHERE note_id='old'")).rows[0].count, 0);
+  assert.equal((await api.client.query("SELECT count(*)::int AS count FROM note_review_progress WHERE note_id='old'")).rows[0].count, 4);
+  assert.equal((await call(admin, "/note-reviews")).data.items.some(item => item.noteId === 'old'), false);
 });
 
 test("09:00 notifications catch up once, mark read, and skip SMTP without configuration", async t => {

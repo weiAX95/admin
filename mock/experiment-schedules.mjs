@@ -33,7 +33,7 @@ export async function handleExperimentSchedules({pathname,method,client,me,readB
     }
     if(method==='POST'){
       const body=await readBody();
-      const experiment=(await client.query("SELECT owner_id FROM experiments WHERE id=$1 AND record_kind='definition'",[body.experimentId])).rows[0];
+      const experiment=(await client.query("SELECT owner_id FROM experiments WHERE id=$1 AND record_kind='definition' AND deleted_at IS NULL",[body.experimentId])).rows[0];
       if(!experiment)return fail('可执行实验不存在',404);
       if(me.role!=='admin'&&experiment.owner_id!==me.id)return fail('无权调度该实验',403);
       let config;
@@ -52,6 +52,7 @@ export async function handleExperimentSchedules({pathname,method,client,me,readB
     if(method==='PATCH'){
       const body=await readBody();
       if(typeof body.active!=='boolean')return fail('active 必须是布尔值');
+      if (body.active && !(await client.query('SELECT 1 FROM experiments WHERE id=$1 AND deleted_at IS NULL',[row.experiment_id])).rowCount) return fail('实验仍在回收站，无法恢复调度',409);
       const next=body.active?nextScheduleAt({frequency:row.frequency,localTime:row.local_time,timeZone:row.time_zone,weekday:row.weekday,dayOfMonth:row.day_of_month}):row.next_run_at;
       await client.query('UPDATE experiment_schedules SET active=$2,failure_streak=CASE WHEN $2 THEN 0 ELSE failure_streak END,next_run_at=$3,updated_at=now() WHERE id=$1',[row.id,body.active,next]);
       return ok({id:row.id,active:body.active,nextRunAt:next});

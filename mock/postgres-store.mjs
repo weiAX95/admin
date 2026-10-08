@@ -48,6 +48,7 @@ const specs = [
   spec("experiments", "experiments", ["id", "title", "taskId", "prompt", "model", "params", "result", "score", "ownerId", "recordKind", "systemPrompt", "userPrompt", "promptVersionId", "variables", "chainId", "createdAt", "updatedAt"]),
   spec("activity", "activity", ["id", "type", "taskId", "title", "detail", "at", "userId", "username", "userName"]),
 ];
+const recyclableTables = new Set(['tasks', 'notes', 'experiments']);
 
 const pair = field => Array.isArray(field) ? field : [field, snake(field)];
 const columns = fields => fields.map(field => pair(field)[1]);
@@ -123,7 +124,7 @@ export async function assertSchemaCurrent(client = pool) {
 export async function loadData(client) {
   const data = {};
   for (const descriptor of specs) {
-    const rows = (await client.query(`SELECT * FROM ${descriptor.table}`)).rows;
+    const rows = (await client.query(`SELECT * FROM ${descriptor.table}${recyclableTables.has(descriptor.table) ? ' WHERE deleted_at IS NULL' : ''}`)).rows;
     data[descriptor.name] = rows.map(row => {
       const entity = mapped(row, descriptor.fields);
       if (descriptor.name === "tasks") entity.estimatedHours = row.estimated_hours ?? null;
@@ -168,6 +169,7 @@ async function saveChildren(client, descriptor, entity, name, oldEntity) {
 }
 
 export async function saveData(client, before, after) {
+  let recycleDays;
   for (const descriptor of specs) {
     const previous = new Map((before[descriptor.name] || []).map(item => [item.id, item]));
     const next = new Map((after[descriptor.name] || []).map(item => [item.id, item]));
@@ -177,7 +179,13 @@ export async function saveData(client, before, after) {
       await upsert(client, descriptor.table, descriptor.fields, prepareParent(item, descriptor.name));
     }
     for (const item of changed) for (const relation of descriptor.children) await saveChildren(client, relation, item, descriptor.name, previous.get(item.id));
-    for (const id of previous.keys()) if (!next.has(id)) await client.query(`DELETE FROM ${descriptor.table} WHERE id=$1`, [id]);
+    for (const id of previous.keys()) if (!next.has(id)) {
+      if (recyclableTables.has(descriptor.table)) {
+        recycleDays ??= Number((await client.query('SELECT recycle_days FROM retention_settings WHERE id=1')).rows[0].recycle_days);
+        if (recycleDays > 0) await client.query(`UPDATE ${descriptor.table} SET deleted_at=now() WHERE id=$1 AND deleted_at IS NULL`, [id]);
+        else await client.query(`DELETE FROM ${descriptor.table} WHERE id=$1`, [id]);
+      } else await client.query(`DELETE FROM ${descriptor.table} WHERE id=$1`, [id]);
+    }
   }
   if (JSON.stringify(before.legacyActivityIds) !== JSON.stringify(after.legacyActivityIds)) {
     await client.query("DELETE FROM legacy_activity_ids");

@@ -30,7 +30,7 @@ function runCeiling(variant, prompt, model, judge, usage={}) {
 }
 
 async function getDefinition(client, id) {
-  const experiment = (await client.query("SELECT * FROM experiments WHERE id=$1 AND record_kind='definition'", [id])).rows[0];
+  const experiment = (await client.query("SELECT * FROM experiments WHERE id=$1 AND record_kind='definition' AND deleted_at IS NULL", [id])).rows[0];
   if (!experiment) return null;
   const variants = (await client.query('SELECT * FROM experiment_variants WHERE experiment_id=$1 AND active=true ORDER BY position', [id])).rows.map(mapVariant);
   const batches = (await client.query('SELECT * FROM experiment_batches WHERE experiment_id=$1 ORDER BY created_at DESC LIMIT 100', [id])).rows;

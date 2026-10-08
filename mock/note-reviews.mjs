@@ -12,7 +12,7 @@ export async function initializeNoteReviews(client, noteId, now = new Date()) {
 
 export async function initializeUserReviews(client, userId, now = new Date()) {
   const today = shanghaiDate(now);
-  await client.query("INSERT INTO note_review_progress(user_id,note_id,started_on,due_on) SELECT $1,id,$2,$3 FROM notes ON CONFLICT DO NOTHING", [userId, today, addCalendarDays(today, 1)]);
+  await client.query("INSERT INTO note_review_progress(user_id,note_id,started_on,due_on) SELECT $1,id,$2,$3 FROM notes WHERE deleted_at IS NULL ON CONFLICT DO NOTHING", [userId, today, addCalendarDays(today, 1)]);
 }
 
 export async function resetNoteReviews(client, noteId, now = new Date()) {
@@ -22,7 +22,7 @@ export async function resetNoteReviews(client, noteId, now = new Date()) {
 }
 
 export async function completeNoteReview(client, userId, noteId, generation, now = new Date()) {
-  const row = (await client.query("SELECT step,generation,to_char(due_on,'YYYY-MM-DD') AS due_on FROM note_review_progress WHERE user_id=$1 AND note_id=$2 FOR UPDATE", [userId, noteId])).rows[0];
+  const row = (await client.query("SELECT p.step,p.generation,to_char(p.due_on,'YYYY-MM-DD') AS due_on FROM note_review_progress p JOIN notes n ON n.id=p.note_id AND n.deleted_at IS NULL WHERE p.user_id=$1 AND p.note_id=$2 FOR UPDATE OF p", [userId, noteId])).rows[0];
   if (!row) return { status: "missing" };
   if (row.generation !== generation) return { status: "conflict" };
   if (shanghaiDate(now) < row.due_on) return { status: "early" };
@@ -37,7 +37,7 @@ export async function completeNoteReview(client, userId, noteId, generation, now
 
 export async function createDueReviewNotifications(client, now = new Date()) {
   const today = shanghaiDate(now);
-  const rows = (await client.query("SELECT p.user_id,p.note_id,p.generation,to_char(p.due_on,'YYYY-MM-DD') AS due_on,u.review_email,u.review_email_enabled FROM note_review_progress p JOIN users u ON u.id=p.user_id WHERE u.status='active' AND p.due_on <= $1", [today])).rows;
+  const rows = (await client.query("SELECT p.user_id,p.note_id,p.generation,to_char(p.due_on,'YYYY-MM-DD') AS due_on,u.review_email,u.review_email_enabled FROM note_review_progress p JOIN users u ON u.id=p.user_id JOIN notes n ON n.id=p.note_id AND n.deleted_at IS NULL WHERE u.status='active' AND p.due_on <= $1", [today])).rows;
   let created = 0;
   for (const row of rows) {
     if (now.getTime() < reminderTime(row.due_on)) continue;

@@ -45,6 +45,7 @@ import { getGlobalSettings, handleSystemSettings } from "./system-settings.mjs";
 import { handleModelConnections } from './model-connections.mjs';
 import { checkLatestRelease, versionInfo } from './version-info.mjs';
 import { handleRetentionSettings, runRetentionCleanup } from './retention.mjs';
+import { handleRecycleBin } from './recycle-bin.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -510,6 +511,8 @@ async function handleRequest(req, res) {
     if (connectionResponse) return send(res, connectionResponse.status, connectionResponse.data);
     const retentionResponse = await handleRetentionSettings({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (retentionResponse) return send(res, retentionResponse.status, retentionResponse.data);
+    const recycleResponse = await handleRecycleBin({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (recycleResponse) return send(res, recycleResponse.status, recycleResponse.data);
     if (pathname === '/api/settings/version' && method === 'GET') {
       void checkLatestRelease();
       return send(res, 200, versionInfo());
@@ -562,7 +565,7 @@ async function handleRequest(req, res) {
     }
     if (pathname === "/api/note-reviews" && method === "GET") {
       const today = shanghaiDate(new Date());
-      const rows = (await activeClient.query("SELECT p.note_id AS id,n.title,p.step,p.generation,to_char(p.due_on,'YYYY-MM-DD') AS due_on,p.last_reviewed_at FROM note_review_progress p JOIN notes n ON n.id=p.note_id WHERE p.user_id=$1 AND p.due_on <= $2 ORDER BY p.due_on,n.title", [me.id, today])).rows;
+      const rows = (await activeClient.query("SELECT p.note_id AS id,n.title,p.step,p.generation,to_char(p.due_on,'YYYY-MM-DD') AS due_on,p.last_reviewed_at FROM note_review_progress p JOIN notes n ON n.id=p.note_id AND n.deleted_at IS NULL WHERE p.user_id=$1 AND p.due_on <= $2 ORDER BY p.due_on,n.title", [me.id, today])).rows;
       return send(res, 200, { items: rows.map(row => ({ noteId: row.id, title: row.title, step: row.step, generation: row.generation, dueOn: row.due_on, lastReviewedAt: row.last_reviewed_at })), today });
     }
     const completeReviewRoute = pathname.match(/^\/api\/note-reviews\/([^/]+)\/complete$/);
@@ -1058,7 +1061,6 @@ async function handleRequest(req, res) {
       if (method === "DELETE") {
         const previousStates = dependencyStates();
         const [removed] = db.tasks.splice(index, 1);
-        db.timeEntries = db.timeEntries.filter(entry => entry.taskId !== id);
         for (const task of db.tasks) {
           if ((task.dependencyIds || []).includes(id)) {
             const before = structuredClone(task);
@@ -1485,7 +1487,6 @@ async function handleRequest(req, res) {
       }
       if (method === "DELETE") {
         const [rm] = db.notes.splice(i, 1);
-        db.noteVersions = db.noteVersions.filter(item => item.noteId !== rm.id);
         reconcileNoteLinks();
         saveDb(db);
         return send(res, 200, { deleted: true, id: rm.id });
@@ -1549,6 +1550,11 @@ async function handleRequest(req, res) {
         if (me.role !== "admin" && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权删除该实验" });
         const [rm] = db.experiments.splice(i, 1);
         saveDb(db);
+        afterSave(async client => {
+          await client.query('UPDATE experiment_schedules SET active=false WHERE experiment_id=$1', [rm.id]);
+          await client.query('UPDATE evaluation_schedules SET active=false WHERE experiment_id=$1', [rm.id]);
+          await client.query('UPDATE experiment_shares SET revoked_at=coalesce(revoked_at,now()) WHERE experiment_id=$1', [rm.id]);
+        });
         return send(res, 200, { deleted: true, id: rm.id });
       }
       return send(res, 405, { error: "method not allowed" });

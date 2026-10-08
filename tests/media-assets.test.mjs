@@ -34,6 +34,10 @@ test("private image upload, MIME validation and 24-hour orphan cleanup", async t
   const remove = await fetch(`${api.base}/notes/${noteId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
   assert.equal(remove.status, 200);
   await cleanupAssets(api.client, future, directory);
+  assert.equal((await api.client.query("SELECT count(*)::int AS count FROM media_assets WHERE id=$1", [id])).rows[0].count, 1);
+  const purge = await fetch(`${api.base}/settings/recycle-bin/note/${noteId}/purge`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ confirmTitle: "图片笔记" }) });
+  assert.equal(purge.status, 200);
+  await cleanupAssets(api.client, future, directory);
   assert.equal((await api.client.query("SELECT count(*)::int AS count FROM media_assets WHERE id=$1", [id])).rows[0].count, 0);
   await assert.rejects(fs.stat(path.join(directory, id)), { code: "ENOENT" });
 });

@@ -474,7 +474,12 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
     const prompt = (await client.query('SELECT * FROM prompt_library WHERE id=$1 FOR UPDATE', [promptRoute[1]])).rows[0];
     if (!prompt) return fail('提示词不存在',404);
     if (!canEdit(prompt,me)) return fail('无权删除该提示词',403);
-    await client.query('UPDATE prompt_library SET deleted_at=coalesce(deleted_at,now()) WHERE id=$1', [prompt.id]);
+    const recycleDays=Number((await client.query('SELECT recycle_days FROM retention_settings WHERE id=1')).rows[0].recycle_days);
+    if(recycleDays===0){
+      await client.query('SAVEPOINT prompt_purge');
+      try{await client.query('DELETE FROM prompt_library WHERE id=$1',[prompt.id]);await client.query('RELEASE SAVEPOINT prompt_purge');}
+      catch{await client.query('ROLLBACK TO SAVEPOINT prompt_purge');await client.query('RELEASE SAVEPOINT prompt_purge');return fail('提示词仍被其他记录引用，无法立即永久删除',409);}
+    }else await client.query('UPDATE prompt_library SET deleted_at=coalesce(deleted_at,now()) WHERE id=$1', [prompt.id]);
     return ok({ deleted: true });
   }
   return null;

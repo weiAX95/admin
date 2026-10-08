@@ -8,7 +8,7 @@ const expiries={ '1h': 3600_000, '24h': 86_400_000, '7d': 7*86_400_000, permanen
 const owner=(row,me)=>me.role==='admin'||row.owner_id===me.id;
 
 async function publicView(client, experimentId) {
-  const experiment=(await client.query('SELECT * FROM experiments WHERE id=$1',[experimentId])).rows[0];
+  const experiment=(await client.query('SELECT * FROM experiments WHERE id=$1 AND deleted_at IS NULL',[experimentId])).rows[0];
   if(!experiment)return null;
   if(experiment.record_kind==='manual')return {id:experiment.id,recordKind:'manual',title:experiment.title,taskId:experiment.task_id,prompt:experiment.prompt,model:experiment.model,params:experiment.params,result:experiment.result,score:experiment.score};
   const variants=(await client.query('SELECT v.label,m.display_name AS model,v.parameters FROM experiment_variants v JOIN experiment_models m ON m.id=v.model_id WHERE v.experiment_id=$1 AND v.active=true ORDER BY v.position',[experiment.id])).rows.map(row=>({label:row.label,model:row.model,parameters:row.parameters}));
@@ -32,7 +32,7 @@ export async function canReadSharedExperimentAsset(pool, token, assetId) {
   if (!/^[0-9a-f-]{36}$/.test(token || '') || !/^[0-9a-f-]{36}$/.test(assetId || '')) return false;
   const share=(await pool.query('SELECT experiment_id FROM experiment_shares WHERE token_hash=$1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now())',[sha256(token)])).rows[0];
   if(!share)return false;
-  const experiment=(await pool.query('SELECT prompt,result,system_prompt,user_prompt FROM experiments WHERE id=$1',[share.experiment_id])).rows[0];
+  const experiment=(await pool.query('SELECT prompt,result,system_prompt,user_prompt FROM experiments WHERE id=$1 AND deleted_at IS NULL',[share.experiment_id])).rows[0];
   if(!experiment)return false;
   const latest=(await pool.query("SELECT id FROM experiment_batches WHERE experiment_id=$1 AND status IN ('completed','partial') ORDER BY created_at DESC LIMIT 1",[share.experiment_id])).rows[0];
   const outputs=latest?(await pool.query('SELECT output FROM experiment_runs WHERE batch_id=$1',[latest.id])).rows.map(row=>row.output):[];

@@ -26,7 +26,7 @@ export async function handleEvaluationSchedules({ pathname, method, client, me, 
     if (method === 'GET') return ok({ items: (await client.query("SELECT s.*,e.title FROM evaluation_schedules s JOIN experiments e ON e.id=s.experiment_id WHERE $1='admin' OR s.owner_id=$2 ORDER BY s.created_at DESC", [me.role,me.id])).rows });
     if (method === 'POST') {
       const body = await readBody();
-      const experiment = (await client.query("SELECT owner_id FROM experiments WHERE id=$1 AND record_kind='definition'", [body.experimentId])).rows[0];
+      const experiment = (await client.query("SELECT owner_id FROM experiments WHERE id=$1 AND record_kind='definition' AND deleted_at IS NULL", [body.experimentId])).rows[0];
       if (!experiment) return fail('可执行实验不存在',404);
       if (me.role !== 'admin' && experiment.owner_id !== me.id) return fail('无权调度该实验',403);
       if (!(await client.query('SELECT 1 FROM experiment_variants WHERE id=$1 AND experiment_id=$2 AND active=true', [body.variantId,body.experimentId])).rowCount) return fail('变体不存在或已停用');
