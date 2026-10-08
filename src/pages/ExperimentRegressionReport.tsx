@@ -51,6 +51,7 @@ export default function ExperimentRegressionReport() {
     if (drill.field === 'category') return item.category === drill.value;
     if (drill.field === 'variantId') return item.variantId === drill.value;
     if (drill.field === 'score') return item.score !== null && item.score >= Number(drill.value) && (Number(drill.value) === 4 ? item.score <= 5 : item.score < Number(drill.value) + 1);
+    if (drill.field === 'metric') { const value=item.metricDetails?.[drill.value.name]; return typeof value==='number' && value>=drill.value.min && (drill.value.last?value<=drill.value.max:value<drill.value.max); }
     return drill.value === 'passed' ? item.passed === true : drill.value === 'below' ? item.passed === false : drill.value === 'failed' ? item.status === 'failed' : item.status === 'completed' && item.score === null;
   });
   return <Card title="回归评测报告" extra={<Space><Link to="/experiments">返回实验</Link><Button onClick={() => void openShare()}>分享报告</Button><Button loading={downloading} onClick={() => void exportPdf()}>导出 PDF</Button></Space>}>
