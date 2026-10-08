@@ -1664,7 +1664,7 @@ server.on("error", (err) => {
 
 try {
   await assertSchemaCurrent();
-  await recoverExperimentJobs(pool);
+  if (process.env.EXPERIMENT_WORKER_MODE !== 'external') await recoverExperimentJobs(pool);
   const users = await pool.query("SELECT 1 FROM users LIMIT 1");
   if (!users.rowCount) throw new Error("数据库尚无账号；请先运行 npm run db:import");
   await withData(() => {
@@ -1695,14 +1695,18 @@ try {
       try { await runExperimentJobs(pool, notifyLive); }
       catch (error) { console.error("[experiments] runner failed:", error); }
     };
-    void runExperiments();
-    setInterval(() => { void runExperiments(); }, 1500).unref();
+    if (process.env.EXPERIMENT_WORKER_MODE !== 'external') {
+      void runExperiments();
+      setInterval(() => { void runExperiments(); }, 1500).unref();
+    }
     const runSchedules = async () => {
       try { if (await processDueExperimentSchedules(pool)) notifyLive(); }
       catch (error) { console.error("[experiments] schedule failed:", error); }
     };
-    void runSchedules();
-    setInterval(() => { void runSchedules(); void processDueEvaluationSchedules(pool).catch(error => console.error('[evaluation-schedules] processing failed:',error)); }, 1000).unref();
+    if (process.env.EXPERIMENT_WORKER_MODE !== 'external') {
+      void runSchedules();
+      setInterval(() => { void runSchedules(); void processDueEvaluationSchedules(pool).catch(error => console.error('[evaluation-schedules] processing failed:',error)); }, 1000).unref();
+    }
   });
 } catch (error) {
   console.error("[mock] PostgreSQL 不可用或尚未迁移：", error.message);

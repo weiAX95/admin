@@ -34,8 +34,13 @@ async function getDefinition(client, id) {
   const variants = (await client.query('SELECT * FROM experiment_variants WHERE experiment_id=$1 AND active=true ORDER BY position', [id])).rows.map(mapVariant);
   const batches = (await client.query('SELECT * FROM experiment_batches WHERE experiment_id=$1 ORDER BY created_at DESC LIMIT 100', [id])).rows;
   const runs = (await client.query('SELECT * FROM experiment_runs WHERE experiment_id=$1 ORDER BY created_at DESC LIMIT 1000', [id])).rows.map(mapRun);
+  const counts = (await client.query(`SELECT batch_id, count(*)::int AS total_runs,
+    count(*) FILTER (WHERE status IN ('completed','failed'))::int AS finished_runs,
+    count(*) FILTER (WHERE status='failed')::int AS failed_runs
+    FROM experiment_runs WHERE experiment_id=$1 GROUP BY batch_id`, [id])).rows;
+  const countsByBatch = new Map(counts.map(row => [row.batch_id, row]));
   const cumulativeCostUsd = (await client.query("SELECT COALESCE(sum(cost_usd),0) AS total FROM experiment_runs WHERE experiment_id=$1 AND status='completed'", [id])).rows[0].total;
-  return { id: experiment.id, title: experiment.title, taskId: experiment.task_id, ownerId: experiment.owner_id, chainId: experiment.chain_id, cumulativeCostUsd, systemPrompt: experiment.system_prompt, userPrompt: experiment.user_prompt, promptVersionId: experiment.prompt_version_id, variables: experiment.variables, variants, batches: batches.map(batch => ({ id: batch.id, kind: batch.kind, status: batch.status, inputs: batch.inputs, createdAt: batch.created_at, completedAt: batch.completed_at, runs: runs.filter(run => run.batchId === batch.id), winRates: winRates(runs.filter(run => run.batchId === batch.id)) })), createdAt: experiment.created_at, updatedAt: experiment.updated_at };
+  return { id: experiment.id, title: experiment.title, taskId: experiment.task_id, ownerId: experiment.owner_id, chainId: experiment.chain_id, cumulativeCostUsd, systemPrompt: experiment.system_prompt, userPrompt: experiment.user_prompt, promptVersionId: experiment.prompt_version_id, variables: experiment.variables, variants, batches: batches.map(batch => ({ id: batch.id, kind: batch.kind, status: batch.status, inputs: batch.inputs, createdAt: batch.created_at, completedAt: batch.completed_at, totalRuns: countsByBatch.get(batch.id)?.total_runs || 0, finishedRuns: countsByBatch.get(batch.id)?.finished_runs || 0, failedRuns: countsByBatch.get(batch.id)?.failed_runs || 0, runs: runs.filter(run => run.batchId === batch.id), winRates: winRates(runs.filter(run => run.batchId === batch.id)) })), createdAt: experiment.created_at, updatedAt: experiment.updated_at };
 }
 
 export async function createBatch(client, experimentId, me, body, kind = 'single') {
@@ -278,7 +283,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     const row = (await client.query('SELECT * FROM experiment_batches WHERE id=$1', [batchRoute[1]])).rows[0];
     if (!row) return fail('批次不存在', 404);
     const runs = (await client.query('SELECT * FROM experiment_runs WHERE batch_id=$1 ORDER BY input_index,created_at', [row.id])).rows.map(mapRun);
-    return ok({ id: row.id, experimentId: row.experiment_id, kind: row.kind, status: row.status, inputs: row.inputs, runs, winRates: winRates(runs) });
+    return ok({ id: row.id, experimentId: row.experiment_id, kind: row.kind, status: row.status, inputs: row.inputs, totalRuns: runs.length, finishedRuns: runs.filter(run => ['completed','failed'].includes(run.status)).length, failedRuns: runs.filter(run => run.status === 'failed').length, runs, winRates: winRates(runs) });
   }
   const retryRoute = pathname.match(/^\/api\/experiment-batches\/([^/]+)\/retry$/);
   if (retryRoute && method === 'POST') {
