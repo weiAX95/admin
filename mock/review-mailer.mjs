@@ -22,7 +22,7 @@ export async function deliverReviewEmails(pool, env = process.env) {
     try {
       await client.query("BEGIN");
       await client.query("UPDATE note_review_notifications SET email_status='failed',email_next_attempt_at=now() WHERE email_status='sending' AND email_claimed_at < now()-interval '10 minutes'");
-      item = (await client.query("SELECT n.id,n.email_to,p.title FROM note_review_notifications n JOIN notes p ON p.id=n.note_id JOIN users u ON u.id=n.user_id WHERE n.email_status IN ('pending','failed') AND n.email_next_attempt_at <= now() AND n.email_to IS NOT NULL AND u.status='active' AND u.review_email_enabled=true AND u.review_email=n.email_to AND EXISTS (SELECT 1 FROM note_review_progress r WHERE r.user_id=n.user_id AND r.note_id=n.note_id AND r.generation=n.generation) ORDER BY n.created_at LIMIT 1 FOR UPDATE OF n SKIP LOCKED")).rows[0];
+      item = (await client.query("SELECT n.id,n.email_to,p.title FROM note_review_notifications n JOIN notes p ON p.id=n.note_id AND p.deleted_at IS NULL JOIN users u ON u.id=n.user_id WHERE n.email_status IN ('pending','failed') AND n.email_next_attempt_at <= now() AND n.email_to IS NOT NULL AND u.status='active' AND u.review_email_enabled=true AND u.review_email=n.email_to AND EXISTS (SELECT 1 FROM note_review_progress r WHERE r.user_id=n.user_id AND r.note_id=n.note_id AND r.generation=n.generation) ORDER BY n.created_at LIMIT 1 FOR UPDATE OF n SKIP LOCKED")).rows[0];
       if (item) await client.query("UPDATE note_review_notifications SET email_status='sending',email_claimed_at=now(),email_attempts=email_attempts+1 WHERE id=$1", [item.id]);
       await client.query("COMMIT");
     } catch (error) { await client.query("ROLLBACK"); throw error; }
