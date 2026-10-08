@@ -31,4 +31,12 @@ test('external worker resumes a persisted evaluation batch while API only enqueu
   const finishedDefinition=(await call(`/experiment-definitions/${experiment.id}`)).data;
   assert.deepEqual([finishedDefinition.batches[0].totalRuns,finishedDefinition.batches[0].finishedRuns,finishedDefinition.batches[0].failedRuns],[1,1,0]);
   assert.equal((await api.client.query('SELECT count(*)::int AS n FROM experiment_run_metrics m JOIN experiment_runs r ON r.id=m.run_id WHERE r.batch_id=$1',[batch.data.batchId])).rows[0].n,1);
+  const schedule=await call('/evaluation/schedules','POST',{experimentId:experiment.id,variantId:experiment.variants[0].id,datasetVersionId:dataset.version.id,metricVersionId:'default-v1',frequency:'daily',localTime:'09:00'});
+  assert.equal(schedule.status,201,JSON.stringify(schedule.data));
+  const dueAt=new Date(Date.now()+1000);
+  await api.client.query('UPDATE evaluation_schedules SET next_run_at=$2 WHERE id=$1',[schedule.data.id,dueAt]);
+  let occurrence;
+  for(let index=0;index<100;index++) {await new Promise(resolve=>setTimeout(resolve,100));occurrence=(await api.client.query('SELECT * FROM evaluation_schedule_occurrences WHERE schedule_id=$1',[schedule.data.id])).rows[0];if(occurrence)break;}
+  assert.ok(occurrence?.batch_id,'worker should dispatch the due evaluation schedule');
+  assert.ok(Date.now()-dueAt.getTime()<5000,'running worker should dispatch within 5 seconds of due time');
 });
