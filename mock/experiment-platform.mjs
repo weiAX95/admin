@@ -20,7 +20,9 @@ function runCeiling(variant, prompt, model, judge, usage={}) {
   const inputTokens = Math.max(1, [...prompt.system, ...prompt.user].length);
   const main = (inputTokens * model.input_usd_per_million + outputTokens * model.output_usd_per_million) / 1_000_000;
   const judgeInputTokens = inputTokens + outputTokens * 4 + 1000;
-  const judgeCost = judge ? (judgeInputTokens * judge.input_usd_per_million + 300 * judge.output_usd_per_million) / 1_000_000 : 0;
+  const outputKind=variant.parameters.output_kind || 'text';
+  const judgeMedia=outputKind==='image'?{imageCount:model.provider==='openai'?1:4,audioSeconds:0,videoSeconds:0}:outputKind==='audio'?{imageCount:0,audioSeconds:600,videoSeconds:0}:{imageCount:0,audioSeconds:0,videoSeconds:0};
+  const judgeCost = judge ? (judgeInputTokens * judge.input_usd_per_million + 300 * judge.output_usd_per_million) / 1_000_000 + mediaCost(judgeMedia,judge.media_pricing || {}) : 0;
   return ceiling(main + judgeCost + mediaCost(usage,model.media_pricing || {}) + preflightOutput(model,variant.parameters.output_kind || 'text'));
 }
 
@@ -69,6 +71,14 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   const judge = models.get(settings.judge_model_id);
   if (variants.some(variant=>(variant.parameters.output_kind || 'text')==='text') && !judge) return fail('LLM Judge 模型未启用', 409);
   if(judge && !providerConfigured(judge.provider) && variants.some(variant=>(variant.parameters.output_kind || 'text')==='text')) return fail('LLM Judge 供应商凭据未配置',409);
+  const judgeFor=kind=>{
+    if(!judge) return null;
+    if(kind==='text') return judge;
+    if(!providerConfigured(judge.provider)||!judge.capabilities?.input?.includes(kind)||!judge.capabilities?.output?.includes('text')) return null;
+    if(kind==='image' && judge.media_pricing?.imageInputUsdEach===undefined) return null;
+    if(kind==='audio' && (judge.provider!=='gemini'||judge.media_pricing?.audioInputUsdPerSecond===undefined)) return null;
+    return judge;
+  };
   if(variants.some(variant=>!providerConfigured(models.get(variant.modelId).provider))) return fail('部分变体的供应商凭据未配置',409);
   let prompts, usedVersions=[],toolSchema=null;
   try {
@@ -106,7 +116,7 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
       usageByVariant.set(variant.id,usages);
     }
   } catch(error) {return fail(error.message,409);}
-  const estimate = variants.reduce((total, variant) => total + prompts.reduce((sum, prompt,index) => sum + runCeiling(variant, prompt, models.get(variant.modelId), (variant.parameters.output_kind || 'text')==='text'?judge:null,usageByVariant.get(variant.id)[index]), 0), 0);
+  const estimate = variants.reduce((total, variant) => total + prompts.reduce((sum, prompt,index) => sum + runCeiling(variant, prompt, models.get(variant.modelId), judgeFor(variant.parameters.output_kind || 'text'),usageByVariant.get(variant.id)[index]), 0), 0);
   const spent = Number((await client.query("SELECT COALESCE(sum(reserved_usd),0) AS total FROM experiment_runs WHERE (created_at AT TIME ZONE 'Asia/Shanghai')::date=(now() AT TIME ZONE 'Asia/Shanghai')::date")).rows[0].total);
   if (spent + estimate > settings.daily_budget_usd) return fail(`预计上限 $${estimate.toFixed(6)} 超过今日剩余额度 $${(settings.daily_budget_usd - spent).toFixed(6)}`, 409);
   if (body.dryRun) return ok({ runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate, remainingBudgetUsd: settings.daily_budget_usd - spent });
@@ -115,11 +125,11 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   for (const variant of variants) for (let index = 0; index < inputs.length; index++) {
     const model = models.get(variant.modelId);
     const mediaUsage=usageByVariant.get(variant.id)[index];
-    const needsJudge=(variant.parameters.output_kind || 'text')==='text';
-    const reserved = runCeiling(variant, prompts[index], model, needsJudge?judge:null,mediaUsage);
+    const runJudge=judgeFor(variant.parameters.output_kind || 'text');
+    const reserved = runCeiling(variant, prompts[index], model, runJudge,mediaUsage);
     const reservedMedia=mediaCost(mediaUsage,model.media_pricing || {});
     const runId=uuid();
-    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price,provider,judge_provider,request_messages,tools_schema,media_price_snapshot,media_usage,reserved_media_cost) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved, needsJudge?judge.id:null, needsJudge?judge.api_model:null, needsJudge?judge.input_usd_per_million:null, needsJudge?judge.output_usd_per_million:null,model.provider,needsJudge?judge.provider:'legacy',JSON.stringify(prompts[index].messages),JSON.stringify(toolSchema),JSON.stringify(model.media_pricing),JSON.stringify(mediaUsage),reservedMedia]);
+    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price,provider,judge_provider,request_messages,tools_schema,media_price_snapshot,media_usage,reserved_media_cost,judge_media_price_snapshot) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved, runJudge?.id || null, runJudge?.api_model || null, runJudge?.input_usd_per_million ?? null, runJudge?.output_usd_per_million ?? null,model.provider,runJudge?.provider || 'legacy',JSON.stringify(prompts[index].messages),JSON.stringify(toolSchema),JSON.stringify(model.media_pricing),JSON.stringify(mediaUsage),reservedMedia,JSON.stringify(runJudge?.media_pricing || {})]);
     for (const versionId of usedVersions) await client.query('INSERT INTO prompt_run_uses(run_id,version_id,direct) VALUES($1,$2,$3)',[runId,versionId,versionId===definition.promptVersionId]);
   }
   return ok({ batchId, status: 'queued', runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate }, 202);

@@ -2,7 +2,7 @@ import { performance } from 'node:perf_hooks';
 import { parseJudge, ruleScore, saveRunMetric } from './experiment-scoring.mjs';
 import { notifyUser } from './app-notifications.mjs';
 import {completeWithProvider} from './provider-adapters.mjs';
-import {providerConfigured} from './model-capabilities.mjs';
+import {mediaCost,providerConfigured} from './model-capabilities.mjs';
 import {saveGeneratedPromptMedia} from './prompt-media.mjs';
 import fs from 'node:fs/promises';
 
@@ -63,14 +63,14 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
       const outputKind=parameters.output_kind || 'text';
       delete parameters.output_kind;
       if (parameters.stop_sequences) { parameters.stop = parameters.stop_sequences; delete parameters.stop_sequences; }
-      let output=row.output, promptTokens=row.prompt_tokens, completionTokens=row.completion_tokens;
+      let output=row.output, promptTokens=row.prompt_tokens, completionTokens=row.completion_tokens,outputParts=row.output_parts || [];
       if (output === null) {
         const response=await completeWithProvider(pool,{provider:row.provider,model:row.api_model,messages:row.request_messages?.length?row.request_messages:[{role:'system',content:row.system_prompt},{role:'user',content:row.user_prompt}],parameters,toolSchema:row.tools_schema,outputKind});
         ({output,promptTokens,completionTokens}=response);
         const client=await pool.connect(),created=[];
         try {
           await client.query('BEGIN');
-          const outputParts=[];
+          outputParts=[];
           for(const part of response.outputParts) {
             if(part.type==='image'||part.type==='audio') {const stored=await saveGeneratedPromptMedia(client,part.type,part.mimeType,part.data);created.push(stored.file);outputParts.push(stored.part);}
             else outputParts.push(part);
@@ -85,11 +85,15 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
       }
       if (row.judge_api_model) {
         try {
-          const judge = await completeWithProvider(pool,{provider:row.judge_provider,model:row.judge_api_model,messages:[{role:'system',content:row.judge_prompt},{role:'user',content:JSON.stringify({question:row.user_prompt,referenceAnswer:row.reference_answer,answer:output})}],parameters:{temperature:0,max_tokens:300}});
+          const media=outputParts.filter(part=>['image','audio','video'].includes(part.type)&&part.assetId);
+          if(outputKind!=='text'&&!media.length) throw new Error('媒体输出缺少可评分附件');
+          const judgeMessages=[{role:'system',content:row.judge_prompt},{role:'user',parts:[{type:'text',text:JSON.stringify({question:row.user_prompt,referenceAnswer:row.reference_answer,answer:output || `请评价所附${outputKind}结果`})},...media.map(part=>({type:part.type,assetId:part.assetId}))]}];
+          const judge = await completeWithProvider(pool,{provider:row.judge_provider,model:row.judge_api_model,messages:judgeMessages,parameters:{temperature:0,max_tokens:300}});
           const parsed = parseJudge(judge.output);
-          const judgeCost = (judge.promptTokens * Number(row.judge_input_price) + judge.completionTokens * Number(row.judge_output_price)) / 1_000_000;
+          const judgeMedia={imageCount:media.filter(part=>part.type==='image').length,audioSeconds:media.filter(part=>part.type==='audio').reduce((sum,part)=>sum+Number(part.durationSeconds || 0),0),videoSeconds:0};
+          const judgeCost = (judge.promptTokens * Number(row.judge_input_price) + judge.completionTokens * Number(row.judge_output_price)) / 1_000_000 + mediaCost(judgeMedia,row.judge_media_price_snapshot || {});
           const client=await pool.connect();
-          try { await client.query('BEGIN'); await client.query('UPDATE experiment_runs SET judge_prompt_tokens=$2,judge_completion_tokens=$3,judge_cost_usd=$4,cost_usd=cost_usd+$4 WHERE id=$1', [id, judge.promptTokens, judge.completionTokens, judgeCost]); await saveRunMetric(client, id, row.metric_version_id, ruleScore(output, row.reference_answer, row.rule_type), parsed.score, parsed.reason); await client.query("UPDATE experiment_runs SET status='completed',completed_at=now() WHERE id=$1",[id]); await client.query('COMMIT'); }
+          try { await client.query('BEGIN'); await client.query('UPDATE experiment_runs SET judge_prompt_tokens=$2,judge_completion_tokens=$3,judge_cost_usd=$4,cost_usd=cost_usd+$4 WHERE id=$1', [id, judge.promptTokens, judge.completionTokens, judgeCost]); await saveRunMetric(client, id, row.metric_version_id, outputKind==='text'?ruleScore(output, row.reference_answer, row.rule_type):null, parsed.score, parsed.reason); await client.query("UPDATE experiment_runs SET status='completed',completed_at=now() WHERE id=$1",[id]); await client.query('COMMIT'); }
           catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
         } catch (judgeError) { await pool.query("UPDATE experiment_runs SET status='completed',score_reason=$2,completed_at=now() WHERE id=$1", [id, `Judge 评分失败：${String(judgeError.message || judgeError).slice(0, 200)}`]); }
       } else await pool.query("UPDATE experiment_runs SET status='completed',score_reason=$2,completed_at=now() WHERE id=$1", [id,outputKind==='text'?'未配置 LLM Judge':'媒体输出暂无兼容 Judge，保留人工评分']);

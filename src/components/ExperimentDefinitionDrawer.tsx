@@ -59,9 +59,12 @@ export default function ExperimentDefinitionDrawer({ open, initial, trialPrompt,
         const user = values.userPrompt.replace(/\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/g, (_, name: string) => values.variables[name] || '');
         const tokens = variant.parameters?.max_tokens || 1024;
         const chars = [...values.systemPrompt, ...user].length;
-        const image=variant.parameters?.output_kind==='image';
-        const judgeCost=!['image','audio'].includes(variant.parameters?.output_kind || 'text')&&judge ? ((chars + tokens * 4 + 1000) * judge.inputUsdPerMillion + 300 * judge.outputUsdPerMillion) / 1_000_000 : 0;
-        return total + (chars * model.inputUsdPerMillion + tokens * model.outputUsdPerMillion) / 1_000_000 + judgeCost + (image?(model.provider==='openai'?1:4)*(model.mediaPricing.imageOutputUsdEach || 0):variant.parameters?.output_kind==='audio'?600*(model.mediaPricing.audioOutputUsdPerSecond || 0):0);
+        const outputKind=variant.parameters?.output_kind || 'text';
+        const image=outputKind==='image';
+        const imageLimit=model.provider==='openai'?1:4;
+        const compatibleJudge=judge && (outputKind==='text' || judge.configured && judge.capabilities.input.includes(outputKind) && judge.capabilities.output.includes('text') && (image?judge.mediaPricing.imageInputUsdEach!==undefined:outputKind==='audio'?judge.provider==='gemini'&&judge.mediaPricing.audioInputUsdPerSecond!==undefined:false));
+        const judgeCost=compatibleJudge ? ((chars + tokens * 4 + 1000) * judge.inputUsdPerMillion + 300 * judge.outputUsdPerMillion) / 1_000_000 + (image?imageLimit*(judge.mediaPricing.imageInputUsdEach || 0):outputKind==='audio'?600*(judge.mediaPricing.audioInputUsdPerSecond || 0):0) : 0;
+        return total + (chars * model.inputUsdPerMillion + tokens * model.outputUsdPerMillion) / 1_000_000 + judgeCost + (image?imageLimit*(model.mediaPricing.imageOutputUsdEach || 0):outputKind==='audio'?600*(model.mediaPricing.audioOutputUsdPerSecond || 0):0);
       }, 0);
       const confirmed = await new Promise<boolean>(resolve => modal.confirm({ title: `确认保存并提交 ${values.variants.length} 次模型调用？`, content: `本地调用上限估算 $${estimate.toFixed(6)}；服务端会按当前预算再次校验。`, onOk: () => resolve(true), onCancel: () => resolve(false) }));
       if (!confirmed) return;
