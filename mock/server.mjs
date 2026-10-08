@@ -44,6 +44,7 @@ import { handlePrompts } from "./prompts.mjs";
 import { getGlobalSettings, handleSystemSettings } from "./system-settings.mjs";
 import { handleModelConnections } from './model-connections.mjs';
 import { checkLatestRelease, versionInfo } from './version-info.mjs';
+import { handleRetentionSettings, runRetentionCleanup } from './retention.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -507,6 +508,8 @@ async function handleRequest(req, res) {
     if (settingsResponse) return send(res, settingsResponse.status, settingsResponse.data);
     const connectionResponse = await handleModelConnections({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (connectionResponse) return send(res, connectionResponse.status, connectionResponse.data);
+    const retentionResponse = await handleRetentionSettings({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (retentionResponse) return send(res, retentionResponse.status, retentionResponse.data);
     if (pathname === '/api/settings/version' && method === 'GET') {
       void checkLatestRelease();
       return send(res, 200, versionInfo());
@@ -1458,7 +1461,7 @@ async function handleRequest(req, res) {
         const note = db.notes[i];
         const links = (note.links || []).map(link => ({ ...link, targetTitle: db.notes.find(candidate => candidate.id === link.targetId)?.title || null, reason: link.targetId ? null : link.reason || "missing" }));
         const backlinks = db.notes.filter(candidate => (candidate.links || []).some(link => link.targetId === note.id)).map(candidate => ({ id: candidate.id, title: candidate.title }));
-        return send(res, 200, { ...note, links, backlinks });
+        return send(res, 200, { ...note, links, backlinks, sourceSessionMissing: Boolean(note.sourceSessionId && !db.sessions.some(session => session.id === note.sourceSessionId)) });
       }
       if (method === "PUT" || method === "PATCH") {
         const body = await readBody(req);
@@ -1691,6 +1694,9 @@ try {
     scheduleRecurrences(0);
     void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error));
     setInterval(() => { void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error)); }, 3600_000).unref();
+    const cleanupExpired = () => { void runRetentionCleanup(pool).catch(error => console.error('[retention] cleanup failed:', error)); };
+    cleanupExpired();
+    setInterval(cleanupExpired, 60_000).unref();
     const runReviewJobs = async () => {
       try {
         const { value } = await withData(() => createDueReviewNotifications(activeClient));

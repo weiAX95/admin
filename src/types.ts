@@ -199,6 +199,7 @@ export interface NoteLink {
   order: number;
 }
 export interface NoteDetailData extends Note {
+  sourceSessionMissing?: boolean;
   links: NoteLink[];
   backlinks: { id: string; title: string }[];
 }

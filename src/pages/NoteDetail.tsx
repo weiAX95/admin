@@ -51,7 +51,7 @@ export default function NoteDetail() {
   const content = <>
     <Descriptions column={1} items={[
       { key: "updated", label: "更新时间", children: new Date(note.updatedAt).toLocaleString("zh-CN", { hour12: false }) },
-      { key: "source", label: "来源", children: note.sourceSessionId ? "会话沉淀" : "手动创建" },
+      { key: "source", label: "来源", children: note.sourceSessionMissing ? <Typography.Text type="secondary">原会话已清理</Typography.Text> : note.sourceSessionId ? "会话沉淀" : "手动创建" },
       { key: "category", label: "分类", children: categoryPath(note.categoryId, categories) },
       { key: "tags", label: "标签", children: note.tags?.length ? note.tags.map(tag => <Tag key={tag}>{tag}</Tag>) : "无标签" },
     ]} />

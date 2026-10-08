@@ -22,7 +22,7 @@ export function buildKnowledgeGraph(data) {
   for (const note of data.notes || []) {
     for (const [index, link] of (note.links || []).entries()) connect(`note:${note.id}`, link.targetId ? `note:${link.targetId}` : `note:missing:${note.id}:${index}`, "reference", link.label || "笔记不存在");
     if (note.taskId) connect(`note:${note.id}`, `task:${note.taskId}`, "association", "任务已删除");
-    if (note.sourceSessionId) connect(`note:${note.id}`, `session:${note.sourceSessionId}`, "source", "会话已删除");
+    if (note.sourceSessionId) connect(`note:${note.id}`, `session:${note.sourceSessionId}`, "source", "原会话已清理");
   }
   return { nodes, edges };
 }
