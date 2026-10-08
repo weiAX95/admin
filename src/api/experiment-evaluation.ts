@@ -30,6 +30,8 @@ export const listEvaluationReportShares = (id: string) => http.get<{ items: { id
 export const createEvaluationReportShare = (id: string, expiry: '1h'|'24h'|'7d'|'permanent') => http.post<{ id: string; token: string; path: string; expiresAt: string | null }>(`/evaluation/reports/${id}/shares`, { expiry });
 export const revokeEvaluationReportShare = (id: string) => http.post(`/evaluation/report-shares/${id}/revoke`, {});
 export const getSharedEvaluationReport = (token: string) => http.get<{ report: RegressionReport; expiresAt: string | null }>(`/public/evaluation-reports/${token}`);
+export interface JudgeQuality { count: number; overallPearson: number | null; thresholdMet: boolean | null; dimensions: Record<string,{ count: number; pearson: number | null }> }
+export const getJudgeQuality = (datasetVersionId: string, metricVersionId: string) => http.get<JudgeQuality>('/evaluation/judge-quality',{datasetVersionId,metricVersionId});
 export const getRunAnnotation = (id: string) => http.get<Annotation>(`/experiment-runs/${id}/annotation`);
 export const saveRunAnnotation = (id: string, rating: number, tags: string[]) => http.post('/experiment-runs/' + id + '/annotation', { rating, tags });
 export const getChainSuggestions = (id: string) => http.get<{ items: { id: string; title: string; similarity: number; chain_id: string | null }[] }>(`/experiments/${id}/chain-suggestions`);

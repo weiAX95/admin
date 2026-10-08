@@ -12,6 +12,13 @@ export function combineScores(rule, judge) {
 }
 export function parseJudge(text) {
   const parsed = JSON.parse(String(text).trim());
+  if (parsed.dimensions && typeof parsed.dimensions === 'object') {
+    const keys = ['accuracy','completeness','conciseness','safety'];
+    const dimensions = Object.fromEntries(keys.map(key => [key,parsed.dimensions[key]]));
+    if (keys.some(key => typeof dimensions[key] !== 'number' || !Number.isFinite(dimensions[key]) || dimensions[key] < 0 || dimensions[key] > 10)) throw new Error('Judge 四维分数须在 0–10 之间');
+    const score = Math.round(keys.reduce((sum,key) => sum + dimensions[key],0) / keys.length / 2 * 1000) / 1000;
+    return { score, dimensions, reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0,2000) : '' };
+  }
   if (typeof parsed.score !== 'number' || !Number.isFinite(parsed.score) || parsed.score < 0 || parsed.score > 5) throw new Error('Judge 分数无效');
   return { score: parsed.score, reason: typeof parsed.reason === 'string' ? parsed.reason.slice(0, 2000) : '' };
 }

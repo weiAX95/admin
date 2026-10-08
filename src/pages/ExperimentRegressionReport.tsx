@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Col, Input, Modal, Row, Select, Space, Spin, Table, Tag, Typography } from 'antd';
 import { Link, useParams } from 'react-router-dom';
-import { createEvaluationReportShare, getRegressionReport, listEvaluationReportShares, previewEvaluationReportShare, revokeEvaluationReportShare } from '../api/experiment-evaluation';
+import { createEvaluationReportShare, getJudgeQuality, getRegressionReport, listEvaluationReportShares, previewEvaluationReportShare, revokeEvaluationReportShare } from '../api/experiment-evaluation';
 import type { RegressionReport } from '../api/experiment-evaluation';
+import type { JudgeQuality } from '../api/experiment-evaluation';
+import { getStoredUser } from '../api/client';
 import { downloadBlob } from '../utils/noteExport';
 import EvaluationReportCharts from '../components/EvaluationReportCharts';
 import type { ReportDrill } from '../components/EvaluationReportCharts';
@@ -32,9 +34,11 @@ export default function ExperimentRegressionReport() {
   const [shareUrl, setShareUrl] = useState('');
   const [shares, setShares] = useState<{ id: string; revoked_at: string | null; expires_at: string | null }[]>([]);
   const [drill, setDrill] = useState<ReportDrill>(null);
+  const [judgeQuality, setJudgeQuality] = useState<JudgeQuality | null>(null);
   const load = useCallback(() => getRegressionReport(id || '').then(value => { setReport(value); setError(''); }).catch(cause => setError(cause instanceof Error ? cause.message : '报告加载失败')), [id]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (!report || !['queued','running'].includes(report.status)) return; const timer=window.setInterval(()=>{if(!document.hidden) void load();},2000);return ()=>window.clearInterval(timer); }, [report,load]);
+  useEffect(() => { if (!report || getStoredUser<{role:string}>()?.role !== 'admin') return; void getJudgeQuality(report.datasetVersionId,report.metricVersionId).then(setJudgeQuality).catch(()=>setJudgeQuality(null)); }, [report?.datasetVersionId,report?.metricVersionId]);
   if (error) return <Alert type="error" showIcon message={error} action={<Button onClick={() => void load()}>重试</Button>} />;
   if (!report) return <Spin />;
   const exportPdf = async () => { setDownloading(true); try { const { makeRegressionPdf } = await import('../utils/experimentReportPdf'); downloadBlob(await makeRegressionPdf(report), `实验回归报告-${report.batchId.slice(0,8)}.pdf`); } catch (cause) { setError(cause instanceof Error ? cause.message : 'PDF 生成失败'); } finally { setDownloading(false); } };
@@ -52,6 +56,7 @@ export default function ExperimentRegressionReport() {
     <Typography.Paragraph type="secondary">数据集版本 {report.datasetVersionId} · 指标版本 {report.metricVersionId} · baseline {report.baselineBatchId}</Typography.Paragraph>
     <Row gutter={16}><Col xs={12} md={6}><Card size="small" title="通过率">{report.passRate === null ? '暂无数据' : `${(report.passRate*100).toFixed(1)}%`}</Card></Col><Col xs={12} md={6}><Card size="small" title="有效评分">{report.scored} / {report.total}</Card></Col><Col xs={12} md={6}><Card size="small" title="退化用例">{report.degraded.length}</Card></Col><Col xs={12} md={6}><Card size="small" title="状态"><Tag>{report.status}</Tag></Card></Col></Row>
     <Typography.Title level={5} style={{ marginTop: 28 }}>评分分布</Typography.Title><BoxPlot values={report.box} />
+    {judgeQuality && <Card size="small" title="Judge 与人工评分相关性" style={{marginTop:16}}><Typography.Paragraph>匹配用例 {judgeQuality.count} 条 · 综合 Pearson r：{judgeQuality.overallPearson ?? '暂无数据'} {judgeQuality.thresholdMet===true?<Tag color="green">超过 0.7</Tag>:judgeQuality.thresholdMet===false?<Tag color="warning">未达到 0.7</Tag>:null}</Typography.Paragraph><Space wrap>{Object.entries(judgeQuality.dimensions).map(([name,value])=><Tag key={name}>{name}: {value.pearson ?? '暂无数据'} ({value.count})</Tag>)}</Space></Card>}
     <EvaluationReportCharts report={report} onDrill={setDrill} />
     <Row gutter={16} style={{ marginTop: 24 }}><Col xs={24} md={12}><Table title={() => '按难度'} size="small" rowKey="name" pagination={false} dataSource={report.byDifficulty} columns={[{title:'难度',dataIndex:'name'},{title:'用例',dataIndex:'count'},{title:'通过率',dataIndex:'passRate',render:value=>value===null?'—':`${(value*100).toFixed(1)}%`}]}/></Col><Col xs={24} md={12}><Table title={() => '按分类'} size="small" rowKey="name" pagination={false} dataSource={report.byCategory} columns={[{title:'分类',dataIndex:'name'},{title:'用例',dataIndex:'count'},{title:'通过率',dataIndex:'passRate',render:value=>value===null?'—':`${(value*100).toFixed(1)}%`}]}/></Col></Row>
     <Typography.Title level={5}>退化用例（下降超过 {report.regressionThreshold} 分）</Typography.Title><Table rowKey={row=>`${row.caseKey}-${row.category}`} size="small" dataSource={report.degraded} columns={[{title:'用例 ID',dataIndex:'caseKey'},{title:'基线',dataIndex:'baselineScore'},{title:'当前',dataIndex:'score'},{title:'差值',dataIndex:'delta',render:value=><Tag color="error">{value}</Tag>},{title:'难度',dataIndex:'difficulty'},{title:'分类',dataIndex:'category'}]} />

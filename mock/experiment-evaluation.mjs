@@ -5,6 +5,7 @@ import { promptMediaPath } from './prompt-media.mjs';
 import { validateEvaluationCases, referencedAssetIds, caseInputFingerprint } from './evaluation-datasets.mjs';
 import { BUILT_IN_METRICS, TOKENIZER_VERSION, summarizeEfficiency } from './evaluation-metrics.mjs';
 import { rankModels, validateGoalRanges } from './evaluation-ranking.mjs';
+import { judgeQuality } from './evaluation-judge-quality.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -109,6 +110,15 @@ export async function handleExperimentEvaluation(context) {
 }
 
 async function handleExperimentEvaluationInner({ pathname, method, client, me, readBody, url }) {
+  if (pathname === '/api/evaluation/judge-quality' && method === 'GET') {
+    if (me.role !== 'admin') return fail('仅管理员可查看 Judge 质量',403);
+    const datasetVersionId = url.searchParams.get('datasetVersionId'), metricVersionId = url.searchParams.get('metricVersionId');
+    if (!datasetVersionId || !metricVersionId) return fail('请选择数据集版本和指标版本');
+    const rows = (await client.query(`SELECT r.id,m.judge_score,m.metric_details,avg(s.accuracy) AS accuracy,avg(s.completeness) AS completeness,avg(s.brevity) AS brevity,avg(s.safety) AS safety
+      FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=b.metric_version_id JOIN evaluation_review_scores s ON s.run_id=r.id
+      WHERE b.dataset_version_id=$1 AND b.metric_version_id=$2 AND m.judge_score IS NOT NULL GROUP BY r.id,m.judge_score,m.metric_details`, [datasetVersionId,metricVersionId])).rows;
+    return ok(judgeQuality(rows.map(row => ({ judgeScore:Number(row.judge_score),judgeDimensions:row.metric_details?.judgeDimensions,human:{accuracy:Number(row.accuracy),completeness:Number(row.completeness),brevity:Number(row.brevity),safety:Number(row.safety)} }))));
+  }
   if (pathname === '/api/evaluation/settings') {
     if (method === 'GET') return ok((await client.query('SELECT * FROM evaluation_settings WHERE id=1')).rows[0]);
     if (method === 'PUT') {
