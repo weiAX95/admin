@@ -3,6 +3,7 @@ import { App, Button, Divider, Drawer, Form, Input, InputNumber, Modal, Select, 
 import { addPlatformModel, addPromptVersion, createPromptLibrary, getPlatformConfig, getPromptLibrary, savePlatformConfig, updatePlatformModel } from '../api/experiment-platform';
 import type { MediaPricing, ModelCapabilities, ModelConfig, PlatformConfig } from '../api/experiment-platform';
 import { listModelConnections, testModelConnection, type ModelConnection } from '../api/model-connections';
+import ModelQuotaSettings from './ModelQuotaSettings';
 
 type ModelDraft={name:string;displayName:string;apiModel:string;provider:ModelConfig['provider'];connectionId:string|null;capabilities:ModelCapabilities;mediaPricing:MediaPricing;inputPricePer1K:number;outputPricePer1K:number;active:boolean;status:ModelConfig['status'];allowedRoles:string[];endpointUrl:string|null;apiVersion:string|null;contextWindow:number|null;maxOutputTokens:number|null;featureTags:string[]};
 const providerOptions=[{value:'legacy',label:'兼容文本 API'},{value:'openai',label:'OpenAI'},{value:'qwen',label:'千问'},{value:'gemini',label:'Gemini'},{value:'anthropic',label:'Anthropic（待接入）'},{value:'azure',label:'Azure（待接入）'},{value:'local',label:'Local（待接入）'},{value:'custom',label:'Custom（待接入）'}];
@@ -51,6 +52,7 @@ export default function ExperimentPlatformSettings({ open, onClose }: { open: bo
       <Space wrap><Form.Item name={['capabilities','input']} label="允许的输入类型"><Select mode="multiple" style={{width:250}} options={modalityOptions(newProvider)} /></Form.Item><Form.Item name={['capabilities','output']} label="允许的输出类型"><Select mode="multiple" style={{width:220}} options={outputOptions(newProvider)} /></Form.Item><Form.Item name={['capabilities','tools']} label="工具调用" valuePropName="checked"><Switch /></Form.Item><Form.Item name={['mediaPricing','imageInputUsdEach']} label="每张输入图片 USD"><InputNumber min={0} /></Form.Item><Form.Item name={['mediaPricing','audioInputUsdPerSecond']} label="每秒输入音频 USD"><InputNumber min={0} /></Form.Item><Form.Item name={['mediaPricing','videoInputUsdPerSecond']} label="每秒输入视频 USD"><InputNumber min={0} /></Form.Item><Form.Item name={['mediaPricing','imageOutputUsdEach']} label="每张输出图片 USD"><InputNumber min={0} /></Form.Item><Form.Item name={['mediaPricing','audioOutputUsdPerSecond']} label="每秒输出音频 USD"><InputNumber min={0} /></Form.Item></Space>
       <Button htmlType="submit">添加模型</Button>
     </Form>
+    <ModelQuotaSettings />
     <Divider>提示词版本库</Divider>
     <Typography.Paragraph type="secondary">选择实验时引用固定版本。新版本不会修改旧实验已保存的提示词快照。</Typography.Paragraph>
     <Table size="small" rowKey="version_id" dataSource={prompts} pagination={{ pageSize: 5 }} columns={[{ title: '名称', dataIndex: 'name' }, { title: '版本', dataIndex: 'version', render: value => `v${value}` }, { title: '内容预览', dataIndex: 'content', render: value => <Typography.Text ellipsis style={{ maxWidth: 220 }}>{value}</Typography.Text> }, { title: '操作', render: (_, prompt) => <Button type="link" onClick={() => { setVersionPrompt({ id: prompt.id, name: prompt.name }); setVersionContent(prompt.content); }}>新增版本</Button> }]} />

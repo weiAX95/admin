@@ -5,6 +5,7 @@ import { checkPromptCompliance, renderPromptVersion } from './prompts.mjs';
 import {mediaCost,preflightMedia,preflightOutput,validateModelCapabilities} from './model-capabilities.mjs';
 import {modelConnectionAvailable} from './model-connections.mjs';
 import {modelUsable,supportedProvider,validateRegistry} from './model-governance.mjs';
+import {checkTokenReservations,reserveRunTokens} from './model-quotas.mjs';
 import { caseInputFingerprint } from './evaluation-datasets.mjs';
 import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 
@@ -147,8 +148,27 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   const estimate = variants.reduce((total, variant) => total + prompts.reduce((sum, prompt,index) => sum + runCeiling(variant, prompt, models.get(variant.modelId), judgeFor(variant.parameters.output_kind || 'text'),usageByVariant.get(variant.id)[index]), 0), 0) * (retryLimit + 1);
   const spent = Number((await client.query("SELECT COALESCE(sum(reserved_usd),0) AS total FROM experiment_runs WHERE (created_at AT TIME ZONE 'Asia/Shanghai')::date=(now() AT TIME ZONE 'Asia/Shanghai')::date")).rows[0].total);
   if (spent + estimate > settings.daily_budget_usd) return fail(`预计上限 $${estimate.toFixed(6)} 超过今日剩余额度 $${(settings.daily_budget_usd - spent).toFixed(6)}`, 409);
+  const quotaByRun=new Map(),quotaRequests=[];
+  for(const variant of variants)for(let index=0;index<prompts.length;index++){
+    const prompt=prompts[index],usage=usageByVariant.get(variant.id)[index];
+    const maxOutput=variant.parameters.max_tokens||1024;
+    const inputAllowance=Math.max(1,Buffer.byteLength(JSON.stringify(prompt.messages),'utf8'));
+    const mediaRun=Boolean(usage.imageCount||usage.audioSeconds||usage.videoSeconds||(variant.parameters.output_kind||'text')!=='text');
+    const times=retryLimit+1;
+    const model=models.get(variant.modelId);
+    const amounts=new Map([[variant.modelId,{tokens:(mediaRun&&model.context_window?model.context_window:inputAllowance+maxOutput)*times,needsContext:mediaRun&&!model.context_window}]]);
+    const selectedJudge=judgeFor(variant.parameters.output_kind||'text');
+    if(selectedJudge){const judgeMedia=mediaRun;const tokens=(judgeMedia&&selectedJudge.context_window?selectedJudge.context_window:inputAllowance+maxOutput*4+1300)*times;const prior=amounts.get(selectedJudge.id);amounts.set(selectedJudge.id,{tokens:(prior?.tokens||0)+tokens,needsContext:Boolean(prior?.needsContext||judgeMedia&&!selectedJudge.context_window)});}
+    const key=`${variant.id}:${index}`;
+    const entries=[...amounts].map(([modelId,value])=>({modelId,...value}));
+    quotaByRun.set(key,entries);
+    quotaRequests.push(...entries);
+  }
+  const quotaCheck=await checkTokenReservations(client,me,quotaRequests,{dryRun:Boolean(body.dryRun)});
+  if(quotaCheck.status!==200)return quotaCheck;
   if (body.dryRun) return ok({ runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate, remainingBudgetUsd: settings.daily_budget_usd - spent });
   const batchId = uuid();
+  const runReservations=[];
   await client.query('INSERT INTO experiment_batches(id,experiment_id,owner_id,kind,status,inputs,dataset_version_id,baseline_batch_id,metric_version_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [batchId, experimentId, me.id, kind, 'queued', JSON.stringify(inputs), body.datasetVersionId || null, body.baselineBatchId || null, metricVersionId]);
   for (const variant of variants) for (let index = 0; index < inputs.length; index++) {
     const model = models.get(variant.modelId);
@@ -158,8 +178,10 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
     const reservedMedia=mediaCost(mediaUsage,model.media_pricing || {});
     const runId=uuid();
     await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price,provider,judge_provider,request_messages,tools_schema,media_price_snapshot,media_usage,reserved_media_cost,judge_media_price_snapshot,retry_limit,connection_id,judge_connection_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved * (retryLimit + 1), runJudge?.id || null, runJudge?.api_model || null, runJudge?.input_usd_per_million ?? null, runJudge?.output_usd_per_million ?? null,model.provider,runJudge?.provider || 'legacy',JSON.stringify(prompts[index].messages),JSON.stringify(toolSchema),JSON.stringify(model.media_pricing),JSON.stringify(mediaUsage),reservedMedia,JSON.stringify(runJudge?.media_pricing || {}),retryLimit,model.connection_id,runJudge?.connection_id || null]);
+    runReservations.push(...quotaByRun.get(`${variant.id}:${index}`).map(item=>({...item,runId})));
     for (const versionId of usedVersions) await client.query('INSERT INTO prompt_run_uses(run_id,version_id,direct) VALUES($1,$2,$3)',[runId,versionId,versionId===definition.promptVersionId]);
   }
+  await reserveRunTokens(client,me,runReservations,quotaCheck);
   return ok({ batchId, status: 'queued', runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate }, 202);
 }
 

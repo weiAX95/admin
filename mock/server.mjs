@@ -46,6 +46,7 @@ import { handleModelConnections } from './model-connections.mjs';
 import { checkLatestRelease, versionInfo } from './version-info.mjs';
 import { handleRetentionSettings, runRetentionCleanup } from './retention.mjs';
 import { handleRecycleBin } from './recycle-bin.mjs';
+import { handleModelQuotas } from './model-quotas.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -281,6 +282,7 @@ function send(res, status, payload) {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    ...(status===429&&Number.isInteger(payload?.retryAfterSeconds)?{"Retry-After":String(payload.retryAfterSeconds)}:{}),
   });
   res.end(body);
 }
@@ -513,6 +515,8 @@ async function handleRequest(req, res) {
     if (retentionResponse) return send(res, retentionResponse.status, retentionResponse.data);
     const recycleResponse = await handleRecycleBin({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (recycleResponse) return send(res, recycleResponse.status, recycleResponse.data);
+    const quotaResponse = await handleModelQuotas({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (quotaResponse) return send(res, quotaResponse.status, quotaResponse.data);
     if (pathname === '/api/settings/version' && method === 'GET') {
       void checkLatestRelease();
       return send(res, 200, versionInfo());
