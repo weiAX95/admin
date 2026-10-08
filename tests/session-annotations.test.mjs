@@ -24,6 +24,17 @@ test("session ingest and annotations survive upsert, account removal and restart
   assert.equal((await request(`/sessions/review-session/messages/${userMessage.id}/annotation`, "POST", admin, { rating: 5, tags: [] })).status, 422);
   assert.equal((await request(`/sessions/review-session/messages/${assistant.id}/annotation`, "POST", admin, { rating: 0, tags: [] })).status, 422);
   assert.equal((await request(`/sessions/review-session/messages/${assistant.id}/annotation`, "POST", admin, { rating: 4, tags: ["准确", "过于冗长"] })).status, 200);
+  const candidates = await request('/evaluation/candidates', 'GET', admin);
+  assert.equal(candidates.data.items.length, 1);
+  assert.equal(candidates.data.items[0].source_type, 'session');
+  const targetDataset = await request('/experiment-datasets', 'POST', admin, { name: '反馈闭环', cases: [{ caseKey: 'seed', input: '已有问题' }] });
+  const staged = await request(`/evaluation/candidates/${candidates.data.items[0].id}/review`, 'POST', admin, { status: 'staged', datasetId: targetDataset.data.id });
+  assert.equal(staged.status, 200);
+  const published = await request('/evaluation/candidates/publish', 'POST', admin, { datasetId: targetDataset.data.id });
+  assert.equal(published.data.published, 1);
+  const newVersion = await request(`/experiment-dataset-versions/${published.data.versionId}`, 'GET', admin);
+  assert.equal(newVersion.data.cases.length, 2);
+  assert.ok(newVersion.data.cases.some(item => item.source === 'session_extract'));
   assert.equal((await request(`/sessions/review-session/messages/${assistant.id}/annotation`, "POST", member, { rating: 2, tags: ["准确", "不准确"] })).status, 200);
   let detail = (await request("/sessions/review-session", "GET", admin)).data;
   assert.equal(detail.userId, "external-web-user");

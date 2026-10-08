@@ -24,6 +24,7 @@ const MENU_ITEMS = [
   { key: "/prompts", icon: <FileTextOutlined />, label: "提示词库" },
 ];
 const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号管理" };
+const EVALUATION_ADMIN_ITEM = { key: "/evaluation/candidates", icon: <ExperimentOutlined />, label: "评测候选池" };
 const PAGE_META: Record<string, { title: string; description: string; section: string }> = {
   "/": { title: "学习仪表盘", description: "看见每一步积累，掌握你的学习节奏。", section: "学习概览" },
   "/tasks": { title: "学习任务", description: "从目标到行动，让每一项学习计划有迹可循。", section: "学习工作台" },
@@ -32,6 +33,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/notes/reviews": { title: "复习面板", description: "按计划回顾笔记，让知识留下来。", section: "学习工作台" },
   "/experiments": { title: "实验记录", description: "记录提示词、模型与结果，让每一次尝试都成为经验。", section: "学习工作台" },
   "/evaluation/reviews": { title: "人工评测", description: "独立评分、仲裁争议，检验评测结果的可靠性。", section: "评测中心" },
+  "/evaluation/candidates": { title: "评测候选池", description: "审核高质量反馈，发布新的评测数据集版本。", section: "评测中心" },
   "/prompts": { title: "提示词库", description: "管理版本、变量与提示词结构。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
 };
@@ -64,7 +66,7 @@ export default function AdminLayout() {
     return () => socket.close();
   }, [refreshNotifications]);
   const user = getStoredUser<AuthUser>();
-  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, ACCOUNTS_ITEM] : MENU_ITEMS;
+  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, ACCOUNTS_ITEM] : MENU_ITEMS;
   const selected = menuItems.map((m) => m.key)
     .filter((k) => k === "/" ? location.pathname === "/" : location.pathname.startsWith(k))
     .sort((a, b) => b.length - a.length)[0] || "/";

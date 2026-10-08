@@ -33,7 +33,7 @@ import { initializeNoteReviews, initializeUserReviews, resetNoteReviews, complet
 import { deliverReviewEmails, smtpConfigured } from "./review-mailer.mjs";
 import { handleExperimentPlatform } from "./experiment-platform.mjs";
 import { recoverExperimentJobs, runExperimentJobs } from "./experiment-runner.mjs";
-import { handleExperimentEvaluation } from "./experiment-evaluation.mjs";
+import { handleExperimentEvaluation, syncEvaluationCandidate } from "./experiment-evaluation.mjs";
 import { handleEvaluationReviews } from "./evaluation-review-api.mjs";
 import { canReadSharedExperimentAsset, handleExperimentSharing, handlePublicExperimentShare } from "./experiment-sharing.mjs";
 import { deliverAppEmails } from "./app-notifications.mjs";
@@ -1188,6 +1188,9 @@ async function handleRequest(req, res) {
       const id = result.rows[0].id;
       await activeClient.query("DELETE FROM annotation_tags WHERE annotation_id=$1", [id]);
       for (const tag of tags) await activeClient.query("INSERT INTO annotation_tags(annotation_id,tag) VALUES($1,$2)", [id, tag]);
+      const messageIndex = session.messages.findIndex(item => item.id === target.id);
+      const userIndex = session.messages.slice(0, messageIndex).findLastIndex(item => item.role === 'user');
+      if (userIndex >= 0) await syncEvaluationCandidate(activeClient, { sourceType: 'session', annotationId: id, sourceEntityId: `${session.id}:${target.id}`, rating: body.rating, input: session.messages[userIndex].content, expected: target.content, context: session.messages.slice(0, userIndex).map(item => ({ role: item.role, parts: [{ type: 'text', text: item.content }] })), tags });
       const annotation = await annotationView(activeClient, session.id, target.id, me.id);
       return send(res, 200, annotation);
     }

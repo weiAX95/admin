@@ -16,6 +16,7 @@ import ExperimentDetail from "./pages/ExperimentDetail";
 import ExperimentCompare from "./pages/ExperimentCompare";
 import ExperimentDatasets from "./pages/ExperimentDatasets";
 import EvaluationReviews from "./pages/EvaluationReviews";
+import EvaluationCandidates from "./pages/EvaluationCandidates";
 import ExperimentRegressionReport from "./pages/ExperimentRegressionReport";
 import ExperimentChain from "./pages/ExperimentChain";
 import SharedExperiment from "./pages/SharedExperiment";
@@ -79,6 +80,7 @@ export default function App() {
                 <Route path="/experiments/compare" element={<ExperimentCompare />} />
                 <Route path="/experiments/datasets" element={<ExperimentDatasets />} />
                 <Route path="/evaluation/reviews" element={<EvaluationReviews />} />
+                <Route path="/evaluation/candidates" element={<EvaluationCandidates />} />
                 <Route path="/experiments/reports/:id" element={<ExperimentRegressionReport />} />
                 <Route path="/experiments/chains/:id" element={<ExperimentChain />} />
                 <Route path="/experiments/schedules" element={<ExperimentSchedules />} />

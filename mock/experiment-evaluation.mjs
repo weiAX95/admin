@@ -31,7 +31,7 @@ async function validateAssets(client, datasetId, cases) {
   if (free < total * 0.2) throw new Error('磁盘剩余空间不足 20%');
 }
 
-async function insertVersion(client, datasetId, version, cases) {
+export async function insertVersion(client, datasetId, version, cases) {
   const items = validatedCases(cases);
   await validateAssets(client, datasetId, items);
   const id = uuid();
@@ -46,6 +46,17 @@ async function insertVersion(client, datasetId, version, cases) {
   }
   return { id, datasetId, version };
 }
+
+export async function syncEvaluationCandidate(client, { sourceType, annotationId, sourceEntityId, rating, input, expected, context = [], tags = [] }) {
+  if (!['session','experiment'].includes(sourceType)) throw new Error('候选来源无效');
+  const status = rating >= 4 ? 'pending' : 'ineligible';
+  await client.query(`INSERT INTO evaluation_candidates(id,source_type,source_annotation_id,source_entity_id,rating,input_payload,expected_payload,context_payload,tags,status)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    ON CONFLICT(source_type,source_annotation_id) DO UPDATE SET rating=EXCLUDED.rating,input_payload=EXCLUDED.input_payload,expected_payload=EXCLUDED.expected_payload,context_payload=EXCLUDED.context_payload,tags=EXCLUDED.tags,status=CASE WHEN evaluation_candidates.status='published' THEN 'published' WHEN EXCLUDED.rating<4 THEN 'ineligible' WHEN evaluation_candidates.status IN ('staged','rejected') THEN evaluation_candidates.status ELSE 'pending' END,updated_at=now()`,
+  [uuid(),sourceType,annotationId,sourceEntityId,rating,JSON.stringify(input),JSON.stringify(expected),JSON.stringify(context),tags,status]);
+}
+
+const caseFromRow = row => ({ caseKey: row.case_key, variables: row.variables, input: row.input_payload, expectedOutput: row.expected_payload, context: row.context_payload, tags: row.tags, difficulty: row.difficulty_score ?? row.difficulty, category: row.category, source: row.source, expectedTools: row.expected_tools });
 
 function summary(values) {
   const sorted = values.filter(Number.isFinite).sort((a,b) => a-b);
@@ -97,6 +108,42 @@ export async function handleExperimentEvaluation(context) {
 }
 
 async function handleExperimentEvaluationInner({ pathname, method, client, me, readBody, url }) {
+  if (pathname === '/api/evaluation/candidates' && method === 'GET') {
+    if (me.role !== 'admin') return fail('仅管理员可审核候选池', 403);
+    const status = url.searchParams.get('status') || 'pending';
+    if (!['pending','staged','rejected','ineligible','published'].includes(status)) return fail('候选状态无效');
+    const page = Math.max(1,Math.min(10000,Number(url.searchParams.get('page')) || 1));
+    return ok({ items: (await client.query('SELECT * FROM evaluation_candidates WHERE status=$1 ORDER BY created_at DESC LIMIT 50 OFFSET $2', [status,(page-1)*50])).rows, page });
+  }
+  if (pathname === '/api/evaluation/candidates/publish' && method === 'POST') {
+    if (me.role !== 'admin') return fail('仅管理员可发布候选用例', 403);
+    const body = await readBody();
+    const dataset = (await client.query('SELECT id FROM experiment_datasets WHERE id=$1 FOR UPDATE', [body.datasetId])).rows[0];
+    if (!dataset) return fail('目标数据集不存在', 404);
+    const staged = (await client.query("SELECT * FROM evaluation_candidates WHERE target_dataset_id=$1 AND status='staged' ORDER BY created_at FOR UPDATE", [dataset.id])).rows;
+    if (!staged.length) return fail('没有待发布的候选用例', 409);
+    const latest = (await client.query('SELECT * FROM experiment_dataset_versions WHERE dataset_id=$1 ORDER BY version DESC LIMIT 1', [dataset.id])).rows[0];
+    const previous = latest ? (await client.query('SELECT * FROM experiment_dataset_cases WHERE dataset_version_id=$1 ORDER BY case_key', [latest.id])).rows.map(caseFromRow) : [];
+    const added = staged.map(item => ({ caseKey: `candidate-${item.id}`, input: item.input_payload, expectedOutput: item.expected_payload, context: item.context_payload, tags: item.tags, difficulty: 3, source: item.source_type === 'session' ? 'session_extract' : 'qa_import' }));
+    if (previous.length + added.length > 10000) return fail('发布后超过数据集 10,000 条上限', 409);
+    const version = await insertVersion(client,dataset.id,latest ? latest.version + 1 : 1,[...previous,...added]);
+    await client.query("UPDATE evaluation_candidates SET status='published',published_version_id=$2,updated_at=now() WHERE id=ANY($1::text[])", [staged.map(item => item.id),version.id]);
+    return ok({ versionId: version.id, published: staged.length }, 201);
+  }
+  const evaluationCandidateRoute = pathname.match(/^\/api\/evaluation\/candidates\/([^/]+)\/review$/);
+  if (evaluationCandidateRoute && method === 'POST') {
+    if (me.role !== 'admin') return fail('仅管理员可审核候选池', 403);
+    const body = await readBody();
+    if (!['staged','rejected'].includes(body.status)) return fail('审核状态无效');
+    if (body.status === 'staged' && !(await client.query('SELECT 1 FROM experiment_datasets WHERE id=$1', [body.datasetId])).rowCount) return fail('目标数据集不存在', 404);
+    const candidate = (await client.query("SELECT * FROM evaluation_candidates WHERE id=$1 AND status='pending' FOR UPDATE", [evaluationCandidateRoute[1]])).rows[0];
+    if (!candidate) return fail('候选不存在或已审核', 409);
+    const input = body.input === undefined ? candidate.input_payload : body.input;
+    const expected = body.expectedOutput === undefined ? candidate.expected_payload : body.expectedOutput;
+    try { validatedCases([{ caseKey: 'preview', input, expectedOutput: expected, context: candidate.context_payload, tags: candidate.tags, difficulty: 3 }]); } catch (error) { return fail(error.message); }
+    await client.query('UPDATE evaluation_candidates SET status=$2,input_payload=$3,expected_payload=$4,target_dataset_id=$5,reviewed_by=$6,updated_at=now() WHERE id=$1', [candidate.id,body.status,JSON.stringify(input),JSON.stringify(expected),body.status === 'staged' ? body.datasetId : null,me.id]);
+    return ok({ id: candidate.id, status: body.status });
+  }
   if (pathname === '/api/evaluation/alerts' && method === 'GET') {
     if (me.role !== 'admin') return fail('仅管理员可查看退化告警', 403);
     return ok({ items: (await client.query('SELECT * FROM evaluation_alerts ORDER BY created_at DESC LIMIT 200')).rows });
@@ -175,7 +222,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     if (cases.length !== new Set(body.caseKeys).size) return fail('部分用例不在源版本内');
     const id = uuid();
     await client.query('INSERT INTO experiment_datasets(id,name,owner_id,folder_id,parent_version_id) VALUES($1,$2,$3,$4,$5)', [id, body.name.trim(), me.id, body.folderId || null, parent.id]);
-    const version = await insertVersion(client, id, 1, cases.map(row => ({ caseKey: row.case_key, variables: row.variables, input: row.input_payload, expectedOutput: row.expected_payload, context: row.context_payload, tags: row.tags, difficulty: row.difficulty_score ?? row.difficulty, category: row.category, source: row.source, expectedTools: row.expected_tools })));
+    const version = await insertVersion(client, id, 1, cases.map(caseFromRow));
     return ok({ id, version }, 201);
   }
   const datasetRoute = pathname.match(/^\/api\/experiment-datasets\/([^/]+)\/versions$/);
@@ -204,7 +251,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   if (reportRoute && method === 'GET') return regressionReport(client, reportRoute[1]);
   const annotationRoute = pathname.match(/^\/api\/experiment-runs\/([^/]+)\/annotation$/);
   if (annotationRoute) {
-    const run = (await client.query('SELECT id,experiment_id FROM experiment_runs WHERE id=$1', [annotationRoute[1]])).rows[0];
+    const run = (await client.query('SELECT id,experiment_id,status,user_prompt,output,output_parts,request_messages FROM experiment_runs WHERE id=$1', [annotationRoute[1]])).rows[0];
     if (!run) return fail('运行不存在', 404);
     if (method === 'GET') {
       const items = (await client.query('SELECT a.id,a.rating,a.reviewer_id,a.updated_at,array_remove(array_agg(t.tag),NULL) AS tags FROM experiment_annotations a LEFT JOIN experiment_annotation_tags t ON t.annotation_id=a.id WHERE a.run_id=$1 GROUP BY a.id', [run.id])).rows;
@@ -221,6 +268,13 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
       await client.query('DELETE FROM experiment_annotation_tags WHERE annotation_id=$1', [annotationId]);
       for (const tag of new Set(body.tags)) await client.query('INSERT INTO experiment_annotation_tags(annotation_id,tag) VALUES($1,$2)', [annotationId, tag]);
       await client.query('INSERT INTO experiment_dataset_candidates(id,experiment_id,run_id,annotation_id) VALUES($1,$2,$3,$4) ON CONFLICT(annotation_id) DO UPDATE SET status=$5', [uuid(), run.experiment_id, run.id, annotationId, 'pending']);
+      if (run.status === 'completed') {
+        const messages = Array.isArray(run.request_messages) ? run.request_messages : [];
+        const lastUser = messages.findLastIndex(item => item.role === 'user');
+        const input = lastUser >= 0 ? messages[lastUser].parts || messages[lastUser].content || run.user_prompt : run.user_prompt;
+        const expected = Array.isArray(run.output_parts) && run.output_parts.length ? { parts: run.output_parts.map(part => part.type === 'text' ? { type: 'text', text: part.text } : { type: part.type, assetId: part.assetId }) } : run.output || '';
+        await syncEvaluationCandidate(client,{ sourceType:'experiment',annotationId,sourceEntityId:run.id,rating:body.rating,input:typeof input === 'string' ? input : { parts: input },expected,context:messages.slice(0,Math.max(0,lastUser)).map(item => ({ role:item.role,parts:item.parts || [{ type:'text',text:item.content || '' }] })),tags:body.tags });
+      }
       const items = (await client.query('SELECT rating FROM experiment_annotations WHERE run_id=$1', [run.id])).rows;
       return ok({ rating: body.rating, tags: [...new Set(body.tags)], averageRating: Math.round(items.reduce((sum,item)=>sum+item.rating,0)/items.length*10)/10, ratingCount: items.length });
     }

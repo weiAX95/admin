@@ -60,6 +60,8 @@ test('versioned dataset regression, annotations, candidate pool, chains and cost
   assert.equal(summary.data.summary.averageRating,5);
   const candidates=await request(admin,'/experiment-candidates');
   assert.equal(candidates.data.items.length,1);
+  const flywheel=await request(admin,'/evaluation/candidates');
+  assert.ok(flywheel.data.items.some(item=>item.source_type==='experiment' && item.rating===5));
   const suggestions=await request(admin,`/experiments/${peer.id}/chain-suggestions`);
   assert.ok(suggestions.data.items.some(item=>item.id===definition.id));
   const chain=await request(admin,`/experiments/${peer.id}/chain`,'POST',{peerId:definition.id});
