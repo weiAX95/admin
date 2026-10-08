@@ -20,6 +20,7 @@ import EvaluationCandidates from "./pages/EvaluationCandidates";
 import EvaluationLeaderboard from "./pages/EvaluationLeaderboard";
 import EvaluationSchedules from "./pages/EvaluationSchedules";
 import EvaluationMetrics from "./pages/EvaluationMetrics";
+import EvaluationAlerts from "./pages/EvaluationAlerts";
 import ExperimentRegressionReport from "./pages/ExperimentRegressionReport";
 import ExperimentChain from "./pages/ExperimentChain";
 import SharedExperiment from "./pages/SharedExperiment";
@@ -89,6 +90,7 @@ export default function App() {
                 <Route path="/evaluation/leaderboard" element={<EvaluationLeaderboard />} />
                 <Route path="/evaluation/schedules" element={<EvaluationSchedules />} />
                 <Route path="/evaluation/metrics" element={<EvaluationMetrics />} />
+                <Route path="/evaluation/alerts" element={<EvaluationAlerts />} />
                 <Route path="/experiments/reports/:id" element={<ExperimentRegressionReport />} />
                 <Route path="/experiments/chains/:id" element={<ExperimentChain />} />
                 <Route path="/experiments/schedules" element={<ExperimentSchedules />} />

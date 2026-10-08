@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import crypto from 'node:crypto';
+import pg from 'pg';
 import { createPgTestServer } from './pg-helper.mjs';
+import { finalizeExperimentBatch } from '../mock/experiment-runner.mjs';
 
 test('versioned dataset regression, annotations, candidate pool, chains and costs', async t => {
   const modelServer = http.createServer(async (req,res) => {
@@ -95,4 +97,16 @@ test('versioned dataset regression, annotations, candidate pool, chains and cost
   assert.equal((await request(admin,`/experiment-chains/${chain.data.chainId}`)).data.items.length,2);
   const costs=await request(admin,'/experiment-costs');
   assert.ok(costs.data.monthTotalUsd>0);
+  await api.client.query("UPDATE experiment_runs SET auto_score=0,latency_ms=100000 WHERE id=$1",[batch.runs[0].id]);
+  await api.client.query("UPDATE experiment_run_metrics SET combined_score=0,passed=false,metric_details=jsonb_set(metric_details,'{exact}','0'::jsonb) WHERE run_id=$1",[batch.runs[0].id]);
+  const runnerPool=new pg.Pool({connectionString:api.url});
+  try{await finalizeExperimentBatch(runnerPool,regression.data.batchId);}finally{await runnerPool.end();}
+  const alerts=await request(admin,'/evaluation/alerts');
+  assert.equal(alerts.status,200);
+  const alert=alerts.data.items.find(item=>item.batch_id===regression.data.batchId);
+  assert.equal(alert.affected_count,1);
+  assert.ok(alert.details.some(item=>item.metric==='accuracy'&&item.affectedPassRate));
+  assert.ok(alert.details.some(item=>item.metric==='latency'));
+  const degradedReport=await request(admin,`/experiment-batches/${regression.data.batchId}/report`);
+  assert.ok(degradedReport.data.degradedMetrics.length>=2);
 });

@@ -7,6 +7,7 @@ import { BUILT_IN_METRICS, TOKENIZER_VERSION, summarizeEfficiency } from './eval
 import { rankModels, validateGoalRanges } from './evaluation-ranking.mjs';
 import { judgeQuality } from './evaluation-judge-quality.mjs';
 import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
+import { degradedRunMetrics } from './evaluation-regression.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -73,7 +74,7 @@ export async function regressionReport(client, batchId) {
   if (!batch) return fail('回归批次不存在', 404);
   const metric = (await client.query('SELECT * FROM experiment_metric_versions WHERE id=$1', [batch.metric_version_id])).rows[0];
   const rows = (await client.query('SELECT r.id,r.case_id,r.variant_id,v.label AS variant_label,r.status,r.auto_score,r.latency_ms,r.completion_tokens,r.output,r.output_parts,r.request_messages,r.error,c.case_key,c.variables,c.input_payload,c.expected_payload,c.reference_answer,c.context_payload,c.difficulty,c.category,m.passed,m.rule_score,m.judge_score,m.metric_details FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id JOIN experiment_variants v ON v.id=r.variant_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1 ORDER BY c.case_key', [batch.id, batch.metric_version_id])).rows;
-  const baseline = (await client.query('SELECT r.auto_score,r.status,c.case_key,c.variables,c.input_payload,c.context_payload FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.batch_id=$1', [batch.baseline_batch_id])).rows;
+  const baseline = (await client.query('SELECT r.auto_score,r.status,r.latency_ms,r.completion_tokens,c.case_key,c.variables,c.input_payload,c.context_payload,c.difficulty,c.category,m.passed,m.metric_details FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1', [batch.baseline_batch_id,batch.metric_version_id])).rows;
   const baselineByCase = new Map(baseline.map(item => [item.case_key, item]));
   const currentKeys = new Set(rows.map(row => row.case_key));
   const removed = baseline.filter(item => !currentKeys.has(item.case_key)).map(item => item.case_key);
@@ -86,7 +87,7 @@ export async function regressionReport(client, batchId) {
   const scored = compared.filter(item => item.score !== null && item.status === 'completed');
   const strata = field => [...new Set(compared.map(item => item[field]))].map(value => { const group = scored.filter(item => item[field] === value); return { name: value, count: group.length, passRate: group.length ? group.filter(item => item.passed).length / group.length : null, averageScore: group.length ? group.reduce((sum,item) => sum + item.score,0)/group.length : null }; });
   const histogram = Array.from({ length: 5 }, (_, index) => ({ range: `${index}–${index + 1}`, count: scored.filter(item => item.score >= index && (index === 4 ? item.score <= 5 : item.score < index + 1)).length }));
-  return ok({ batchId, status: batch.status, datasetVersionId: batch.dataset_version_id, baselineBatchId: batch.baseline_batch_id, metricVersionId: metric.id, passThreshold: metric.pass_threshold, regressionThreshold: metric.regression_threshold, total: compared.length, scored: scored.length, passRate: scored.length ? scored.filter(item => item.passed).length / scored.length : null, box: summary(scored.map(item => item.score)), histogram, efficiency: summarizeEfficiency(rows.map(row => ({ latencyMs: row.latency_ms, completionTokens: row.completion_tokens }))), statusDistribution: { passed: scored.filter(item => item.passed).length, belowThreshold: scored.filter(item => !item.passed).length, failed: compared.filter(item => item.status === 'failed').length, unscored: compared.filter(item => item.status === 'completed' && item.score === null).length }, degraded: compared.filter(item => item.delta !== null && item.delta < -metric.regression_threshold).sort((a,b) => a.delta - b.delta), removedCaseKeys: removed, byDifficulty: strata('difficulty'), byCategory: strata('category'), cases: compared });
+  return ok({ batchId, status: batch.status, datasetVersionId: batch.dataset_version_id, baselineBatchId: batch.baseline_batch_id, metricVersionId: metric.id, passThreshold: metric.pass_threshold, regressionThreshold: metric.regression_threshold, normalizedRegressionThreshold:Number(metric.normalized_regression_threshold), total: compared.length, scored: scored.length, passRate: scored.length ? scored.filter(item => item.passed).length / scored.length : null, box: summary(scored.map(item => item.score)), histogram, efficiency: summarizeEfficiency(rows.map(row => ({ latencyMs: row.latency_ms, completionTokens: row.completion_tokens }))), statusDistribution: { passed: scored.filter(item => item.passed).length, belowThreshold: scored.filter(item => !item.passed).length, failed: compared.filter(item => item.status === 'failed').length, unscored: compared.filter(item => item.status === 'completed' && item.score === null).length }, degraded: compared.filter(item => item.delta !== null && item.delta < -metric.regression_threshold).sort((a,b) => a.delta - b.delta), degradedMetrics:degradedRunMetrics(rows,baseline,metric.goal_ranges,Number(metric.normalized_regression_threshold)), removedCaseKeys: removed, byDifficulty: strata('difficulty'), byCategory: strata('category'), cases: compared });
 }
 
 function titleSimilarity(left, right) {
@@ -237,11 +238,13 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
       if (!body.name?.trim() || !['token_f1','exact','bleu','rouge_l','tool_selection','parameter_accuracy','bertscore','custom_python'].includes(body.ruleType) || typeof body.passThreshold !== 'number' || body.passThreshold < 0 || body.passThreshold > 5 || typeof body.regressionThreshold !== 'number' || body.regressionThreshold < 0 || body.regressionThreshold > 5 || !body.judgePrompt?.trim()) return fail('指标配置无效');
       if (body.ruleType === 'bertscore' && (process.env.EVALUATION_BERTSCORE_ENABLED !== 'true' || !(await pythonMetricAvailable('bertscore')))) return fail('BERTScore worker 尚未启用', 409);
       if (body.ruleType === 'custom_python' && (!(await pythonMetricAvailable()) || !(await client.query('SELECT 1 FROM evaluation_metric_scripts WHERE id=$1',[body.customScriptId])).rowCount)) return fail('隔离 Python 指标或容器不可用',409);
+      const normalizedThreshold=body.normalizedRegressionThreshold===undefined?0.2:body.normalizedRegressionThreshold;
+      if(typeof normalizedThreshold!=='number'||!Number.isFinite(normalizedThreshold)||normalizedThreshold<0||normalizedThreshold>1)return fail('归一化退化阈值须在 0–1 之间');
       let goalRanges;
       try { goalRanges = validateGoalRanges(body.goalRanges); } catch (error) { return fail(error.message); }
       const version = (await client.query('SELECT COALESCE(max(version),0)+1 AS next FROM experiment_metric_versions WHERE name=$1', [body.name.trim()])).rows[0].next;
       const id = uuid();
-      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version,goal_ranges,custom_script_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION,JSON.stringify(goalRanges),body.ruleType==='custom_python'?body.customScriptId:null]);
+      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version,goal_ranges,custom_script_id,normalized_regression_threshold) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION,JSON.stringify(goalRanges),body.ruleType==='custom_python'?body.customScriptId:null,normalizedThreshold]);
       return ok({ id, version }, 201);
     }
   }

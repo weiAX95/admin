@@ -1,0 +1,1 @@
+ALTER TABLE experiment_metric_versions ADD COLUMN normalized_regression_threshold numeric(4,3) NOT NULL DEFAULT 0.2 CHECK(normalized_regression_threshold >= 0 AND normalized_regression_threshold <= 1);

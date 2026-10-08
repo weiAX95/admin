@@ -6,9 +6,9 @@ import {mediaCost,providerConfigured} from './model-capabilities.mjs';
 import {saveGeneratedPromptMedia} from './prompt-media.mjs';
 import fs from 'node:fs/promises';
 import { normalizeToolCalls, scoreBuiltIn, TOKENIZER_VERSION } from './evaluation-metrics.mjs';
-import { caseInputFingerprint } from './evaluation-datasets.mjs';
 import crypto from 'node:crypto';
 import { runBertScore, runPythonMetric } from './evaluation-python-worker.mjs';
+import { degradedRunMetrics } from './evaluation-regression.mjs';
 
 async function evaluationScores(row, output, calls, latencyMs, completionTokens) {
   const input = { output, expectedOutput: row.reference_answer, actualTools: normalizeToolCalls(calls), expectedTools: row.expected_tools };
@@ -36,15 +36,17 @@ export async function finalizeExperimentBatch(pool, batchId) {
       await notifyUser(client, batch.owner_id, `experiment_${batch.status}`, batch.id, `${title}：${batch.status === 'completed' ? '执行完成' : batch.status === 'partial' ? '部分失败' : '执行失败'}`, `批次 ${batch.id} 已结束，状态：${batch.status}。`, `/experiments/${batch.experiment_id}`);
       if (batch.kind === 'regression' && ['completed','partial'].includes(batch.status)) {
         const setup = (await client.query('SELECT baseline_batch_id,metric_version_id FROM experiment_batches WHERE id=$1', [batch.id])).rows[0];
-        const threshold = Number((await client.query('SELECT regression_threshold FROM experiment_metric_versions WHERE id=$1', [setup.metric_version_id])).rows[0].regression_threshold);
-        const current = (await client.query('SELECT r.auto_score,c.case_key,c.input_payload,c.variables,c.context_payload FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.batch_id=$1', [batch.id])).rows;
-        const baseline = (await client.query('SELECT r.auto_score,c.case_key,c.input_payload,c.variables,c.context_payload FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.batch_id=$1', [setup.baseline_batch_id])).rows;
-        const prior = new Map(baseline.map(item => [item.case_key, item]));
-        const degraded = current.flatMap(item => { const old = prior.get(item.case_key); return old && item.auto_score !== null && old.auto_score !== null && caseInputFingerprint(item) === caseInputFingerprint(old) && old.auto_score - item.auto_score > threshold ? [{ caseKey: item.case_key, drop: Number((old.auto_score - item.auto_score).toFixed(3)) }] : []; });
+        const metric = (await client.query('SELECT goal_ranges,normalized_regression_threshold FROM experiment_metric_versions WHERE id=$1', [setup.metric_version_id])).rows[0];
+        const metricRows = await client.query(`SELECT r.status,r.auto_score,r.latency_ms,r.completion_tokens,c.case_key,c.input_payload,c.variables,c.context_payload,c.difficulty,c.category,m.passed,m.metric_details
+          FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1`, [batch.id,setup.metric_version_id]);
+        const baselineRows = await client.query(`SELECT r.status,r.auto_score,r.latency_ms,r.completion_tokens,c.case_key,c.input_payload,c.variables,c.context_payload,c.difficulty,c.category,m.passed,m.metric_details
+          FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1`, [setup.baseline_batch_id,setup.metric_version_id]);
+        const degraded = degradedRunMetrics(metricRows.rows,baselineRows.rows,metric.goal_ranges,Number(metric.normalized_regression_threshold));
         if (degraded.length) {
           const alertId = crypto.randomUUID();
-          const inserted = await client.query('INSERT INTO evaluation_alerts(id,batch_id,baseline_batch_id,metric_version_id,affected_count,details) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(batch_id) DO NOTHING RETURNING id', [alertId,batch.id,setup.baseline_batch_id,setup.metric_version_id,degraded.length,JSON.stringify(degraded)]);
-          if (inserted.rowCount) for (const admin of (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_regression',batch.id,`${title}：发现 ${degraded.length} 条退化用例`,'请检查回归报告中的退化幅度和失败分类。',`/experiments/${batch.experiment_id}`);
+          const affected=new Set(degraded.map(item=>item.caseKey)).size;
+          const inserted = await client.query('INSERT INTO evaluation_alerts(id,batch_id,baseline_batch_id,metric_version_id,affected_count,details) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(batch_id) DO NOTHING RETURNING id', [alertId,batch.id,setup.baseline_batch_id,setup.metric_version_id,affected,JSON.stringify(degraded)]);
+          if (inserted.rowCount) for (const admin of (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_regression',batch.id,`${title}：发现 ${affected} 条退化用例`,'请检查回归报告中的指标下降和失败分类。',`/evaluation/alerts`);
         }
       }
       const occurrence = (await client.query("UPDATE experiment_schedule_occurrences SET status=$2 WHERE batch_id=$1 AND status='queued' RETURNING schedule_id,id", [batch.id,batch.status])).rows[0];

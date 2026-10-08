@@ -288,6 +288,10 @@ flowchart LR
 | --- | --- | --- |
 | `evaluation_metric_scripts` | 不可变源码和创建人；指标版本通过外键固定脚本，运行结果保存在 `experiment_run_metrics.metric_details`。 | `/evaluation/metrics` 管理员登记和选择 |
 
+## 逐指标退化阈值（031）
+
+[031_evaluation_normalized_regression.sql](../db/migrations/031_evaluation_normalized_regression.sql) 给 `experiment_metric_versions` 增加固定的 `normalized_regression_threshold`，默认 0.2；没有新增表或外键。回归批次完成时按稳定 `case_key` 和输入指纹对齐 baseline，再将综合分、延迟、输出 token 与文本／工具指标映射到 0–1。每个超过阈值的指标都记入原有 `evaluation_alerts.details`，受影响用例数按 `caseKey` 去重。管理员从 `/evaluation/alerts` 查看告警、进入固定报告或导出带建议的 CSV；站内通知仍写入 `app_notifications`。
+
 ## 账号、会话与人工评分
 
 ```mermaid

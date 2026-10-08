@@ -28,6 +28,7 @@ const MENU_ITEMS = [
 ];
 const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号管理" };
 const EVALUATION_ADMIN_ITEM = { key: "/evaluation/candidates", icon: <ExperimentOutlined />, label: "评测候选池" };
+const EVALUATION_ALERTS_ITEM = { key: "/evaluation/alerts", icon: <BellOutlined />, label: "退化告警" };
 const PAGE_META: Record<string, { title: string; description: string; section: string }> = {
   "/": { title: "学习仪表盘", description: "看见每一步积累，掌握你的学习节奏。", section: "学习概览" },
   "/tasks": { title: "学习任务", description: "从目标到行动，让每一项学习计划有迹可循。", section: "学习工作台" },
@@ -40,6 +41,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/evaluation/leaderboard": { title: "模型排行榜", description: "在固定数据集和指标版本上比较模型质量与效率。", section: "评测中心" },
   "/evaluation/schedules": { title: "定时评测", description: "按账号时区安排每日或每周评测，并管理已提交的周期。", section: "评测中心" },
   "/evaluation/metrics": { title: "评测指标", description: "管理固定评分规则、隔离 Python 指标及可用运行环境。", section: "评测中心" },
+  "/evaluation/alerts": { title: "退化告警", description: "查看可比用例的逐指标下降并导出退化列表。", section: "评测中心" },
   "/prompts": { title: "提示词库", description: "管理版本、变量与提示词结构。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
 };
@@ -72,7 +74,7 @@ export default function AdminLayout() {
     return () => socket.close();
   }, [refreshNotifications]);
   const user = getStoredUser<AuthUser>();
-  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, ACCOUNTS_ITEM] : MENU_ITEMS;
+  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, ACCOUNTS_ITEM] : MENU_ITEMS;
   const selected = menuItems.map((m) => m.key)
     .filter((k) => k === "/" ? location.pathname === "/" : location.pathname.startsWith(k))
     .sort((a, b) => b.length - a.length)[0] || "/";
