@@ -278,6 +278,15 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if (!['single','ab','dataset','regression'].includes(body.kind)) return fail('执行类型无效');
     return createBatch(client, estimateRoute[1], me, { ...body, dryRun: true }, body.kind);
   }
+  const progressRoute = pathname.match(/^\/api\/experiment-batches\/([^/]+)\/progress$/);
+  if (progressRoute && method === 'GET') {
+    const row = (await client.query(`SELECT b.id,b.status,count(r.id)::int AS total_runs,
+      count(r.id) FILTER (WHERE r.status IN ('completed','failed'))::int AS finished_runs,
+      count(r.id) FILTER (WHERE r.status='failed')::int AS failed_runs
+      FROM experiment_batches b LEFT JOIN experiment_runs r ON r.batch_id=b.id
+      WHERE b.id=$1 GROUP BY b.id,b.status`, [progressRoute[1]])).rows[0];
+    return row ? ok({ id:row.id,status:row.status,totalRuns:row.total_runs,finishedRuns:row.finished_runs,failedRuns:row.failed_runs }) : fail('批次不存在',404);
+  }
   const batchRoute = pathname.match(/^\/api\/experiment-batches\/([^/]+)$/);
   if (batchRoute && method === 'GET') {
     const row = (await client.query('SELECT * FROM experiment_batches WHERE id=$1', [batchRoute[1]])).rows[0];

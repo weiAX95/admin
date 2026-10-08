@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Alert, App, Button, Card, Col, Input, Modal, Row, Select, Space, Spin, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Col, Input, Modal, Progress, Row, Select, Space, Spin, Table, Tag, Typography } from 'antd';
 import { Link, useParams } from 'react-router-dom';
 import { createEvaluationReportShare, getJudgeQuality, getRegressionReport, listEvaluationReportShares, previewEvaluationReportShare, revokeEvaluationReportShare } from '../api/experiment-evaluation';
 import type { RegressionReport } from '../api/experiment-evaluation';
@@ -9,6 +9,7 @@ import { downloadBlob } from '../utils/noteExport';
 import EvaluationReportCharts from '../components/EvaluationReportCharts';
 import type { ReportDrill } from '../components/EvaluationReportCharts';
 import { downloadDegradedCsv } from '../utils/evaluationRegressionCsv';
+import { getBatchProgress } from '../api/experiment-platform';
 
 function BoxPlot({ values }: { values: RegressionReport['box'] }) {
   if (!values) return <Typography.Text type="secondary">暂无有效评分</Typography.Text>;
@@ -27,6 +28,7 @@ export default function ExperimentRegressionReport() {
   const { message, modal } = App.useApp();
   const { id } = useParams();
   const [report, setReport] = useState<RegressionReport | null>(null);
+  const [progress, setProgress] = useState<{status:string;totalRuns:number;finishedRuns:number;failedRuns:number} | null>(null);
   const [error, setError] = useState('');
   const [downloading, setDownloading] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -36,12 +38,19 @@ export default function ExperimentRegressionReport() {
   const [shares, setShares] = useState<{ id: string; revoked_at: string | null; expires_at: string | null }[]>([]);
   const [drill, setDrill] = useState<ReportDrill>(null);
   const [judgeQuality, setJudgeQuality] = useState<JudgeQuality | null>(null);
-  const load = useCallback(() => getRegressionReport(id || '').then(value => { setReport(value); setError(''); }).catch(cause => setError(cause instanceof Error ? cause.message : '报告加载失败')), [id]);
+  const load = useCallback(async () => {
+    try {
+      const current=await getBatchProgress(id || '');
+      setProgress(current);
+      if (!['queued','running'].includes(current.status)) setReport(await getRegressionReport(id || ''));
+      setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '报告加载失败'); }
+  }, [id]);
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { if (!report || !['queued','running'].includes(report.status)) return; const timer=window.setInterval(()=>{if(!document.hidden) void load();},2000);return ()=>window.clearInterval(timer); }, [report,load]);
+  useEffect(() => { if (!progress || !['queued','running'].includes(progress.status)) return; const timer=window.setInterval(()=>{if(!document.hidden) void load();},2000);return ()=>window.clearInterval(timer); }, [progress?.status,load]);
   useEffect(() => { if (!report || getStoredUser<{role:string}>()?.role !== 'admin') return; void getJudgeQuality(report.datasetVersionId,report.metricVersionId).then(setJudgeQuality).catch(()=>setJudgeQuality(null)); }, [report?.datasetVersionId,report?.metricVersionId]);
   if (error) return <Alert type="error" showIcon message={error} action={<Button onClick={() => void load()}>重试</Button>} />;
-  if (!report) return <Spin />;
+  if (!report) return progress ? <Card title="回归评测运行中"><Tag>{progress.status}</Tag><Progress percent={progress.totalRuns?Math.round(progress.finishedRuns/progress.totalRuns*100):0} format={()=>`${progress.finishedRuns}/${progress.totalRuns}`} /><Typography.Text type="secondary">失败 {progress.failedRuns} 条；完成后自动加载完整报告。</Typography.Text></Card> : <Spin />;
   const exportPdf = async () => { setDownloading(true); try { const { makeRegressionPdf } = await import('../utils/experimentReportPdf'); downloadBlob(await makeRegressionPdf(report), `实验回归报告-${report.batchId.slice(0,8)}.pdf`); } catch (cause) { setError(cause instanceof Error ? cause.message : 'PDF 生成失败'); } finally { setDownloading(false); } };
   const openShare = async () => { try { const [preview, existing] = await Promise.all([previewEvaluationReportShare(report.batchId), listEvaluationReportShares(report.batchId)]); setSharePreview(preview); setShares(existing.items); setShareUrl(''); setShareOpen(true); } catch (cause) { message.error(cause instanceof Error ? cause.message : '分享预览失败'); } };
   const createShare = async () => { try { const value = await createEvaluationReportShare(report.batchId,shareExpiry); setShareUrl(new URL(value.path,location.origin).href); setShares((await listEvaluationReportShares(report.batchId)).items); message.success('只读链接已创建'); } catch (cause) { message.error(cause instanceof Error ? cause.message : '分享失败'); } };

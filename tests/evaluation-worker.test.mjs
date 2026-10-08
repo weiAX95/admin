@@ -13,6 +13,7 @@ test('external worker resumes a persisted evaluation batch while API only enqueu
   const login=await fetch(`${api.base}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'admin',password:'admin123'})});
   const {token}=await login.json();
   const call=async(path,method='GET',body)=>{const response=await fetch(`${api.base}${path}`,{method,headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return{status:response.status,data:await response.json()};};
+  const batchProgress=async id=>{const {status,totalRuns,finishedRuns,failedRuns}=(await call(`/experiment-batches/${id}/progress`)).data;return{status,totalRuns,finishedRuns,failedRuns};};
   const model=(await call('/experiment-platform/models','POST',{displayName:'Worker test',apiModel:'test',inputUsdPerMillion:1,outputUsdPerMillion:1})).data;
   await call('/experiment-platform/config','PUT',{dailyBudgetUsd:10,concurrencyLimit:1,judgeModelId:model.id});
   const experiment=(await call('/experiment-definitions','POST',{title:'Worker task',systemPrompt:'系统',userPrompt:'{{question}}',variables:{question:'问题'},variants:[{modelId:model.id,label:'A',parameters:{max_tokens:10}}]})).data;
@@ -21,6 +22,7 @@ test('external worker resumes a persisted evaluation batch while API only enqueu
   assert.equal(batch.status,202,JSON.stringify(batch.data));
   await new Promise(resolve=>setTimeout(resolve,300));
   assert.equal((await call(`/experiment-batches/${batch.data.batchId}`)).data.status,'queued');
+  assert.deepEqual(await batchProgress(batch.data.batchId),{status:'queued',totalRuns:1,finishedRuns:0,failedRuns:0});
   const queuedDefinition=(await call(`/experiment-definitions/${experiment.id}`)).data;
   assert.deepEqual([queuedDefinition.batches[0].totalRuns,queuedDefinition.batches[0].finishedRuns,queuedDefinition.batches[0].failedRuns],[1,0,0]);
   const worker=spawn(process.execPath,[fileURLToPath(new URL('../mock/evaluation-worker.mjs',import.meta.url))],{env:{...process.env,DATABASE_URL:api.url,MODEL_API_BASE_URL:`http://127.0.0.1:${modelServer.address().port}`,MODEL_API_KEY:'test'},stdio:'ignore'});
@@ -28,6 +30,7 @@ test('external worker resumes a persisted evaluation batch while API only enqueu
   let status='queued';
   for(let index=0;index<70;index++){await new Promise(resolve=>setTimeout(resolve,100));status=(await call(`/experiment-batches/${batch.data.batchId}`)).data.status;if(status==='completed')break;}
   assert.equal(status,'completed');
+  assert.deepEqual(await batchProgress(batch.data.batchId),{status:'completed',totalRuns:1,finishedRuns:1,failedRuns:0});
   const finishedDefinition=(await call(`/experiment-definitions/${experiment.id}`)).data;
   assert.deepEqual([finishedDefinition.batches[0].totalRuns,finishedDefinition.batches[0].finishedRuns,finishedDefinition.batches[0].failedRuns],[1,1,0]);
   assert.equal((await api.client.query('SELECT count(*)::int AS n FROM experiment_run_metrics m JOIN experiment_runs r ON r.id=m.run_id WHERE r.batch_id=$1',[batch.data.batchId])).rows[0].n,1);

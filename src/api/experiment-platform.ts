@@ -25,5 +25,6 @@ export const getDefinition = (id: string) => http.get<ExperimentDefinition>(`/ex
 export const runDefinition = (id: string, variables: Record<string,string>) => http.post<{ batchId: string; runCount: number; estimatedMaxCostUsd: number }>(`/experiment-definitions/${id}/run`, { variables });
 export const runBatch = (id: string, inputs: Record<string,string>[]) => http.post<{ batchId: string; runCount: number; estimatedMaxCostUsd: number }>(`/experiment-definitions/${id}/batches`, { inputs });
 export const getBatch = (id: string) => http.get<ExperimentBatch>(`/experiment-batches/${id}`);
+export const getBatchProgress = (id: string) => http.get<{id:string;status:string;totalRuns:number;finishedRuns:number;failedRuns:number}>(`/experiment-batches/${id}/progress`);
 export const retryBatch = (id: string) => http.post<{ queued: number }>(`/experiment-batches/${id}/retry`, {});
 export const estimateDefinition = (id: string, payload: Record<string,unknown>) => http.post<{ runCount: number; estimatedMaxCostUsd: number; remainingBudgetUsd: number }>(`/experiment-definitions/${id}/estimate`, payload);
