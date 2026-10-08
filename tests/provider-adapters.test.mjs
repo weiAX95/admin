@@ -20,7 +20,7 @@ test('provider adapters use native request formats and retain tool calls without
   Object.assign(process.env,{OPENAI_API_BASE_URL:url,OPENAI_API_KEY:'test',QWEN_API_BASE_URL:url,DASHSCOPE_API_KEY:'test',GEMINI_API_BASE_URL:url,GEMINI_API_KEY:'test'});
   const messages=[{role:'system',content:'规则'},{role:'user',content:'提问'}];
   const toolSchema={name:'lookup',description:'只生成调用',parameters:{type:'object',properties:{}}};
-  const client={query:()=>{throw new Error('文本无需查询媒体')}};
+  const client={query:sql=>{if(sql.includes('FROM model_connections'))return {rows:[]};throw new Error('文本无需查询媒体')}};
   const openai=await completeWithProvider(client,{provider:'openai',model:'openai-test',messages,toolSchema});
   const qwen=await completeWithProvider(client,{provider:'qwen',model:'qwen-test',messages,toolSchema});
   const gemini=await completeWithProvider(client,{provider:'gemini',model:'gemini-test',messages,toolSchema});

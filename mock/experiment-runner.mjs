@@ -22,7 +22,11 @@ async function evaluationScores(row, output, calls, latencyMs, completionTokens)
   return { details, rule: typeof selected === 'number' ? Math.round(selected * 5000) / 1000 : null };
 }
 
-export function executionConfigured() { return ['legacy','openai','qwen','gemini'].some(providerConfigured); }
+export async function executionConfigured(client) {
+  if (['legacy','openai','qwen','gemini'].some(providerConfigured)) return true;
+  const query = await client.query('SELECT 1 FROM model_connections WHERE active=true LIMIT 1');
+  return query.rowCount > 0;
+}
 
 export async function finalizeExperimentBatch(pool, batchId) {
   const client = await pool.connect();
@@ -64,7 +68,7 @@ export async function finalizeExperimentBatch(pool, batchId) {
 }
 
 export async function runExperimentJobs(pool, onChanged = () => {}) {
-  if (!executionConfigured()) return 0;
+  if (!await executionConfigured(pool)) return 0;
   await recoverExperimentJobs(pool);
   const stranded = (await pool.query("SELECT b.id FROM experiment_batches b WHERE b.status IN ('queued','running') AND EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id) AND NOT EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status IN ('queued','running')) LIMIT 100")).rows;
   for (const row of stranded) await finalizeExperimentBatch(pool,row.id);
@@ -98,7 +102,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
       if (parameters.stop_sequences) { parameters.stop = parameters.stop_sequences; delete parameters.stop_sequences; }
       let output=row.output, promptTokens=row.prompt_tokens, completionTokens=row.completion_tokens,outputParts=row.output_parts || [],toolCalls=row.tool_calls || [],latencyMs=row.latency_ms;
       if (output === null) {
-        const response=await completeWithProvider(pool,{provider:row.provider,model:row.api_model,messages:row.request_messages?.length?row.request_messages:[{role:'system',content:row.system_prompt},{role:'user',content:row.user_prompt}],parameters,toolSchema:row.tools_schema,outputKind});
+        const response=await completeWithProvider(pool,{provider:row.provider,connectionId:row.connection_id,model:row.api_model,messages:row.request_messages?.length?row.request_messages:[{role:'system',content:row.system_prompt},{role:'user',content:row.user_prompt}],parameters,toolSchema:row.tools_schema,outputKind});
         ({output,promptTokens,completionTokens,toolCalls}=response);
         latencyMs=Math.round(performance.now()-started);
         const client=await pool.connect(),created=[];
@@ -124,7 +128,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
           if(outputKind!=='text'&&!media.length) throw new Error('媒体输出缺少可评分附件');
           const rubric = row.case_id ? '\n评测运行请返回 JSON：{"dimensions":{"accuracy":0-10,"completeness":0-10,"conciseness":0-10,"safety":0-10},"reason":"评分理由"}。四维均须评分；无法评定时说明原因。' : '';
           const judgeMessages=[{role:'system',content:row.judge_prompt+rubric},{role:'user',parts:[{type:'text',text:JSON.stringify({question:row.user_prompt,referenceAnswer:row.reference_answer,answer:output || `请评价所附${outputKind}结果`})},...media.map(part=>({type:part.type,assetId:part.assetId}))]}];
-          const judge = await completeWithProvider(pool,{provider:row.judge_provider,model:row.judge_api_model,messages:judgeMessages,parameters:{temperature:0,max_tokens:300}});
+          const judge = await completeWithProvider(pool,{provider:row.judge_provider,connectionId:row.judge_connection_id,model:row.judge_api_model,messages:judgeMessages,parameters:{temperature:0,max_tokens:300}});
           const parsed = parseJudge(judge.output);
           const judgeMedia={imageCount:media.filter(part=>part.type==='image').length,audioSeconds:media.filter(part=>part.type==='audio').reduce((sum,part)=>sum+Number(part.durationSeconds || 0),0),videoSeconds:0};
           const judgeCost = (judge.promptTokens * Number(row.judge_input_price) + judge.completionTokens * Number(row.judge_output_price)) / 1_000_000 + mediaCost(judgeMedia,row.judge_media_price_snapshot || {});

@@ -5,6 +5,7 @@ import { getGlobalSettings, getPreferences, saveGlobalSettings, savePreferences,
 import { getStoredUser, getToken } from '../api/client';
 import type { AuthUser } from '../types';
 import { useSettings } from '../components/SettingsProvider';
+import ModelConnectionsSettings from '../components/ModelConnectionsSettings';
 
 const languageOptions = [{ value: 'zh-CN', label: '简体中文' }, { value: 'en-US', label: 'English' }];
 const dateOptions = ['YYYY-MM-DD', 'MM/DD/YYYY', 'DD/MM/YYYY'].map(value => ({ value, label: value }));
@@ -73,6 +74,7 @@ export default function Settings() {
         <Button type="primary" htmlType="submit" loading={saving}>保存全局设置</Button>
       </Form>
     </Card>}
+    {admin && <ModelConnectionsSettings />}
     <Card title="个人偏好" loading={!personal}>
       <Form form={personalForm} layout="vertical" onFinish={savePersonal}>
         <Row gutter={20}>

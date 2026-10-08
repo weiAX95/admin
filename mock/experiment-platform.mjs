@@ -2,7 +2,8 @@ import crypto from 'node:crypto';
 import { EXPERIMENT_TEMPLATES, fillPrompt, validateDefinition, winRates } from './experiment-core.mjs';
 import { executionConfigured } from './experiment-runner.mjs';
 import { checkPromptCompliance, renderPromptVersion } from './prompts.mjs';
-import {mediaCost,preflightMedia,preflightOutput,providerConfigured,validateModelCapabilities} from './model-capabilities.mjs';
+import {mediaCost,preflightMedia,preflightOutput,validateModelCapabilities} from './model-capabilities.mjs';
+import {modelConnectionAvailable} from './model-connections.mjs';
 import { caseInputFingerprint } from './evaluation-datasets.mjs';
 import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 
@@ -44,7 +45,7 @@ async function getDefinition(client, id) {
 }
 
 export async function createBatch(client, experimentId, me, body, kind = 'single') {
-  if (!executionConfigured()) return fail('尚未配置任何模型供应商凭据，暂不能真实执行', 409);
+  if (!await executionConfigured(client)) return fail('尚未配置任何模型供应商凭据，暂不能真实执行', 409);
   const definition = await getDefinition(client, experimentId);
   if (!definition) return fail('实验定义不存在', 404);
   if (!own({ owner_id: definition.ownerId }, me)) return fail('无权执行该实验', 403);
@@ -81,19 +82,20 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   if(variants.some(variant=>(variant.parameters.output_kind || 'text')==='text')&&!settings.judge_model_id) return fail('文本输出需要配置 LLM Judge',409);
   if ((kind === 'dataset' || kind === 'regression') && variants.length !== 1) return fail('数据集评测和回归每批次必须选择一个变体，以便逐用例与 baseline 对比');
   const models = new Map((await client.query('SELECT * FROM experiment_models WHERE active=true')).rows.map(row => [row.id, row]));
+  const available = new Map(await Promise.all([...models.values()].map(async model => [model.id, await modelConnectionAvailable(client, model)])));
   if (variants.some(variant => !models.has(variant.modelId))) return fail('变体模型已停用，请编辑实验后重试', 409);
   const judge = models.get(settings.judge_model_id);
   if (variants.some(variant=>(variant.parameters.output_kind || 'text')==='text') && !judge) return fail('LLM Judge 模型未启用', 409);
-  if(judge && !providerConfigured(judge.provider) && variants.some(variant=>(variant.parameters.output_kind || 'text')==='text')) return fail('LLM Judge 供应商凭据未配置',409);
+  if(judge && !available.get(judge.id) && variants.some(variant=>(variant.parameters.output_kind || 'text')==='text')) return fail('LLM Judge 供应商凭据未配置',409);
   const judgeFor=kind=>{
     if(!judge) return null;
     if(kind==='text') return judge;
-    if(!providerConfigured(judge.provider)||!judge.capabilities?.input?.includes(kind)||!judge.capabilities?.output?.includes('text')) return null;
+    if(!available.get(judge.id)||!judge.capabilities?.input?.includes(kind)||!judge.capabilities?.output?.includes('text')) return null;
     if(kind==='image' && judge.media_pricing?.imageInputUsdEach===undefined) return null;
     if(kind==='audio' && (judge.provider!=='gemini'||judge.media_pricing?.audioInputUsdPerSecond===undefined)) return null;
     return judge;
   };
-  if(variants.some(variant=>!providerConfigured(models.get(variant.modelId).provider))) return fail('部分变体的供应商凭据未配置',409);
+  if(variants.some(variant=>!available.get(variant.modelId))) return fail('部分变体的供应商凭据未配置',409);
   let prompts, usedVersions=[],toolSchema=null;
   try {
     const version=definition.promptVersionId ? (await client.query('SELECT * FROM prompt_library_versions WHERE id=$1',[definition.promptVersionId])).rows[0] : null;
@@ -151,7 +153,7 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
     const reserved = runCeiling(variant, prompts[index], model, runJudge,mediaUsage);
     const reservedMedia=mediaCost(mediaUsage,model.media_pricing || {});
     const runId=uuid();
-    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price,provider,judge_provider,request_messages,tools_schema,media_price_snapshot,media_usage,reserved_media_cost,judge_media_price_snapshot,retry_limit) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved * (retryLimit + 1), runJudge?.id || null, runJudge?.api_model || null, runJudge?.input_usd_per_million ?? null, runJudge?.output_usd_per_million ?? null,model.provider,runJudge?.provider || 'legacy',JSON.stringify(prompts[index].messages),JSON.stringify(toolSchema),JSON.stringify(model.media_pricing),JSON.stringify(mediaUsage),reservedMedia,JSON.stringify(runJudge?.media_pricing || {}),retryLimit]);
+    await client.query('INSERT INTO experiment_runs(id,batch_id,experiment_id,variant_id,input_index,case_id,status,system_prompt,user_prompt,model_id,api_model,parameters,input_price,output_price,reserved_usd,judge_model_id,judge_api_model,judge_input_price,judge_output_price,provider,judge_provider,request_messages,tools_schema,media_price_snapshot,media_usage,reserved_media_cost,judge_media_price_snapshot,retry_limit,connection_id,judge_connection_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)', [runId, batchId, experimentId, variant.id, index, cases[index]?.id || null, 'queued', prompts[index].system, prompts[index].user, variant.modelId, model.api_model, JSON.stringify(variant.parameters), model.input_usd_per_million, model.output_usd_per_million, reserved * (retryLimit + 1), runJudge?.id || null, runJudge?.api_model || null, runJudge?.input_usd_per_million ?? null, runJudge?.output_usd_per_million ?? null,model.provider,runJudge?.provider || 'legacy',JSON.stringify(prompts[index].messages),JSON.stringify(toolSchema),JSON.stringify(model.media_pricing),JSON.stringify(mediaUsage),reservedMedia,JSON.stringify(runJudge?.media_pricing || {}),retryLimit,model.connection_id,runJudge?.connection_id || null]);
     for (const versionId of usedVersions) await client.query('INSERT INTO prompt_run_uses(run_id,version_id,direct) VALUES($1,$2,$3)',[runId,versionId,versionId===definition.promptVersionId]);
   }
   return ok({ batchId, status: 'queued', runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate }, 202);
@@ -163,7 +165,8 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if (method === 'GET') {
       const settings = (await client.query('SELECT * FROM experiment_settings WHERE id=1')).rows[0];
       const models = (await client.query('SELECT * FROM experiment_models ORDER BY created_at')).rows;
-      return ok({ configured: executionConfigured(), dailyBudgetUsd: settings.daily_budget_usd, concurrencyLimit: settings.concurrency_limit, judgeModelId: settings.judge_model_id, models: models.map(model => ({ id: model.id, displayName: model.display_name, apiModel: model.api_model, provider:model.provider,capabilities:model.capabilities,mediaPricing:model.media_pricing,configured:providerConfigured(model.provider),inputUsdPerMillion: model.input_usd_per_million, outputUsdPerMillion: model.output_usd_per_million, active: model.active })) });
+      const availability = await Promise.all(models.map(model => modelConnectionAvailable(client, model)));
+      return ok({ configured: await executionConfigured(client), dailyBudgetUsd: settings.daily_budget_usd, concurrencyLimit: settings.concurrency_limit, judgeModelId: settings.judge_model_id, models: models.map((model, index) => ({ id: model.id, displayName: model.display_name, apiModel: model.api_model, provider:model.provider,connectionId:model.connection_id,capabilities:model.capabilities,mediaPricing:model.media_pricing,configured:availability[index],inputUsdPerMillion: model.input_usd_per_million, outputUsdPerMillion: model.output_usd_per_million, active: model.active })) });
     }
     if (method === 'PUT') {
       if (me.role !== 'admin') return forbidden();
@@ -181,7 +184,8 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     let configured;
     try {configured=validateModelCapabilities(body.provider || 'legacy',body.capabilities || {input:['text'],output:['text'],tools:false},body.mediaPricing || {});} catch(error) {return fail(error.message);}
     const id = uuid();
-    await client.query('INSERT INTO experiment_models(id,display_name,api_model,input_usd_per_million,output_usd_per_million,provider,capabilities,media_pricing) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, body.displayName.trim(), body.apiModel.trim(), body.inputUsdPerMillion, body.outputUsdPerMillion,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing)]);
+    if (body.connectionId && !(await client.query('SELECT 1 FROM model_connections WHERE id=$1 AND provider=$2 AND active=true', [body.connectionId, configured.provider])).rowCount) return fail('模型连接不存在或供应商不匹配');
+    await client.query('INSERT INTO experiment_models(id,display_name,api_model,input_usd_per_million,output_usd_per_million,provider,capabilities,media_pricing,connection_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [id, body.displayName.trim(), body.apiModel.trim(), body.inputUsdPerMillion, body.outputUsdPerMillion,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),body.connectionId || null]);
     return ok({ id }, 201);
   }
   const modelRoute = pathname.match(/^\/api\/experiment-platform\/models\/([^/]+)$/);
@@ -193,7 +197,9 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if(!current) return fail('模型不存在',404);
     let configured;
     try {configured=validateModelCapabilities(body.provider || current.provider,body.capabilities || current.capabilities,body.mediaPricing || current.media_pricing);} catch(error) {return fail(error.message);}
-    const result = await client.query('UPDATE experiment_models SET display_name=$2,input_usd_per_million=$3,output_usd_per_million=$4,active=$5,provider=$6,capabilities=$7,media_pricing=$8 WHERE id=$1 RETURNING id', [modelRoute[1],body.displayName.trim(),body.inputUsdPerMillion,body.outputUsdPerMillion,body.active,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing)]);
+    const connectionId = body.connectionId === undefined ? current.connection_id : body.connectionId || null;
+    if (connectionId && !(await client.query('SELECT 1 FROM model_connections WHERE id=$1 AND provider=$2 AND active=true', [connectionId, configured.provider])).rowCount) return fail('模型连接不存在或供应商不匹配');
+    const result = await client.query('UPDATE experiment_models SET display_name=$2,input_usd_per_million=$3,output_usd_per_million=$4,active=$5,provider=$6,capabilities=$7,media_pricing=$8,connection_id=$9 WHERE id=$1 RETURNING id', [modelRoute[1],body.displayName.trim(),body.inputUsdPerMillion,body.outputUsdPerMillion,body.active,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),connectionId]);
     return result.rowCount ? ok({ id: modelRoute[1] }) : fail('模型不存在',404);
   }
   if (pathname === '/api/experiment-platform/prompts') {
@@ -299,7 +305,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     const batch = (await client.query('SELECT b.*,e.owner_id FROM experiment_batches b JOIN experiments e ON e.id=b.experiment_id WHERE b.id=$1', [retryRoute[1]])).rows[0];
     if (!batch) return fail('批次不存在', 404);
     if (!own(batch, me)) return fail('无权重试', 403);
-    if (!executionConfigured()) return fail('模型 API 未配置', 409);
+    if (!await executionConfigured(client)) return fail('模型 API 未配置', 409);
     const count = (await client.query("UPDATE experiment_runs SET status='queued',error=NULL,started_at=NULL,completed_at=NULL WHERE batch_id=$1 AND status='failed' RETURNING id", [batch.id])).rowCount;
     if (!count) return fail('没有失败项可重试', 409);
     await client.query("UPDATE experiment_batches SET status='queued',completed_at=NULL WHERE id=$1", [batch.id]);

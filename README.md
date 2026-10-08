@@ -32,7 +32,7 @@ Docker Compose 将开发库映射到本机 `55432` 端口，并初始化独立�
 docker compose exec -T postgres pg_dump -U admin -Fc agent_admin > agent_admin.dump
 ```
 
-恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、66 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
+恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、83 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
 
 Markdown 图片经 `/api/assets` 上传并保存到 `mock/uploads/`（可用 `ASSET_DIR` 调整）。图片仅登录后可读取，支持 PNG/JPEG/WebP/GIF，每张上限 10 MB；超过 24 小时且未被当前笔记、任务或实验内容引用的图片会自动清理。**备份时需同时保存 PostgreSQL 和附件目录**，只恢复数据库会导致图片 URL 失效。笔记引用以 `[[标题]]` 编写；唯一匹配时保存为 `[[标题|id:笔记ID]]`，改名仍指向同一笔记，删除目标后显示悬空占位。
 
@@ -44,7 +44,7 @@ Markdown 图片经 `/api/assets` 上传并保存到 `mock/uploads/`（可用 `AS
 
 邮件提醒由账号在复习面板填写邮箱并启用，设置经 `/api/account/review-settings` 保存；SMTP 由 `.env.example` 中的 `SMTP_HOST`、`SMTP_PORT`、`SMTP_FROM`（可选 `SMTP_USER`、`SMTP_PASSWORD`）配置。未配置 SMTP 时站内提醒仍正常，待发送邮件保留并在服务配置后尝试发送；失败状态和错误保留在数据库并按退避间隔重试。邮件投递属于至少一次语义：服务在 SMTP 已接收但尚未记录成功时崩溃，重试可能产生重复邮件。**本地 API 必须持续运行才能在 09:00 准时触发**；停机期间遗漏的提醒会在下次启动补建。新建笔记还可选用五种内置 Markdown 模板，正文保存后可自由编辑。
 
-实验平台的可执行定义与旧手工记录并存。管理员须在“实验 → 模型与预算配置”中加入模型及美元／百万 token 价格、设置每日预算和并发上限，并选择独立的 Judge 模型。旧兼容 `/chat/completions` 文本调用继续使用 `MODEL_API_BASE_URL` 与 `MODEL_API_KEY`；OpenAI、千问和 Gemini 原生适配器分别使用独立的服务端凭据，密钥不返回浏览器。未配置时可保存定义，但不能执行。提示词库支持版本化存储，五种内置实验模板只作为可修改的初始值。
+实验平台的可执行定义与旧手工记录并存。管理员须在“实验 → 模型与预算配置”中加入模型及美元／百万 token 价格、设置每日预算和并发上限，并选择独立的 Judge 模型。管理员可在“系统设置 → 模型连接”中为同一供应商建立多条加密连接，再为模型显式绑定。未绑定模型优先使用该供应商的默认数据库连接；缺失时才读取旧环境变量。服务端须设置 `MODEL_CONNECTION_MASTER_KEY`（32 字节随机密钥的十六进制表示）；API 与独立 worker 使用相同密钥。轮换主密钥时用 `MODEL_CONNECTION_KEY_VERSION` 标识新版本，并在 `MODEL_CONNECTION_PREVIOUS_KEYS` 中保留旧版本密钥，逐条重新加密连接后才能移除旧密钥。数据库只存密文、随机 nonce、认证标签及脱敏显示值。旧兼容 `/chat/completions` 文本调用可继续使用 `MODEL_API_BASE_URL` 与 `MODEL_API_KEY`；OpenAI、千问和 Gemini 原生适配器可使用各自环境变量。未配置时可保存定义，但不能执行。连接测试会用选定模型发出一次最小请求，可能产生少量费用。提示词库支持版本化存储，五种内置实验模板只作为可修改的初始值。
 
 评测自定义 Python 指标在 `/evaluation/metrics` 登记，源码须定义 `score(payload)` 并返回 0–1 或 `None`。先在运行 API 的主机构建镜像：`docker build -f docker/evaluation-python.Dockerfile -t agent-eval-python:local .`，再将 `EVALUATION_PYTHON_IMAGE=agent-eval-python:local` 加入环境。容器以禁网、只读文件系统、非 root、无 Linux capabilities、有限 CPU／内存／进程数运行；单用例 30 秒超时。API 进程需要 Docker daemon 访问权限，实际部署宜将此 worker 移至独立主机。镜像不存在时，页面和接口会显示不可用，不允许创建或运行对应指标。[Docker 运行限制参考](https://docs.docker.com/reference/cli/docker/container/run)。
 

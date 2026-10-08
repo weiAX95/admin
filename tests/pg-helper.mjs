@@ -51,7 +51,7 @@ export async function createPgTestServer(t, fixture = basicFixture(), extraEnv =
     await client.query("COMMIT");
   } catch (error) { await client.query("ROLLBACK"); throw error; }
   const port = await freePort();
-  const child = spawn(process.execPath, [new URL("../mock/server.mjs", import.meta.url).pathname], { cwd: root.pathname, env: { ...process.env, DATABASE_URL: url.toString(), MOCK_PORT: String(port), ...extraEnv }, stdio: "ignore" });
+  const child = spawn(process.execPath, [new URL("../mock/server.mjs", import.meta.url).pathname], { cwd: root.pathname, env: { ...process.env, DATABASE_URL: url.toString(), MOCK_PORT: String(port), ...extraEnv }, stdio: process.env.DEBUG_TEST_SERVER ? 'inherit' : 'ignore' });
   t.after(async () => {
     child.kill("SIGTERM");
     await client.end();
