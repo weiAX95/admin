@@ -23,6 +23,7 @@ const MENU_ITEMS = [
   { key: "/evaluation/reviews", icon: <ProfileOutlined />, label: "人工评测" },
   { key: "/evaluation/leaderboard", icon: <ExperimentOutlined />, label: "模型排行榜" },
   { key: "/evaluation/schedules", icon: <BellOutlined />, label: "定时评测" },
+  { key: "/evaluation/metrics", icon: <ProfileOutlined />, label: "评测指标" },
   { key: "/prompts", icon: <FileTextOutlined />, label: "提示词库" },
 ];
 const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号管理" };
@@ -38,6 +39,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/evaluation/candidates": { title: "评测候选池", description: "审核高质量反馈，发布新的评测数据集版本。", section: "评测中心" },
   "/evaluation/leaderboard": { title: "模型排行榜", description: "在固定数据集和指标版本上比较模型质量与效率。", section: "评测中心" },
   "/evaluation/schedules": { title: "定时评测", description: "按账号时区安排每日或每周评测，并管理已提交的周期。", section: "评测中心" },
+  "/evaluation/metrics": { title: "评测指标", description: "管理固定评分规则、隔离 Python 指标及可用运行环境。", section: "评测中心" },
   "/prompts": { title: "提示词库", description: "管理版本、变量与提示词结构。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
 };

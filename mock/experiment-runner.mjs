@@ -8,13 +8,16 @@ import fs from 'node:fs/promises';
 import { normalizeToolCalls, scoreBuiltIn, TOKENIZER_VERSION } from './evaluation-metrics.mjs';
 import { caseInputFingerprint } from './evaluation-datasets.mjs';
 import crypto from 'node:crypto';
+import { runBertScore, runPythonMetric } from './evaluation-python-worker.mjs';
 
-function evaluationScores(row, output, calls, latencyMs, completionTokens) {
+async function evaluationScores(row, output, calls, latencyMs, completionTokens) {
   const input = { output, expectedOutput: row.reference_answer, actualTools: normalizeToolCalls(calls), expectedTools: row.expected_tools };
   const details = Object.fromEntries(['exact','token_f1','bleu','rouge_l','tool_selection','parameter_accuracy'].map(metric => [metric, scoreBuiltIn(metric, input)]));
   details.latencyMs = latencyMs;
   details.outputTokens = completionTokens;
   details.tokenizerVersion = TOKENIZER_VERSION;
+  if (row.rule_type==='custom_python') details.custom_python=await runPythonMetric(row.custom_script_source,{ output,expectedOutput:row.reference_answer,actualTools:input.actualTools,expectedTools:input.expectedTools,latencyMs,outputTokens:completionTokens });
+  if (row.rule_type==='bertscore') details.bertscore=await runBertScore(output,row.reference_answer);
   const selected = details[row.rule_type];
   return { details, rule: typeof selected === 'number' ? Math.round(selected * 5000) / 1000 : null };
 }
@@ -84,7 +87,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
     finally { client.release(); }
   }
   await Promise.all(claimed.map(async id => {
-    const row = (await pool.query('SELECT r.*,b.metric_version_id,c.reference_answer,c.expected_tools,m.rule_type,m.judge_prompt FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiment_metric_versions m ON m.id=b.metric_version_id LEFT JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.id=$1', [id])).rows[0];
+    const row = (await pool.query('SELECT r.*,b.metric_version_id,c.reference_answer,c.expected_tools,m.rule_type,m.judge_prompt,s.source AS custom_script_source FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiment_metric_versions m ON m.id=b.metric_version_id LEFT JOIN evaluation_metric_scripts s ON s.id=m.custom_script_id LEFT JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.id=$1', [id])).rows[0];
     const started = performance.now();
     try {
       const parameters = { ...row.parameters };
@@ -112,7 +115,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
         } catch(error) {await client.query('ROLLBACK').catch(()=>{});for(const file of created)await fs.unlink(file).catch(()=>{});throw error;}
         finally {client.release();}
       }
-      const scored = evaluationScores(row,output,toolCalls,latencyMs,completionTokens);
+      const scored = await evaluationScores(row,output,toolCalls,latencyMs,completionTokens);
       if (row.judge_api_model) {
         try {
           const media=outputParts.filter(part=>['image','audio','video'].includes(part.type)&&part.assetId);

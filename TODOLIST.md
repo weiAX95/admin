@@ -444,7 +444,9 @@
   - [ ] AC：单数据集最大 10,000 条
 - [ ] **7.2 评测指标定义**
   - [x] Exact、F1、BLEU、ROUGE-L、工具选择、工具参数的确定性计算及延迟分位数／输出 token 汇总函数已有单元测试
-  - [ ] 将工具和效率指标接入运行结果；实现隔离 Python 指标与 BERTScore worker（当前 2 GB 主机默认关闭）
+  - [x] 工具与效率指标写入逐项运行结果；管理员可登记不可变 Python 脚本并创建指标版本，隔离容器执行且超时 30 秒
+  - [x] BERTScore 容器适配、预检及模拟执行测试已接入；2 GB 主机默认关闭
+  - [ ] 在更大内存的实际 BERTScore 镜像上完成真实模型测试和吞吐验证
   - [ ] 文本指标：Exact Match、F1、BLEU、ROUGE-L、BERTScore
   - [ ] 工具调用指标：Tool Selection Accuracy（工具名是否匹配）、Parameter Accuracy（参数是否正确）
   - [ ] 效率指标：平均延迟 P50/P95/P99、平均输出 token 数

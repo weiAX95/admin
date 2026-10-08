@@ -4,6 +4,7 @@ import { executionConfigured } from './experiment-runner.mjs';
 import { checkPromptCompliance, renderPromptVersion } from './prompts.mjs';
 import {mediaCost,preflightMedia,preflightOutput,providerConfigured,validateModelCapabilities} from './model-capabilities.mjs';
 import { caseInputFingerprint } from './evaluation-datasets.mjs';
+import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -51,7 +52,10 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
     if (!cases.length) return fail('数据集版本不存在或没有用例', 404);
   }
   const metricVersionId = body.metricVersionId || 'default-v1';
-  if (!(await client.query('SELECT 1 FROM experiment_metric_versions WHERE id=$1', [metricVersionId])).rowCount) return fail('指标版本不存在', 404);
+  const metricDefinition=(await client.query('SELECT rule_type FROM experiment_metric_versions WHERE id=$1', [metricVersionId])).rows[0];
+  if (!metricDefinition) return fail('指标版本不存在', 404);
+  if (metricDefinition.rule_type==='custom_python' && !(await pythonMetricAvailable())) return fail('隔离 Python 指标容器不可用',409);
+  if (metricDefinition.rule_type==='bertscore' && (process.env.EVALUATION_BERTSCORE_ENABLED!=='true' || !(await pythonMetricAvailable('bertscore')))) return fail('BERTScore worker 不可用',409);
   if (kind === 'regression') {
     const baseline = (await client.query('SELECT * FROM experiment_batches WHERE id=$1', [body.baselineBatchId])).rows[0];
     if (!baseline) return fail('固定 baseline 不存在', 409);

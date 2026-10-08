@@ -6,6 +6,7 @@ import { validateEvaluationCases, referencedAssetIds, caseInputFingerprint } fro
 import { BUILT_IN_METRICS, TOKENIZER_VERSION, summarizeEfficiency } from './evaluation-metrics.mjs';
 import { rankModels, validateGoalRanges } from './evaluation-ranking.mjs';
 import { judgeQuality } from './evaluation-judge-quality.mjs';
+import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
@@ -179,7 +180,19 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     if (me.role !== 'admin') return fail('仅管理员可查看退化告警', 403);
     return ok({ items: (await client.query('SELECT * FROM evaluation_alerts ORDER BY created_at DESC LIMIT 200')).rows });
   }
-  if (pathname === '/api/evaluation/metrics' && method === 'GET') return ok({ tokenizerVersion: TOKENIZER_VERSION, builtIns: BUILT_IN_METRICS, bertScoreEnabled: process.env.EVALUATION_BERTSCORE_ENABLED === 'true' });
+  if (pathname === '/api/evaluation/metrics' && method === 'GET') return ok({ tokenizerVersion: TOKENIZER_VERSION, builtIns: BUILT_IN_METRICS, pythonEnabled: await pythonMetricAvailable(), bertScoreEnabled: process.env.EVALUATION_BERTSCORE_ENABLED === 'true' && await pythonMetricAvailable('bertscore') });
+  if (pathname === '/api/evaluation/metric-scripts') {
+    if (method === 'GET') return ok({ items:(await client.query('SELECT id,name,created_by,created_at FROM evaluation_metric_scripts ORDER BY created_at DESC')).rows });
+    if (method === 'POST') {
+      if (me.role !== 'admin') return fail('仅管理员可登记 Python 指标',403);
+      const body=await readBody();
+      if (!String(body.name||'').trim() || String(body.name).length>120 || typeof body.source!=='string' || !body.source.trim() || body.source.length>20000) return fail('指标名称或 Python 源码无效');
+      if (!(await pythonMetricAvailable())) return fail('隔离 Python 容器未就绪',409);
+      const id=uuid();
+      await client.query('INSERT INTO evaluation_metric_scripts(id,name,source,created_by) VALUES($1,$2,$3,$4)',[id,body.name.trim(),body.source,me.id]);
+      return ok({id},201);
+    }
+  }
   if (pathname === '/api/evaluation/folders') {
     if (method === 'GET') return ok({ items: (await client.query('SELECT * FROM evaluation_folders ORDER BY name,id')).rows });
     if (method === 'POST') {
@@ -221,13 +234,14 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     if (method === 'POST') {
       if (me.role !== 'admin') return fail('仅管理员可配置指标', 403);
       const body = await readBody();
-      if (!body.name?.trim() || !['token_f1','exact','bleu','rouge_l','tool_selection','parameter_accuracy','bertscore'].includes(body.ruleType) || typeof body.passThreshold !== 'number' || body.passThreshold < 0 || body.passThreshold > 5 || typeof body.regressionThreshold !== 'number' || body.regressionThreshold < 0 || body.regressionThreshold > 5 || !body.judgePrompt?.trim()) return fail('指标配置无效');
-      if (body.ruleType === 'bertscore' && process.env.EVALUATION_BERTSCORE_ENABLED !== 'true') return fail('BERTScore worker 尚未启用', 409);
+      if (!body.name?.trim() || !['token_f1','exact','bleu','rouge_l','tool_selection','parameter_accuracy','bertscore','custom_python'].includes(body.ruleType) || typeof body.passThreshold !== 'number' || body.passThreshold < 0 || body.passThreshold > 5 || typeof body.regressionThreshold !== 'number' || body.regressionThreshold < 0 || body.regressionThreshold > 5 || !body.judgePrompt?.trim()) return fail('指标配置无效');
+      if (body.ruleType === 'bertscore' && (process.env.EVALUATION_BERTSCORE_ENABLED !== 'true' || !(await pythonMetricAvailable('bertscore')))) return fail('BERTScore worker 尚未启用', 409);
+      if (body.ruleType === 'custom_python' && (!(await pythonMetricAvailable()) || !(await client.query('SELECT 1 FROM evaluation_metric_scripts WHERE id=$1',[body.customScriptId])).rowCount)) return fail('隔离 Python 指标或容器不可用',409);
       let goalRanges;
       try { goalRanges = validateGoalRanges(body.goalRanges); } catch (error) { return fail(error.message); }
       const version = (await client.query('SELECT COALESCE(max(version),0)+1 AS next FROM experiment_metric_versions WHERE name=$1', [body.name.trim()])).rows[0].next;
       const id = uuid();
-      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version,goal_ranges) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION,JSON.stringify(goalRanges)]);
+      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version,goal_ranges,custom_script_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION,JSON.stringify(goalRanges),body.ruleType==='custom_python'?body.customScriptId:null]);
       return ok({ id, version }, 201);
     }
   }

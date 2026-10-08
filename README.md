@@ -44,6 +44,10 @@ Markdown 图片经 `/api/assets` 上传并保存到 `mock/uploads/`（可用 `AS
 
 实验平台的可执行定义与旧手工记录并存。管理员须在“实验 → 模型与预算配置”中加入模型及美元／百万 token 价格、设置每日预算和并发上限，并选择独立的 Judge 模型。旧兼容 `/chat/completions` 文本调用继续使用 `MODEL_API_BASE_URL` 与 `MODEL_API_KEY`；OpenAI、千问和 Gemini 原生适配器分别使用独立的服务端凭据，密钥不返回浏览器。未配置时可保存定义，但不能执行。提示词库支持版本化存储，五种内置实验模板只作为可修改的初始值。
 
+评测自定义 Python 指标在 `/evaluation/metrics` 登记，源码须定义 `score(payload)` 并返回 0–1 或 `None`。先在运行 API 的主机构建镜像：`docker build -f docker/evaluation-python.Dockerfile -t agent-eval-python:local .`，再将 `EVALUATION_PYTHON_IMAGE=agent-eval-python:local` 加入环境。容器以禁网、只读文件系统、非 root、无 Linux capabilities、有限 CPU／内存／进程数运行；单用例 30 秒超时。API 进程需要 Docker daemon 访问权限，实际部署宜将此 worker 移至独立主机。镜像不存在时，页面和接口会显示不可用，不允许创建或运行对应指标。[Docker 运行限制参考](https://docs.docker.com/reference/cli/docker/container/run)。
+
+BERTScore 使用独立的 `docker/evaluation-bertscore.Dockerfile`，预装多语模型，通过官方 [BERTScore 实现](https://github.com/Tiiiger/bert_score)在 CPU 上计算。该镜像和模型不适合 2 GB 目标主机，默认禁用；在更大内存的 worker 上构建后才配置 `EVALUATION_BERTSCORE_IMAGE` 和 `EVALUATION_BERTSCORE_ENABLED=true`。目前 BERTScore 适配与模拟服务测试已完成，真实模型镜像的运行和吞吐仍待单独验收。
+
 实验定义可以单次执行、A/B 批量执行，也能选择有版本的数据集与指标版本进行回归。评分同时保存规则分、Judge 分和合成分，人工星级另存；缺少 Judge 评分的输入组不计入 A/B 胜率。数据集候选池来自人工标注，但须人工审核后才可进入正式数据集。回归报告可以导出带中文字体的 PDF。版本链先提出相似标题建议，用户确认后才建立稳定链 ID。分享公开页展示最新实验配置与结果，创建前应核对预览内容；令牌只以哈希形式存储，可设期限及撤销。
 
 运行队列、批次和调度进度保存在 PostgreSQL。服务启动及运行期间会恢复超过 6 分钟未更新的运行中任务，避免过早重试仍在等待模型响应的请求；崩溃发生在模型已返回而结果尚未落库的窗口时，外部调用可能重复。调度按账号选择的 IANA 时区计算每天、每周或每月的本地执行时间；夏令时缺失时刻顺延到当天首个有效时刻，重复时刻取第一次。调度周期以唯一键去重，连续三个周期失败后自动暂停；站内通知不依赖邮件。实验邮件沿用 `SMTP_*` 环境变量，失败会重试。**本地 API 必须持续运行才会准时执行**，停机期间到期任务在恢复后补建。
