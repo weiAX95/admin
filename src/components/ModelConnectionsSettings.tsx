@@ -68,7 +68,7 @@ export default function ModelConnectionsSettings() {
     </Modal>
     <Modal title="测试模型连接" open={Boolean(testing)} onCancel={() => setTesting(null)} onOk={() => void test()} okText="发送最小请求" okButtonProps={{ disabled: !modelId }} confirmLoading={busy}>
       <Typography.Paragraph>请选择此供应商下已启用的模型。测试可能产生少量费用。</Typography.Paragraph>
-      <Select style={{ width: '100%' }} placeholder="选择模型" value={modelId} onChange={setModelId} options={models.filter(model => model.active && model.provider === testing?.provider).map(model => ({ value: model.id, label: model.displayName }))} />
+      <Select style={{ width: '100%' }} placeholder="选择模型" value={modelId} onChange={setModelId} options={models.filter(model => model.active && model.status==='active' && model.adapterReady && model.provider === testing?.provider).map(model => ({ value: model.id, label: model.displayName }))} />
     </Modal>
   </Card>;
 }

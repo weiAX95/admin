@@ -2,7 +2,7 @@ import { http } from './client';
 
 export interface ModelCapabilities {input:('text'|'image'|'audio'|'video')[];output:('text'|'image'|'audio'|'video')[];tools:boolean}
 export interface MediaPricing {imageInputUsdEach?:number;audioInputUsdPerSecond?:number;videoInputUsdPerSecond?:number;imageOutputUsdEach?:number;audioOutputUsdPerSecond?:number}
-export interface ModelConfig { id: string; displayName: string; apiModel: string; provider:'legacy'|'openai'|'qwen'|'gemini';connectionId:string|null;capabilities:ModelCapabilities;mediaPricing:MediaPricing;configured:boolean;inputUsdPerMillion: number; outputUsdPerMillion: number; active: boolean }
+export interface ModelConfig { id: string; name:string; displayName: string; apiModel: string; provider:'legacy'|'openai'|'qwen'|'gemini'|'anthropic'|'azure'|'local'|'custom';connectionId:string|null;capabilities:ModelCapabilities;mediaPricing:MediaPricing;configured:boolean;inputUsdPerMillion: number; outputUsdPerMillion: number; active: boolean;status:'active'|'deprecated'|'retired';allowedRoles:string[];endpointUrl:string|null;apiVersion:string|null;contextWindow:number|null;maxOutputTokens:number|null;featureTags:string[];adapterReady:boolean }
 export interface PlatformConfig { configured: boolean; dailyBudgetUsd: number; concurrencyLimit: number; judgeModelId: string | null; models: ModelConfig[] }
 export interface ExperimentVariant { id?: string; modelId: string; label: string; parameters: { temperature?: number; top_p?: number; max_tokens?: number; stop_sequences?: string[]; frequency_penalty?: number; presence_penalty?: number;output_kind?:'text'|'image'|'audio' }; position?: number }
 export interface ExperimentTemplate { id: string; name: string; systemPrompt: string; userPrompt: string; variants: Omit<ExperimentVariant, 'modelId'>[] }
@@ -13,8 +13,9 @@ export interface ExperimentDefinition extends Omit<DefinitionPayload, 'execute'>
 
 export const getPlatformConfig = () => http.get<PlatformConfig>('/experiment-platform/config');
 export const savePlatformConfig = (settings: { dailyBudgetUsd: number; concurrencyLimit: number; judgeModelId?: string | null }) => http.put('/experiment-platform/config', settings);
-export const addPlatformModel = (model: { displayName: string; apiModel: string; provider:ModelConfig['provider'];connectionId?:string|null;capabilities:ModelCapabilities;mediaPricing:MediaPricing;inputUsdPerMillion: number; outputUsdPerMillion: number }) => http.post<{ id: string }>('/experiment-platform/models', model);
-export const updatePlatformModel = (id: string, model: { displayName: string;provider:ModelConfig['provider'];connectionId?:string|null;capabilities:ModelCapabilities;mediaPricing:MediaPricing;inputUsdPerMillion: number; outputUsdPerMillion: number; active: boolean }) => http.patch<{ id: string }>(`/experiment-platform/models/${id}`, model);
+export interface ModelRegistryDraft { name:string;displayName:string;apiModel:string;provider:ModelConfig['provider'];connectionId?:string|null;capabilities:ModelCapabilities;mediaPricing:MediaPricing;inputUsdPerMillion:number;outputUsdPerMillion:number;active?:boolean;status?:ModelConfig['status'];allowedRoles?:string[];endpointUrl?:string|null;apiVersion?:string|null;contextWindow?:number|null;maxOutputTokens?:number|null;featureTags?:string[] }
+export const addPlatformModel = (model: ModelRegistryDraft) => http.post<{ id: string }>('/experiment-platform/models', model);
+export const updatePlatformModel = (id: string, model: ModelRegistryDraft) => http.patch<{ id: string }>(`/experiment-platform/models/${id}`, model);
 export const getExperimentTemplates = () => http.get<{ items: ExperimentTemplate[] }>('/experiment-templates');
 export const getPromptLibrary = () => http.get<{ items: { id: string; name: string; version_id: string; version: number; content: string }[] }>('/experiment-platform/prompts');
 export const createPromptLibrary = (name: string, content: string) => http.post<{ id: string; versionId: string }>('/experiment-platform/prompts', { name, content });

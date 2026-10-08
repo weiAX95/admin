@@ -33,10 +33,10 @@ export default function ExperimentDefinitionDrawer({ open, initial, trialPrompt,
     form.setFieldsValue(initial ? { ...initial, variants: initial.variants } : { title: '', taskId: defaultTaskId || null, systemPrompt: '', userPrompt: '', promptVersionId: null, variables: {}, variants: [] });
     void Promise.all([getPlatformConfig(), getExperimentTemplates(), getPromptLibrary(),trialPrompt&&!initial?listPromptVersions(trialPrompt.promptId):Promise.resolve(null)]).then(([config, library, promptList,history]) => {
       const requested=history?.items.find(item=>item.id===trialPrompt?.versionId);
-      setModels(config.models.filter(item => item.active)); setTemplates(library.items); setPrompts(requested?[...promptList.items,{id:trialPrompt!.promptId,name:'试运行所选版本',version_id:requested.id,version:requested.version,content:requested.content}]:promptList.items);
+      setModels(config.models.filter(item => item.active && item.status==='active' && item.adapterReady)); setTemplates(library.items); setPrompts(requested?[...promptList.items,{id:trialPrompt!.promptId,name:'试运行所选版本',version_id:requested.id,version:requested.version,content:requested.content}]:promptList.items);
       if(trialPrompt&&!initial) {
         if(!requested) message.error('所选提示词版本不存在');
-        else form.setFieldsValue({title:`试运行 · ${requested.semver}`,promptVersionId:requested.id,systemPrompt:requested.content,userPrompt:'',variants:[{label:'试运行变体',modelId:config.models.find(item=>item.active)?.id || '',parameters:{temperature:0.7,top_p:1,max_tokens:1024}}]});
+        else form.setFieldsValue({title:`试运行 · ${requested.semver}`,promptVersionId:requested.id,systemPrompt:requested.content,userPrompt:'',variants:[{label:'试运行变体',modelId:config.models.find(item=>item.active&&item.status==='active'&&item.adapterReady)?.id || '',parameters:{temperature:0.7,top_p:1,max_tokens:1024}}]});
       }
       setJudgeModelId(config.judgeModelId);
       setCanExecute(config.configured && config.dailyBudgetUsd > 0 && config.concurrencyLimit > 0);

@@ -1,0 +1,15 @@
+ALTER TABLE experiment_models ADD COLUMN name text;
+ALTER TABLE experiment_models DROP CONSTRAINT experiment_models_provider_check;
+ALTER TABLE experiment_models ADD CONSTRAINT experiment_models_provider_check CHECK(provider IN ('legacy','openai','qwen','gemini','anthropic','azure','local','custom'));
+UPDATE experiment_models SET name=provider || ':' || api_model;
+ALTER TABLE experiment_models ALTER COLUMN name SET NOT NULL;
+ALTER TABLE experiment_models ADD CONSTRAINT experiment_models_name_unique UNIQUE(name);
+ALTER TABLE experiment_models ADD COLUMN endpoint_url text;
+ALTER TABLE experiment_models ADD COLUMN api_version text;
+ALTER TABLE experiment_models ADD COLUMN context_window integer CHECK(context_window > 0);
+ALTER TABLE experiment_models ADD COLUMN max_output_tokens integer CHECK(max_output_tokens > 0);
+ALTER TABLE experiment_models ADD COLUMN feature_tags text[] NOT NULL DEFAULT '{}';
+ALTER TABLE experiment_models ADD COLUMN status text NOT NULL DEFAULT 'active' CHECK(status IN ('active','deprecated','retired'));
+ALTER TABLE experiment_models ADD COLUMN allowed_roles text[] NOT NULL DEFAULT ARRAY['admin'];
+UPDATE experiment_models SET allowed_roles=ARRAY['admin','member'];
+CREATE INDEX experiment_models_status_idx ON experiment_models(status);

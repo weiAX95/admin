@@ -4,6 +4,7 @@ import { executionConfigured } from './experiment-runner.mjs';
 import { checkPromptCompliance, renderPromptVersion } from './prompts.mjs';
 import {mediaCost,preflightMedia,preflightOutput,validateModelCapabilities} from './model-capabilities.mjs';
 import {modelConnectionAvailable} from './model-connections.mjs';
+import {modelUsable,supportedProvider,validateRegistry} from './model-governance.mjs';
 import { caseInputFingerprint } from './evaluation-datasets.mjs';
 import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 
@@ -81,10 +82,13 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   if (!variants.length || variants.length > 20) return fail('请选择 1–20 个变体');
   if(variants.some(variant=>(variant.parameters.output_kind || 'text')==='text')&&!settings.judge_model_id) return fail('文本输出需要配置 LLM Judge',409);
   if ((kind === 'dataset' || kind === 'regression') && variants.length !== 1) return fail('数据集评测和回归每批次必须选择一个变体，以便逐用例与 baseline 对比');
-  const models = new Map((await client.query('SELECT * FROM experiment_models WHERE active=true')).rows.map(row => [row.id, row]));
+  const catalog=(await client.query("SELECT * FROM experiment_models WHERE active=true AND status='active'")).rows;
+  const models = new Map(catalog.filter(row=>modelUsable(row,me)).map(row => [row.id, row]));
+  const judge=catalog.find(row=>row.id===settings.judge_model_id);
+  if(judge)models.set(judge.id,judge);
   const available = new Map(await Promise.all([...models.values()].map(async model => [model.id, await modelConnectionAvailable(client, model)])));
-  if (variants.some(variant => !models.has(variant.modelId))) return fail('变体模型已停用，请编辑实验后重试', 409);
-  const judge = models.get(settings.judge_model_id);
+  if (variants.some(variant => !modelUsable(models.get(variant.modelId),me))) return fail('变体模型已停用或无访问权限，请编辑实验后重试', 409);
+  if (variants.some(variant=>{const model=models.get(variant.modelId);return model.max_output_tokens!==null && variant.parameters.max_tokens>model.max_output_tokens;}))return fail('变体输出 token 超过模型上限',409);
   if (variants.some(variant=>(variant.parameters.output_kind || 'text')==='text') && !judge) return fail('LLM Judge 模型未启用', 409);
   if(judge && !available.get(judge.id) && variants.some(variant=>(variant.parameters.output_kind || 'text')==='text')) return fail('LLM Judge 供应商凭据未配置',409);
   const judgeFor=kind=>{
@@ -164,15 +168,15 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
   if (pathname === '/api/experiment-platform/config') {
     if (method === 'GET') {
       const settings = (await client.query('SELECT * FROM experiment_settings WHERE id=1')).rows[0];
-      const models = (await client.query('SELECT * FROM experiment_models ORDER BY created_at')).rows;
+      const models = (await client.query('SELECT * FROM experiment_models ORDER BY created_at')).rows.filter(row=>me.role==='admin'||modelUsable(row,me));
       const availability = await Promise.all(models.map(model => modelConnectionAvailable(client, model)));
-      return ok({ configured: await executionConfigured(client), dailyBudgetUsd: settings.daily_budget_usd, concurrencyLimit: settings.concurrency_limit, judgeModelId: settings.judge_model_id, models: models.map((model, index) => ({ id: model.id, displayName: model.display_name, apiModel: model.api_model, provider:model.provider,connectionId:model.connection_id,capabilities:model.capabilities,mediaPricing:model.media_pricing,configured:availability[index],inputUsdPerMillion: model.input_usd_per_million, outputUsdPerMillion: model.output_usd_per_million, active: model.active })) });
+      return ok({ configured: await executionConfigured(client), dailyBudgetUsd: settings.daily_budget_usd, concurrencyLimit: settings.concurrency_limit, judgeModelId: settings.judge_model_id, models: models.map((model, index) => ({ id: model.id, name:model.name, displayName: model.display_name, apiModel: model.api_model, provider:model.provider,connectionId:model.connection_id,capabilities:model.capabilities,mediaPricing:model.media_pricing,configured:availability[index],inputUsdPerMillion: model.input_usd_per_million, outputUsdPerMillion: model.output_usd_per_million, active: model.active, status:model.status,allowedRoles:model.allowed_roles,endpointUrl:model.endpoint_url,apiVersion:model.api_version,contextWindow:model.context_window,maxOutputTokens:model.max_output_tokens,featureTags:model.feature_tags,adapterReady:['legacy','openai','qwen','gemini'].includes(model.provider) })) });
     }
     if (method === 'PUT') {
       if (me.role !== 'admin') return forbidden();
       const body = await readBody();
       if (typeof body.dailyBudgetUsd !== 'number' || !Number.isFinite(body.dailyBudgetUsd) || body.dailyBudgetUsd < 0 || body.dailyBudgetUsd > 1_000_000 || !Number.isInteger(body.concurrencyLimit) || body.concurrencyLimit < 0 || body.concurrencyLimit > 20) return fail('预算或并发上限无效');
-      if (body.judgeModelId && !(await client.query('SELECT 1 FROM experiment_models WHERE id=$1 AND active=true', [body.judgeModelId])).rowCount) return fail('LLM Judge 模型不可用');
+      if (body.judgeModelId && !(await client.query("SELECT 1 FROM experiment_models WHERE id=$1 AND active=true AND status='active'", [body.judgeModelId])).rowCount) return fail('LLM Judge 模型不可用');
       await client.query('UPDATE experiment_settings SET daily_budget_usd=$1,concurrency_limit=$2,judge_model_id=$3,updated_at=now() WHERE id=1', [body.dailyBudgetUsd, body.concurrencyLimit, body.judgeModelId || null]);
       return ok({ saved: true });
     }
@@ -183,9 +187,12 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if (!body.displayName?.trim() || !body.apiModel?.trim() || !Number.isFinite(body.inputUsdPerMillion) || body.inputUsdPerMillion < 0 || !Number.isFinite(body.outputUsdPerMillion) || body.outputUsdPerMillion < 0) return fail('模型名称、API 名称及非负价格为必填');
     let configured;
     try {configured=validateModelCapabilities(body.provider || 'legacy',body.capabilities || {input:['text'],output:['text'],tools:false},body.mediaPricing || {});} catch(error) {return fail(error.message);}
+    let registry;
+    try{registry=validateRegistry({...body,name:body.name||`${configured.provider}:${body.apiModel.trim()}`});}catch(error){return fail(error.message);}
+    if((await client.query('SELECT 1 FROM experiment_models WHERE name=$1',[registry.name])).rowCount)return fail('模型唯一标识已存在',409);
     const id = uuid();
     if (body.connectionId && !(await client.query('SELECT 1 FROM model_connections WHERE id=$1 AND provider=$2 AND active=true', [body.connectionId, configured.provider])).rowCount) return fail('模型连接不存在或供应商不匹配');
-    await client.query('INSERT INTO experiment_models(id,display_name,api_model,input_usd_per_million,output_usd_per_million,provider,capabilities,media_pricing,connection_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [id, body.displayName.trim(), body.apiModel.trim(), body.inputUsdPerMillion, body.outputUsdPerMillion,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),body.connectionId || null]);
+    await client.query('INSERT INTO experiment_models(id,display_name,api_model,input_usd_per_million,output_usd_per_million,provider,capabilities,media_pricing,connection_id,name,status,allowed_roles,endpoint_url,api_version,context_window,max_output_tokens,feature_tags,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)', [id, body.displayName.trim(), body.apiModel.trim(), body.inputUsdPerMillion, body.outputUsdPerMillion,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),body.connectionId || null,registry.name,registry.status,registry.allowedRoles,registry.endpointUrl,registry.apiVersion,registry.contextWindow,registry.maxOutputTokens,registry.featureTags,supportedProvider.has(configured.provider)]);
     return ok({ id }, 201);
   }
   const modelRoute = pathname.match(/^\/api\/experiment-platform\/models\/([^/]+)$/);
@@ -195,11 +202,14 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if (typeof body.displayName !== 'string' || !body.displayName.trim() || typeof body.inputUsdPerMillion !== 'number' || !Number.isFinite(body.inputUsdPerMillion) || body.inputUsdPerMillion < 0 || typeof body.outputUsdPerMillion !== 'number' || !Number.isFinite(body.outputUsdPerMillion) || body.outputUsdPerMillion < 0 || typeof body.active !== 'boolean') return fail('模型价格或状态无效');
     const current=(await client.query('SELECT * FROM experiment_models WHERE id=$1',[modelRoute[1]])).rows[0];
     if(!current) return fail('模型不存在',404);
+    let registry;
+    try{registry=validateRegistry(body,current);}catch(error){return fail(error.message);}
+    if((await client.query('SELECT 1 FROM experiment_models WHERE name=$1 AND id<>$2',[registry.name,current.id])).rowCount)return fail('模型唯一标识已存在',409);
     let configured;
     try {configured=validateModelCapabilities(body.provider || current.provider,body.capabilities || current.capabilities,body.mediaPricing || current.media_pricing);} catch(error) {return fail(error.message);}
     const connectionId = body.connectionId === undefined ? current.connection_id : body.connectionId || null;
     if (connectionId && !(await client.query('SELECT 1 FROM model_connections WHERE id=$1 AND provider=$2 AND active=true', [connectionId, configured.provider])).rowCount) return fail('模型连接不存在或供应商不匹配');
-    const result = await client.query('UPDATE experiment_models SET display_name=$2,input_usd_per_million=$3,output_usd_per_million=$4,active=$5,provider=$6,capabilities=$7,media_pricing=$8,connection_id=$9 WHERE id=$1 RETURNING id', [modelRoute[1],body.displayName.trim(),body.inputUsdPerMillion,body.outputUsdPerMillion,body.active,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),connectionId]);
+    const result = await client.query('UPDATE experiment_models SET display_name=$2,input_usd_per_million=$3,output_usd_per_million=$4,active=$5,provider=$6,capabilities=$7,media_pricing=$8,connection_id=$9,name=$10,status=$11,allowed_roles=$12,endpoint_url=$13,api_version=$14,context_window=$15,max_output_tokens=$16,feature_tags=$17 WHERE id=$1 RETURNING id', [modelRoute[1],body.displayName.trim(),body.inputUsdPerMillion,body.outputUsdPerMillion,body.active&&supportedProvider.has(configured.provider),configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),connectionId,registry.name,registry.status,registry.allowedRoles,registry.endpointUrl,registry.apiVersion,registry.contextWindow,registry.maxOutputTokens,registry.featureTags]);
     return result.rowCount ? ok({ id: modelRoute[1] }) : fail('模型不存在',404);
   }
   if (pathname === '/api/experiment-platform/prompts') {
@@ -234,7 +244,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
   }
   if (pathname === '/api/experiment-definitions' && method === 'POST') {
     const body = await readBody();
-    const models = new Set((await client.query('SELECT id FROM experiment_models WHERE active=true')).rows.map(row => row.id));
+    const models = new Set((await client.query("SELECT * FROM experiment_models WHERE active=true AND status='active'")).rows.filter(row=>modelUsable(row,me)).map(row => row.id));
     let definition;
     try { definition = validateDefinition(body, models); } catch (error) { return fail(error.message); }
     if (definition.taskId && !(await client.query('SELECT 1 FROM tasks WHERE id=$1', [definition.taskId])).rowCount) return fail('关联任务不存在');
@@ -261,7 +271,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
       if (!row) return fail('实验定义不存在', 404);
       if (!own(row, me)) return fail('无权修改该实验', 403);
       const body = await readBody();
-      const models = new Set((await client.query('SELECT id FROM experiment_models WHERE active=true')).rows.map(item => item.id));
+      const models = new Set((await client.query("SELECT * FROM experiment_models WHERE active=true AND status='active'")).rows.filter(row=>modelUsable(row,me)).map(item => item.id));
       let definition;
       try { definition = validateDefinition(body, models); } catch (error) { return fail(error.message); }
       if (definition.taskId && !(await client.query('SELECT 1 FROM tasks WHERE id=$1', [definition.taskId])).rowCount) return fail('关联任务不存在');
