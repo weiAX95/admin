@@ -4,6 +4,8 @@ const SHA = /^[a-f\d]{40}$/i;
 const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'vendor', 'target', '.venv', '__pycache__']);
 const BINARY_EXTENSIONS = /\.(?:png|jpe?g|gif|webp|svg|ico|pdf|zip|gz|tar|7z|exe|dll|so|dylib|class|jar|pyc|woff2?|ttf|eot|mp[34]|mov|wav|ogg|avif|bin|db|sqlite)$/i;
 const SENSITIVE_NAMES = /(?:^|\/)(?:\.env(?:\.[^/]*)?|id_rsa|id_ed25519|credentials(?:\.[^/]*)?|secrets?(?:\.[^/]*)?|service[-_]?account(?:\.[^/]*)?|[^/]+\.(?:pem|key|p12|pfx))$/i;
+const SENSITIVE_CONTENT = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b|\b(?:api[_-]?key|client[_-]?secret|password|access[_-]?token)\s*[:=]\s*['"]?[^'"\s]{16,}/i;
+export const containsKnownSecret = content => SENSITIVE_CONTENT.test(content);
 
 function classification(path) {
   if (/(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|\.)|\.(?:test|spec)\./i.test(path)) return 'test';
@@ -77,8 +79,10 @@ export async function scanPublicRepository({ fullName, commitSha, fetchGithub = 
       const bytes = Buffer.from(data.content.replace(/\s/g, ''), 'base64');
       if (bytes.length !== entry.size || bytes.length > maxFileBytes || bytes.includes(0)) throw new Error('blob_size_or_binary');
       const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      totalBytes += bytes.length;
+      if (containsKnownSecret(content)) { files.push({ ...file, status: 'excluded', reason: 'sensitive_content' }); excludedCount++; continue; }
       files.push({ ...file, status: 'read', contentSha256: crypto.createHash('sha256').update(bytes).digest('hex'), content });
-      readCount++; totalBytes += bytes.length;
+      readCount++;
     } catch (error) {
       if (error.status === 403 || error.status === 429) rateLimited = true;
       files.push({ ...file, status: 'failed', reason: rateLimited ? 'github_rate_limit' : 'blob_unavailable_or_invalid' }); failedCount++;

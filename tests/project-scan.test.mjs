@@ -74,3 +74,17 @@ test('scanner caps persisted index entries and reports the omitted count', async
   assert.equal(result.unscannedCount, 1);
   assert.equal(result.coverageComplete, false);
 });
+
+test('scanner excludes known secret patterns inside otherwise allowed source files', async () => {
+  const secret = 'const api_key = "sk-' + 'q'.repeat(24) + '";';
+  const get = async url => {
+    if (url.endsWith(`/git/commits/${SHA}`)) return json({ tree: { sha: TREE } });
+    if (url.includes('/git/trees/')) return json({ truncated: false, tree: [{ path: 'src/config.ts', type: 'blob', sha: 'c'.repeat(40), size: Buffer.byteLength(secret) }] });
+    return json(blob(secret));
+  };
+  const result = await scanPublicRepository({ fullName: 'octocat/example', commitSha: SHA, fetchGithub: get });
+  assert.equal(result.files[0].status, 'excluded');
+  assert.equal(result.files[0].reason, 'sensitive_content');
+  assert.equal(JSON.stringify(result).includes('sk-' + 'q'.repeat(24)), false);
+  assert.equal(result.totalBytes, Buffer.byteLength(secret));
+});
