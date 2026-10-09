@@ -12,6 +12,8 @@
     "db:up": "docker compose up -d postgres",
     "db:migrate": "node scripts/db-migrate.mjs",
     "db:import": "node scripts/db-import-json.mjs",
+    "backup:create": "node scripts/backup-create.mjs",
+    "backup:verify": "node scripts/backup-verify.mjs",
     "build": "node scripts/check-changelog.mjs && tsc && vite build",
     "preview": "vite preview",
     "lint": "oxlint src/",
