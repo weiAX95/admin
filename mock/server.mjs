@@ -53,6 +53,7 @@ import { handleModelCallAudit, flushModelCallAudits } from './model-call-audit.m
 import { handleModelHealth, processModelHealthAlerts } from './model-health.mjs';
 import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
+import { handleProjectRepositories } from './project-repositories.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
@@ -303,6 +304,23 @@ function readBody(req) {
       try { resolve(JSON.parse(raw)); } catch (e) { reject(e); }
     });
     req.on("error", reject);
+  });
+}
+
+function readProjectBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = '', tooLarge = false;
+    req.on('data', chunk => {
+      if (tooLarge) return;
+      if (Buffer.byteLength(raw) + chunk.length > 16384) { tooLarge = true; return; }
+      raw += chunk;
+    });
+    req.on('end', () => {
+      if (tooLarge) return reject(Object.assign(new Error('项目请求体过大'), { status: 413 }));
+      try { resolve(raw ? JSON.parse(raw) : {}); }
+      catch { reject(Object.assign(new Error('请求内容必须是 JSON'), { status: 400 })); }
+    });
+    req.on('error', reject);
   });
 }
 
@@ -1619,6 +1637,20 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  if (new URL(req.url, 'http://localhost').pathname.startsWith('/api/project-repositories')) {
+    void (async () => {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      const me = await lookupSession(token);
+      if (!me) return send(res, 401, { error: '未登录或登录已过期' });
+      const pathname = new URL(req.url, 'http://localhost').pathname;
+      const response = await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) });
+      return send(res, response?.status || 404, response?.data || { error: '项目接口不存在' });
+    })().catch(error => {
+      if (!error.status) console.error('[projects] request failed:', error.message);
+      if (!res.headersSent) send(res, error.status || 500, { error: error.status ? error.message : '项目服务不可用' });
+    });
+    return;
+  }
   if (new URL(req.url, 'http://localhost').pathname.startsWith('/api/settings/backups')) {
     void handleBackupRequest(req,res,pool,token=>lookupSession(token),notifyLive).catch(error=>{
       console.error('[backups] request failed:',error.message);

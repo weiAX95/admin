@@ -34,6 +34,7 @@ import Settings from "./pages/Settings";
 import ModelCosts from "./pages/ModelCosts";
 import ModelCallAudit from "./pages/ModelCallAudit";
 import ModelHealth from "./pages/ModelHealth";
+import ProjectAnalysis from "./pages/ProjectAnalysis";
 
 export default function App() {
   return (
@@ -74,6 +75,7 @@ export default function App() {
                 <Route path="/model-costs" element={<ModelCosts />} />
                 <Route path="/model-call-audit" element={<ModelCallAudit />} />
                 <Route path="/model-health" element={<ModelHealth />} />
+                <Route path="/project-analysis" element={<ProjectAnalysis />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Route>
