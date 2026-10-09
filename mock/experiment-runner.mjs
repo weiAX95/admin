@@ -1,6 +1,7 @@
 import { performance } from 'node:perf_hooks';
 import { parseJudge, saveRunMetric } from './experiment-scoring.mjs';
 import { notifyUser } from './app-notifications.mjs';
+import { notifyModelCostAlerts } from './model-costs.mjs';
 import {completeWithProvider} from './provider-adapters.mjs';
 import {mediaCost,providerConfigured} from './model-capabilities.mjs';
 import {saveGeneratedPromptMedia} from './prompt-media.mjs';
@@ -36,6 +37,7 @@ export async function finalizeExperimentBatch(pool, batchId) {
     if (!current) { await client.query('COMMIT'); return null; }
     const batch = (await client.query(`UPDATE experiment_batches b SET status=CASE WHEN EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status IN ('queued','running')) THEN 'running' WHEN EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status='completed') AND EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status='failed') THEN 'partial' WHEN EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status='failed') THEN 'failed' ELSE 'completed' END,completed_at=CASE WHEN NOT EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status IN ('queued','running')) THEN COALESCE(completed_at,now()) ELSE NULL END WHERE b.id=$1 RETURNING id,experiment_id,owner_id,kind,status`, [batchId])).rows[0];
     if (['completed','partial','failed'].includes(batch.status)) {
+      await notifyModelCostAlerts(client);
       const title = (await client.query('SELECT title FROM experiments WHERE id=$1', [batch.experiment_id])).rows[0]?.title || '实验';
       await notifyUser(client, batch.owner_id, `experiment_${batch.status}`, batch.id, `${title}：${batch.status === 'completed' ? '执行完成' : batch.status === 'partial' ? '部分失败' : '执行失败'}`, `批次 ${batch.id} 已结束，状态：${batch.status}。`, `/experiments/${batch.experiment_id}`);
       if (batch.kind === 'regression' && ['completed','partial'].includes(batch.status)) {

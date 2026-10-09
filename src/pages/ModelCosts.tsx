@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Col, DatePicker, Empty, Row, Select, Space, Statistic, Table, Typography } from 'antd';
+import { Alert, Button, Card, Col, DatePicker, Empty, InputNumber, Progress, Row, Select, Space, Statistic, Table, Typography } from 'antd';
 import { Chart, registerables } from 'chart.js';
 import dayjs from 'dayjs';
-import { getModelCosts, type CostDimension, type ModelCostsReport } from '../api/model-costs';
+import { getModelCosts, getModelCostBudget, saveModelCostBudget, type CostDimension, type ModelCostBudget, type ModelCostsReport } from '../api/model-costs';
 import { downloadBlob } from '../utils/noteExport';
 
 Chart.register(...registerables);
@@ -17,7 +17,16 @@ export default function ModelCosts() {
   const [report, setReport] = useState<ModelCostsReport | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [budget, setBudget] = useState<ModelCostBudget | null>(null);
+  const [budgetInput, setBudgetInput] = useState(0);
+  const [savingBudget, setSavingBudget] = useState(false);
   const canvas = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    let active = true;
+    void getModelCostBudget().then(value => { if (active) { setBudget(value); setBudgetInput(Number(value.monthlyBudgetUsd)); } }).catch(cause => { if (active) setError(cause.message); });
+    const timer = window.setInterval(() => { if (!document.hidden) void getModelCostBudget().then(value => { if (active) setBudget(value); }).catch(() => undefined); }, 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, []);
   useEffect(() => {
     let live = true;
     setLoading(true);
@@ -36,7 +45,17 @@ export default function ModelCosts() {
     const rows = [['统计维度', '名称', '费用 USD', '计费部分数'], ...report.breakdown.map(item => [dimension, item.name, item.costUsd, item.runParts])];
     downloadBlob(new Blob([`\uFEFF${rows.map(row => row.map(csvCell).join(',')).join('\r\n')}\r\n`], { type: 'text/csv;charset=utf-8' }), `模型成本-${range[0]}-${range[1]}.csv`);
   };
+  const saveBudget = () => {
+    if (!budget) return;
+    setSavingBudget(true);
+    void saveModelCostBudget(budgetInput, budget.version).then(value => { setBudget(value); setError(''); }).catch(cause => setError(cause.message)).finally(() => setSavingBudget(false));
+  };
   return <Space direction="vertical" size="large" style={{ width: '100%' }}>
+    <Card title={`月度预算 · ${budget?.month || ''}`}>
+      <Space wrap align="center"><Typography.Text>预算 USD</Typography.Text><InputNumber aria-label="模型月预算（美元）" min={0} max={1000000000} precision={6} value={budgetInput} onChange={value => setBudgetInput(value ?? 0)} /><Button type="primary" loading={savingBudget} onClick={saveBudget}>保存预算</Button><Typography.Text>已使用 ${Number(budget?.spentUsd || 0).toFixed(6)}</Typography.Text></Space>
+      {budget?.percentage !== null && budget?.percentage !== undefined && <Progress style={{ marginTop: 16 }} percent={Math.min(100, Number(budget.percentage.toFixed(1)))} status={budget.percentage >= 100 ? 'exception' : 'active'} format={() => `${budget.percentage?.toFixed(1)}%`} />}
+      <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>预算为 0 时关闭预警；达到 80%、100%、120% 时通知管理员。日成本超过前七日均值三倍时另发异常通知。</Typography.Paragraph>
+    </Card>
     <Card title="成本中心" extra={<Button disabled={!report?.breakdown.length} onClick={exportCsv}>导出 CSV</Button>}>
       <Typography.Paragraph type="secondary">按 UTC 完成日统计已记账的主模型与 Judge 费用；历史价格取运行时快照。聊天端会话尚未经过本服务执行，不计入本报表。</Typography.Paragraph>
       <Space wrap size="middle" style={{ marginBottom: 20 }}>
