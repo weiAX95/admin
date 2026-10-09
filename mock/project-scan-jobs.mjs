@@ -20,7 +20,7 @@ async function saveResult(db, id, result) {
     await client.query('BEGIN');
     await client.query('DELETE FROM project_scan_files WHERE scan_id=$1', [id]);
     for (const file of result.files) {
-      await client.query('INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,reason,content_sha256) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id,file.path,file.gitSha,file.size,file.category,file.status,file.reason || null,file.contentSha256 || null]);
+      await client.query('INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,reason,content_sha256,content) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [id,file.path,file.gitSha,file.size,file.category,file.status,file.reason || null,file.contentSha256 || null,file.content ?? null]);
     }
     await client.query('UPDATE project_scans SET tree_sha=$2,status=$3,coverage_complete=$4,read_count=$5,attempted_count=$6,excluded_count=$7,failed_count=$8,unscanned_count=$9,unscanned_subtrees=$10,total_bytes=$11,error_code=NULL,finished_at=now() WHERE id=$1', [id,result.treeSha,result.coverageComplete ? 'completed' : 'partial',result.coverageComplete,result.readCount,result.attemptedCount,result.excludedCount,result.failedCount,result.unscannedCount,result.unscannedSubtrees,result.totalBytes]);
     await client.query('COMMIT');
@@ -48,10 +48,10 @@ export async function resumeProjectScans(db, scanRepository = scanPublicReposito
   return jobs.length;
 }
 
-export async function handleProjectScans({ pathname, method, client, me, scanRepository = scanPublicRepository }) {
-  const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/scans(?:\/([^/]+))?$/);
+export async function handleProjectScans({ pathname, method, client, me, url, scanRepository = scanPublicRepository }) {
+  const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/scans(?:\/([^/]+)(\/files)?)?$/);
   if (!match) return null;
-  const [, repositoryId, scanId] = match;
+  const [, repositoryId, scanId, fileRoute] = match;
   if (!UUID.test(repositoryId) || scanId && !UUID.test(scanId)) return fail(404,'项目或扫描不存在');
   const repository = (await client.query('SELECT * FROM project_repositories WHERE id=$1 AND owner_id=$2', [repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
@@ -59,7 +59,14 @@ export async function handleProjectScans({ pathname, method, client, me, scanRep
     const rows = (await client.query('SELECT * FROM project_scans WHERE repository_id=$1 ORDER BY created_at DESC LIMIT 20', [repositoryId])).rows;
     return { status: 200, data: { items: rows.map(view) } };
   }
-  if (method === 'GET' && scanId) {
+  if (method === 'GET' && scanId && fileRoute) {
+    const path = url?.searchParams.get('path');
+    if (!path || path.length > 1000) return fail(400,'文件路径无效');
+    const file = (await client.query("SELECT f.path,f.git_sha,f.content_sha256,f.content FROM project_scan_files f JOIN project_scans s ON s.id=f.scan_id WHERE s.id=$1 AND s.repository_id=$2 AND f.path=$3 AND f.status='read'", [scanId,repositoryId,path])).rows[0];
+    if (!file || file.content === null) return fail(404,'文件内容不存在');
+    return { status: 200, data: { path: file.path, gitSha: file.git_sha.trim(), contentSha256: file.content_sha256?.trim() || null, content: file.content } };
+  }
+  if (method === 'GET' && scanId && !fileRoute) {
     const scan = (await client.query('SELECT * FROM project_scans WHERE id=$1 AND repository_id=$2', [scanId,repositoryId])).rows[0];
     if (!scan) return fail(404,'扫描不存在');
     const files = (await client.query('SELECT * FROM project_scan_files WHERE scan_id=$1 ORDER BY path LIMIT 5000', [scanId])).rows;

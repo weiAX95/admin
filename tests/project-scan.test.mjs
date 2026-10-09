@@ -27,6 +27,7 @@ test('scanner pins one commit, expands truncated trees and excludes secrets befo
   assert.equal(result.treeSha, TREE);
   assert.equal(result.coverageComplete, true);
   assert.equal(result.files.find(file => file.path === 'src/app.ts').status, 'read');
+  assert.equal(result.files.find(file => file.path === 'src/app.ts').content, 'export const x = 1;');
   assert.equal(result.files.find(file => file.path === '.env').status, 'excluded');
   assert.equal(result.files.find(file => file.path === 'src/huge.ts').status, 'excluded');
   assert.equal(result.readCount, 1);

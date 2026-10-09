@@ -6,7 +6,7 @@ import { handleProjectScans, resumeProjectScans } from '../mock/project-scan-job
 
 const SHA = 'a'.repeat(40);
 const completedScan = () => ({ commitSha: SHA, treeSha: 'b'.repeat(40), files: [
-  { path: 'README.md', gitSha: 'c'.repeat(40), size: 10, category: 'documentation', status: 'read', contentSha256: 'd'.repeat(64) },
+  { path: 'README.md', gitSha: 'c'.repeat(40), size: 10, category: 'documentation', status: 'read', contentSha256: 'd'.repeat(64), content: 'study plan' },
   { path: '.env', gitSha: 'e'.repeat(40), size: 10, category: 'source', status: 'excluded', reason: 'sensitive_path' },
 ], readCount: 1, attemptedCount: 1, failedCount: 0, excludedCount: 1, unscannedCount: 0, unscannedSubtrees: 0, totalBytes: 10, coverageComplete: true });
 
@@ -43,6 +43,15 @@ test('scan job persists exact commit and per-file coverage, scoped to repository
   assert.equal(listing.data.items[0].coverageComplete, true);
   const detail = await handleProjectScans({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me });
   assert.deepEqual(detail.data.files.map(file => file.path), ['.env', 'README.md']);
+  assert.equal(JSON.stringify(detail.data).includes('study plan'), false);
+  const filePath = `${path}/${started.data.id}/files`;
+  const content = await handleProjectScans({ pathname: filePath, method: 'GET', client, me, url: new URL(`http://local${filePath}?path=README.md`) });
+  assert.equal(content.data.content, 'study plan');
+  const httpContent = await fetch(`${base}/project-repositories/${repoId}/scans/${started.data.id}/files?path=README.md`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(httpContent.status, 200);
+  assert.equal((await httpContent.json()).content, 'study plan');
+  assert.equal((await handleProjectScans({ pathname: filePath, method: 'GET', client, me: other, url: new URL(`http://local${filePath}?path=README.md`) })).status, 404);
+  assert.equal((await handleProjectScans({ pathname: filePath, method: 'GET', client, me, url: new URL(`http://local${filePath}?path=.env`) })).status, 404);
   assert.equal((await handleProjectScans({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me: other })).status, 404);
 });
 

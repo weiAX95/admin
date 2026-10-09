@@ -1649,7 +1649,7 @@ const server = http.createServer((req, res) => {
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       const pathname = new URL(req.url, 'http://localhost').pathname;
-      const response = await handleProjectScans({ pathname, method: req.method, client: pool, me })
+      const response = await handleProjectScans({ pathname, method: req.method, client: pool, me, url: new URL(req.url, 'http://localhost') })
         || await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) });
       return sendImmediate(res, response?.status || 404, response?.data || { error: '项目接口不存在' });
     })().catch(error => {

@@ -76,8 +76,8 @@ export async function scanPublicRepository({ fullName, commitSha, fetchGithub = 
       if (data?.encoding !== 'base64' || typeof data.content !== 'string') throw new Error('blob_format');
       const bytes = Buffer.from(data.content.replace(/\s/g, ''), 'base64');
       if (bytes.length !== entry.size || bytes.length > maxFileBytes || bytes.includes(0)) throw new Error('blob_size_or_binary');
-      new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      files.push({ ...file, status: 'read', contentSha256: crypto.createHash('sha256').update(bytes).digest('hex') });
+      const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+      files.push({ ...file, status: 'read', contentSha256: crypto.createHash('sha256').update(bytes).digest('hex'), content });
       readCount++; totalBytes += bytes.length;
     } catch (error) {
       if (error.status === 403 || error.status === 429) rateLimited = true;
