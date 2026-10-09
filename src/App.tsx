@@ -32,6 +32,7 @@ import Accounts from "./pages/Accounts";
 import Login from "./pages/Login";
 import Settings from "./pages/Settings";
 import ModelCosts from "./pages/ModelCosts";
+import ModelCallAudit from "./pages/ModelCallAudit";
 
 export default function App() {
   return (
@@ -70,6 +71,7 @@ export default function App() {
                 <Route path="/accounts" element={<Accounts />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/model-costs" element={<ModelCosts />} />
+                <Route path="/model-call-audit" element={<ModelCallAudit />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Route>

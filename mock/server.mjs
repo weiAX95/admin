@@ -49,6 +49,7 @@ import { handleRecycleBin } from './recycle-bin.mjs';
 import { handleModelQuotas } from './model-quotas.mjs';
 import { handleModelCosts, handleModelCostBudget } from './model-costs.mjs';
 import { handleModelRateLimits } from './model-rate-limits.mjs';
+import { handleModelCallAudit, flushModelCallAudits } from './model-call-audit.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -525,6 +526,8 @@ async function handleRequest(req, res) {
     if (costBudgetResponse) return send(res, costBudgetResponse.status, costBudgetResponse.data);
     const rateResponse = await handleModelRateLimits({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (rateResponse) return send(res, rateResponse.status, rateResponse.data);
+    const callAuditResponse = await handleModelCallAudit({ pathname, method, client: activeClient, me, url });
+    if (callAuditResponse) return send(res, callAuditResponse.status, callAuditResponse.data);
     if (pathname === '/api/settings/version' && method === 'GET') {
       void checkLatestRelease();
       return send(res, 200, versionInfo());
@@ -1649,6 +1652,7 @@ const server = http.createServer((req, res) => {
     send(res, 500, { error: "数据库操作失败" });
   });
 });
+for (const signal of ['SIGTERM','SIGINT']) process.on(signal, () => { void flushModelCallAudits().finally(() => pool.end().finally(() => process.exit(0))); });
 
 // WebSocket 仅发送失效通知；数据仍由带鉴权的 /api/stats 读取。
 const liveServer = new WebSocketServer({ noServer: true, maxPayload: 1024 });

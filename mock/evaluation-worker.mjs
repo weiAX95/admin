@@ -2,10 +2,11 @@ import { pool, assertSchemaCurrent } from './postgres-store.mjs';
 import { recoverExperimentJobs, runExperimentJobs } from './experiment-runner.mjs';
 import { processDueExperimentSchedules } from './experiment-schedules.mjs';
 import { processDueEvaluationSchedules } from './evaluation-schedules.mjs';
+import { flushModelCallAudits } from './model-call-audit.mjs';
 
 let stopping=false;
-process.on('SIGTERM',()=>{stopping=true;void pool.end().finally(()=>process.exit(0));});
-process.on('SIGINT',()=>{stopping=true;void pool.end().finally(()=>process.exit(0));});
+process.on('SIGTERM',()=>{stopping=true;void flushModelCallAudits().finally(()=>pool.end().finally(()=>process.exit(0)));});
+process.on('SIGINT',()=>{stopping=true;void flushModelCallAudits().finally(()=>pool.end().finally(()=>process.exit(0)));});
 try {
   await assertSchemaCurrent();
   await recoverExperimentJobs(pool);

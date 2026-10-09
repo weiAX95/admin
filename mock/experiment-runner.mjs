@@ -95,7 +95,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
     finally { client.release(); }
   }
   await Promise.all(claimed.map(async id => {
-    const row = (await pool.query('SELECT r.*,b.metric_version_id,c.reference_answer,c.expected_tools,m.rule_type,m.judge_prompt,s.source AS custom_script_source FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiment_metric_versions m ON m.id=b.metric_version_id LEFT JOIN evaluation_metric_scripts s ON s.id=m.custom_script_id LEFT JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.id=$1', [id])).rows[0];
+    const row = (await pool.query('SELECT r.*,b.metric_version_id,b.owner_id AS call_owner_id,b.kind AS batch_kind,c.reference_answer,c.expected_tools,m.rule_type,m.judge_prompt,s.source AS custom_script_source FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiment_metric_versions m ON m.id=b.metric_version_id LEFT JOIN evaluation_metric_scripts s ON s.id=m.custom_script_id LEFT JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.id=$1', [id])).rows[0];
     const started = performance.now();
     try {
       const parameters = { ...row.parameters };
@@ -103,8 +103,9 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
       delete parameters.output_kind;
       if (parameters.stop_sequences) { parameters.stop = parameters.stop_sequences; delete parameters.stop_sequences; }
       let output=row.output, promptTokens=row.prompt_tokens, completionTokens=row.completion_tokens,outputParts=row.output_parts || [],toolCalls=row.tool_calls || [],latencyMs=row.latency_ms;
+      const auditBase={runId:id,attempt:row.attempts,userId:row.call_owner_id,module:['dataset','regression'].includes(row.batch_kind)?'evaluations':'experiments'};
       if (output === null) {
-        const response=await completeWithProvider(pool,{provider:row.provider,connectionId:row.connection_id,model:row.api_model,messages:row.request_messages?.length?row.request_messages:[{role:'system',content:row.system_prompt},{role:'user',content:row.user_prompt}],parameters,toolSchema:row.tools_schema,outputKind});
+        const response=await completeWithProvider(pool,{provider:row.provider,connectionId:row.connection_id,model:row.api_model,messages:row.request_messages?.length?row.request_messages:[{role:'system',content:row.system_prompt},{role:'user',content:row.user_prompt}],parameters,toolSchema:row.tools_schema,outputKind,audit:{...auditBase,phase:'main',modelId:row.model_id}});
         ({output,promptTokens,completionTokens,toolCalls}=response);
         latencyMs=Math.round(performance.now()-started);
         const client=await pool.connect(),created=[];
@@ -130,7 +131,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
           if(outputKind!=='text'&&!media.length) throw new Error('媒体输出缺少可评分附件');
           const rubric = row.case_id ? '\n评测运行请返回 JSON：{"dimensions":{"accuracy":0-10,"completeness":0-10,"conciseness":0-10,"safety":0-10},"reason":"评分理由"}。四维均须评分；无法评定时说明原因。' : '';
           const judgeMessages=[{role:'system',content:row.judge_prompt+rubric},{role:'user',parts:[{type:'text',text:JSON.stringify({question:row.user_prompt,referenceAnswer:row.reference_answer,answer:output || `请评价所附${outputKind}结果`})},...media.map(part=>({type:part.type,assetId:part.assetId}))]}];
-          const judge = await completeWithProvider(pool,{provider:row.judge_provider,connectionId:row.judge_connection_id,model:row.judge_api_model,messages:judgeMessages,parameters:{temperature:0,max_tokens:300}});
+          const judge = await completeWithProvider(pool,{provider:row.judge_provider,connectionId:row.judge_connection_id,model:row.judge_api_model,messages:judgeMessages,parameters:{temperature:0,max_tokens:300},audit:{...auditBase,phase:'judge',modelId:row.judge_model_id}});
           const parsed = parseJudge(judge.output);
           const judgeMedia={imageCount:media.filter(part=>part.type==='image').length,audioSeconds:media.filter(part=>part.type==='audio').reduce((sum,part)=>sum+Number(part.durationSeconds || 0),0),videoSeconds:0};
           const judgeCost = (judge.promptTokens * Number(row.judge_input_price) + judge.completionTokens * Number(row.judge_output_price)) / 1_000_000 + mediaCost(judgeMedia,row.judge_media_price_snapshot || {});

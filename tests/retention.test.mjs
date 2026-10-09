@@ -31,9 +31,11 @@ test('retention policy validates permissions and daily cleanup preserves reviewe
   await client.query("INSERT INTO notes(id,title,content,source_session_id,created_at,updated_at) VALUES('source-note','摘录','保留','old-session','2029-12-31T00:00:00Z','2029-12-31T00:00:00Z')");
   await client.query("INSERT INTO evaluation_candidates(id,source_type,source_annotation_id,source_entity_id,rating,input_payload,expected_payload,status) VALUES('pending-candidate','session','annotation-1','old-session',4,'{}','{}','pending'),('staged-candidate','session','annotation-2','old-session',4,'{}','{}','staged')");
   await client.query("INSERT INTO security_audit_logs(actor_id,action,target_type,created_at) VALUES('admin','old','test','2020-01-01'),('admin','new','test','2029-12-31')");
+  await client.query("INSERT INTO model_call_audit(request_id,run_id,phase,attempt,user_id,model_id,api_model,module,provider,prompt_preview,latency_ms,status_code,succeeded,created_at) VALUES('00000000-0000-0000-0000-000000000001','old-run','main',1,'admin','old-model','old-model','experiments','legacy','[已脱敏]',20,200,true,'2020-01-01'),('00000000-0000-0000-0000-000000000002','new-run','main',1,'admin','new-model','new-model','experiments','legacy','[已脱敏]',20,200,true,'2029-12-31')");
   const now = new Date('2030-01-01T20:00:00Z');
   const result = await runRetentionCleanup(worker, now);
-  assert.deepEqual({ audit: result.auditDeleted, sessions: result.sessionsDeleted, candidates: result.candidatesDeleted }, { audit: 1, sessions: 1, candidates: 1 });
+  assert.deepEqual({ audit: result.auditDeleted, sessions: result.sessionsDeleted, candidates: result.candidatesDeleted }, { audit: 2, sessions: 1, candidates: 1 });
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM model_call_audit')).rows[0].n, 1);
   assert.equal(await runRetentionCleanup(worker, now), null);
   assert.deepEqual((await client.query('SELECT id FROM sessions')).rows.map(row => row.id), ['new-session']);
   assert.equal((await client.query('SELECT source_session_id FROM notes WHERE id=$1', ['source-note'])).rows[0].source_session_id, 'old-session');

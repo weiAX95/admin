@@ -3,6 +3,9 @@ import {createReadStream} from 'node:fs';
 import {setTimeout as pause} from 'node:timers/promises';
 import {promptMediaPath} from './prompt-media.mjs';
 import {resolveModelConnection} from './model-connections.mjs';
+import crypto from 'node:crypto';
+import {performance} from 'node:perf_hooks';
+import {enqueueModelCallAudit} from './model-call-audit.mjs';
 
 const trim=url=>url.replace(/\/$/,'');
 
@@ -120,7 +123,7 @@ function parsed(provider,result,outputKind='text') {
   return {output,toolCalls,outputParts,promptTokens:result.usageMetadata?.promptTokenCount,completionTokens:result.usageMetadata?.candidatesTokenCount};
 }
 
-export async function completeWithProvider(client,{provider='legacy',connectionId=null,model,messages,parameters={},toolSchema=null,outputKind='text',timeoutMs=120000}) {
+export async function completeWithProvider(client,{provider='legacy',connectionId=null,model,messages,parameters={},toolSchema=null,outputKind='text',timeoutMs=120000,audit=null}) {
   const credentials=await resolveModelConnection(client,provider,connectionId);
   const {key,baseUrl,headers:customHeaders}=credentials;
   const media=await resolved(messages,client,provider,key,baseUrl,customHeaders);
@@ -128,12 +131,20 @@ export async function completeWithProvider(client,{provider='legacy',connectionI
   const request=build(provider,model,media,parameters,functionSchema(toolSchema),outputKind,trim(baseUrl));
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),timeoutMs);
+  const started=performance.now(),requestId=crypto.randomUUID();
+  let statusCode=0,succeeded=false,promptTokens=null,completionTokens=null,errorCode=null;
   try {
     const headers={...customHeaders,'Content-Type':'application/json',...(provider==='gemini'?{'x-goog-api-key':key}:{Authorization:`Bearer ${key}`})};
     const response=await fetch(request.url,{method:'POST',redirect:'error',headers,body:JSON.stringify(request.body),signal:controller.signal});
+    statusCode=response.status;
     if(!response.ok) throw new Error(`${provider} HTTP ${response.status}`);
     const value=parsed(provider,await response.json(),outputKind);
     if(!Number.isInteger(value.promptTokens)||!Number.isInteger(value.completionTokens)) throw new Error('模型响应缺少 token 用量');
+    promptTokens=value.promptTokens;completionTokens=value.completionTokens;succeeded=true;
     return value;
-  } finally {clearTimeout(timeout);}
+  } catch(error) { errorCode=statusCode>=400?`HTTP_${statusCode}`:statusCode?'INVALID_RESPONSE':error?.name==='AbortError'?'TIMEOUT':'NETWORK_ERROR'; throw error; }
+  finally {
+    clearTimeout(timeout);
+    if(audit) enqueueModelCallAudit(client,{...audit,requestId,provider,apiModel:model,messages,promptTokens,completionTokens,latencyMs:Math.max(0,Math.round(performance.now()-started)),statusCode,succeeded,errorCode});
+  }
 }

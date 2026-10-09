@@ -41,6 +41,7 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
     if (existing.rowCount) { await client.query('COMMIT'); return null; }
     await client.query('INSERT INTO retention_cleanup_runs(local_date) VALUES($1)', [clock.date]);
     const audit = await client.query('DELETE FROM security_audit_logs WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
+    const modelAudit = await client.query('DELETE FROM model_call_audit WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
     const oldSessions = (await client.query('SELECT id FROM sessions WHERE created_at::timestamptz < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.session_days])).rows.map(row => row.id);
     let candidates = 0, sessions = 0;
     if (oldSessions.length) {
@@ -64,9 +65,9 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
         }
       }
     }
-    await client.query('UPDATE retention_cleanup_runs SET completed_at=now(),audit_deleted=$2,sessions_deleted=$3,candidates_deleted=$4,tasks_deleted=$5,notes_deleted=$6,experiments_deleted=$7,prompts_deleted=$8,purge_failures=$9 WHERE local_date=$1', [clock.date,audit.rowCount,sessions,candidates,purged.tasks,purged.notes,purged.experiments,purged.prompt_library,JSON.stringify(failures)]);
+    await client.query('UPDATE retention_cleanup_runs SET completed_at=now(),audit_deleted=$2,sessions_deleted=$3,candidates_deleted=$4,tasks_deleted=$5,notes_deleted=$6,experiments_deleted=$7,prompts_deleted=$8,purge_failures=$9 WHERE local_date=$1', [clock.date,audit.rowCount+modelAudit.rowCount,sessions,candidates,purged.tasks,purged.notes,purged.experiments,purged.prompt_library,JSON.stringify(failures)]);
     await client.query('COMMIT');
-    return { localDate: clock.date, auditDeleted: audit.rowCount, sessionsDeleted: sessions, candidatesDeleted: candidates, purged, failures };
+    return { localDate: clock.date, auditDeleted: audit.rowCount+modelAudit.rowCount, sessionsDeleted: sessions, candidatesDeleted: candidates, purged, failures };
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }

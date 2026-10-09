@@ -630,13 +630,15 @@
   - [x] 接近限流阈值时（>90%）发出 Info 级别站内告警
   - [x] AC：限流触发后超额批次被正确拒绝且不落库
 - [ ] **9.5 审计日志**
+  - [x] 实验与评测的主模型／Judge 实际请求异步记录独立审计表，保存请求 ID、账号、模型、模块、脱敏提示词预览、token、延迟、HTTP 状态及失败代码；管理员支持多条件查询，沿用 12.3 审计保留天数清理
+  - [ ] 聊天端会话模型请求不经本服务，待聊天端上报可信调用事实后接入；异步写入在数据库持续不可用时可能丢失，<1ms 入队延迟尚未实测
   - [ ] 每条模型调用记录：
-    - [ ] timestamp、userId、model、module（sessions/experiments/evaluations）
-    - [ ] prompt（脱敏：截断前 200 字 + PII masking）
-    - [ ] tokens（prompt + completion）、latency（ms）、statusCode
-    - [ ] requestId（用于链路追踪）
-  - [ ] 审计日志查询页面：时间范围 + 用户 + 模型 + 模块多维筛选
-  - [ ] 保留期：默认 90 天（可配置），过期自动清理
+    - [x] timestamp、userId、model、module（experiments/evaluations；sessions 待聊天端上报）
+    - [x] prompt（已知 PII 模式脱敏后截断前 200 字）
+    - [x] tokens（prompt + completion）、latency（ms）、statusCode
+    - [x] requestId（用于链路追踪）
+  - [x] 审计日志查询页面：时间范围 + 用户 + 模型 + 模块多维筛选
+  - [x] 保留期：默认 90 天（可配置），过期自动清理
   - [ ] AC：日志写入不影响请求延迟（< 1ms 异步）
 - [ ] **9.6 安全策略**
   - [ ] 输入过滤（pre-LLM）：PII 检测、越狱检测（正则 + 关键词）、自定义敏感词列表
