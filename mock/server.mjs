@@ -50,6 +50,7 @@ import { handleModelQuotas } from './model-quotas.mjs';
 import { handleModelCosts, handleModelCostBudget } from './model-costs.mjs';
 import { handleModelRateLimits } from './model-rate-limits.mjs';
 import { handleModelCallAudit, flushModelCallAudits } from './model-call-audit.mjs';
+import { handleModelHealth, processModelHealthAlerts } from './model-health.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
@@ -529,6 +530,8 @@ async function handleRequest(req, res) {
     if (rateResponse) return send(res, rateResponse.status, rateResponse.data);
     const callAuditResponse = await handleModelCallAudit({ pathname, method, client: activeClient, me, url });
     if (callAuditResponse) return send(res, callAuditResponse.status, callAuditResponse.data);
+    const modelHealthResponse = await handleModelHealth({ pathname, method, client: activeClient, me });
+    if (modelHealthResponse) return send(res, modelHealthResponse.status, modelHealthResponse.data);
     if (pathname === '/api/settings/version' && method === 'GET') {
       void checkLatestRelease();
       return send(res, 200, versionInfo());
@@ -1721,6 +1724,9 @@ try {
     const cleanupExpired = () => { void runRetentionCleanup(pool).catch(error => console.error('[retention] cleanup failed:', error)); };
     cleanupExpired();
     setInterval(cleanupExpired, 60_000).unref();
+    const checkModelHealth = () => { void processModelHealthAlerts(pool).catch(error => console.error('[model-health] alert check failed:', error)); };
+    checkModelHealth();
+    setInterval(checkModelHealth, 5000).unref();
     const runReviewJobs = async () => {
       try {
         const { value } = await withData(() => createDueReviewNotifications(activeClient));
