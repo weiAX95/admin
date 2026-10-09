@@ -1,0 +1,41 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import pg from 'pg';
+import { createPgTestServer } from './pg-helper.mjs';
+import { createEncryptedBackup } from '../mock/backup-archive.mjs';
+import { restoreEncryptedBackup } from '../mock/backup-restore.mjs';
+
+test('verified archive restores data and attachments only into empty isolated targets', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'admin-restore-test-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const { url: sourceUrl } = await createPgTestServer(t);
+  const adminUrl = new URL(sourceUrl); adminUrl.pathname = '/postgres';
+  const admin = new pg.Client({ connectionString: adminUrl.toString() });
+  await admin.connect();
+  const dbName = `admin_restore_${crypto.randomUUID().replaceAll('-', '')}`;
+  await admin.query(`CREATE DATABASE ${dbName}`);
+  t.after(async () => { await admin.query(`DROP DATABASE ${dbName} WITH (FORCE)`); await admin.end(); });
+  const targetUrl = new URL(sourceUrl); targetUrl.pathname = `/${dbName}`;
+  const assets = path.join(root, 'source-assets'); await fs.mkdir(assets);
+  await fs.writeFile(path.join(assets, 'image.png'), Buffer.from([1, 2, 3]));
+  const archive = path.join(root, 'backup.agbackup');
+  const key = 'ab'.repeat(32);
+  await createEncryptedBackup({ outputPath: archive, keyHex: key, assetDirs: [{ dir: assets, prefix: 'assets' }], dumpDatabase: async target => {
+    const { dumpPostgres } = await import('../mock/backup-archive.mjs');
+    await dumpPostgres(target, sourceUrl);
+  } });
+  const targetAssets = path.join(root, 'restored-assets');
+  await assert.rejects(restoreEncryptedBackup({ filePath: archive, keyHex: 'cd'.repeat(32), targetDatabaseUrl: targetUrl.toString(), assetDir: targetAssets }));
+  await assert.rejects(restoreEncryptedBackup({ filePath: archive, keyHex: key, targetDatabaseUrl: sourceUrl, sourceDatabaseUrl: sourceUrl, assetDir: targetAssets }), /源数据库/);
+  const result = await restoreEncryptedBackup({ filePath: archive, keyHex: key, targetDatabaseUrl: targetUrl.toString(), assetDir: targetAssets });
+  assert.equal(result.fileCount, 2);
+  assert.deepEqual(await fs.readFile(path.join(targetAssets, 'image.png')), Buffer.from([1, 2, 3]));
+  const client = new pg.Client({ connectionString: targetUrl.toString() }); await client.connect();
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM tasks')).rows[0].n, 2);
+  await client.end();
+  await assert.rejects(restoreEncryptedBackup({ filePath: archive, keyHex: key, targetDatabaseUrl: targetUrl.toString(), assetDir: path.join(root, 'again') }), /空数据库/);
+});

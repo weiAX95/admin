@@ -140,7 +140,7 @@ async function verifyZip(zipPath) {
   });
 }
 
-export async function verifyEncryptedBackup({ filePath, keyHex }) {
+async function withVerifiedArchive({ filePath, keyHex }, work) {
   const key = backupKey(keyHex);
   const temporary = await fsp.mkdtemp(path.join(os.tmpdir(), 'admin-backup-verify-'));
   try {
@@ -158,6 +158,37 @@ export async function verifyEncryptedBackup({ filePath, keyHex }) {
     decipher.setAuthTag(tag);
     const zipPath = path.join(temporary, 'archive.zip');
     await pipeline(fs.createReadStream(filePath, { start: header.length, end: stat.size - TAG_BYTES - 1 }), decipher, fs.createWriteStream(zipPath, { mode: 0o600 }));
-    return await verifyZip(zipPath);
+    const manifest = await verifyZip(zipPath);
+    return await work(zipPath, manifest);
   } finally { await fsp.rm(temporary, { recursive: true, force: true }); }
+}
+
+export async function verifyEncryptedBackup(options) {
+  return withVerifiedArchive(options, async (_zipPath, manifest) => manifest);
+}
+
+export async function extractEncryptedBackup({ filePath, keyHex, directory }) {
+  return withVerifiedArchive({ filePath, keyHex }, async (zipPath, manifest) => {
+    for (const file of manifest.files) {
+      if (file.path !== 'database.dump' && !file.path.startsWith('assets/') && !file.path.startsWith('prompt-media/')) throw new Error('备份包含不支持的文件路径');
+    }
+    await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    const zip = await new Promise((resolve, reject) => yauzl.open(zipPath, { lazyEntries: true }, (error, value) => error ? reject(error) : resolve(value)));
+    await new Promise((resolve, reject) => {
+      zip.on('error', reject);
+      zip.on('entry', entry => {
+        if (entry.fileName === 'manifest.json') { zip.readEntry(); return; }
+        const target = path.join(directory, ...entry.fileName.split('/'));
+        fsp.mkdir(path.dirname(target), { recursive: true, mode: 0o700 }).then(() => {
+          zip.openReadStream(entry, (error, stream) => {
+            if (error) { reject(error); return; }
+            pipeline(stream, fs.createWriteStream(target, { flags: 'wx', mode: 0o600 })).then(() => zip.readEntry(), reject);
+          });
+        }, reject);
+      });
+      zip.on('end', resolve);
+      zip.readEntry();
+    });
+    return manifest;
+  });
 }

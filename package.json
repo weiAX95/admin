@@ -14,6 +14,7 @@
     "db:import": "node scripts/db-import-json.mjs",
     "backup:create": "node scripts/backup-create.mjs",
     "backup:verify": "node scripts/backup-verify.mjs",
+    "backup:restore:isolated": "node scripts/backup-restore-isolated.mjs",
     "build": "node scripts/check-changelog.mjs && tsc && vite build",
     "preview": "vite preview",
     "lint": "oxlint src/",
