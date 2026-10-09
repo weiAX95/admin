@@ -23,7 +23,7 @@ test('provider call records one asynchronous sanitized audit for success and HTT
   process.env.MODEL_API_KEY = 'test-key';
   t.after(() => { if (previous.base === undefined) delete process.env.MODEL_API_BASE_URL; else process.env.MODEL_API_BASE_URL = previous.base; if (previous.key === undefined) delete process.env.MODEL_API_KEY; else process.env.MODEL_API_KEY = previous.key; });
   const recorded = [];
-  const client = { query: async (sql, params) => { if (sql.includes('FROM model_connections')) return { rows: [] }; if (sql.includes('INSERT INTO model_call_audit')) { recorded.push(params); return { rowCount: 1 }; } throw new Error('unexpected query'); } };
+  const client = { query: async (sql, params) => { if (sql.includes('FROM model_connections') || sql.includes('FROM model_security_policies')) return { rows: [] }; if (sql.includes('INSERT INTO model_call_audit')) { recorded.push(params); return { rowCount: 1 }; } throw new Error('unexpected query'); } };
   const options = { provider: 'legacy', model: 'audit-test', messages: [{ role: 'user', content: '请联系 13812345678' }], audit: { runId: 'run-1', phase: 'main', attempt: 1, userId: 'member', modelId: 'model-1', module: 'experiments' } };
   const value = await completeWithProvider(client, options);
   assert.equal(value.promptTokens, 9);

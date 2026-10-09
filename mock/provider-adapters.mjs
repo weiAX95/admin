@@ -6,6 +6,7 @@ import {resolveModelConnection} from './model-connections.mjs';
 import crypto from 'node:crypto';
 import {performance} from 'node:perf_hooks';
 import {enqueueModelCallAudit} from './model-call-audit.mjs';
+import { getModelSecurityPolicy, recordModelSecurityEvent, scanModelText } from './model-security.mjs';
 
 const trim=url=>url.replace(/\/$/,'');
 
@@ -124,6 +125,17 @@ function parsed(provider,result,outputKind='text') {
 }
 
 export async function completeWithProvider(client,{provider='legacy',connectionId=null,model,messages,parameters={},toolSchema=null,outputKind='text',timeoutMs=120000,audit=null}) {
+  const policy = audit?.modelId ? await getModelSecurityPolicy(client,audit.modelId) : null;
+  if (policy) {
+    const inputText = messages.flatMap(message => [message.content,...(message.parts || []).filter(part => part.type === 'text').map(part => part.text)]).filter(value => typeof value === 'string').join('\n');
+    const violation = scanModelText(inputText,policy,'input');
+    if (violation) {
+      await recordModelSecurityEvent(client,audit,'input',violation);
+      const error = new Error('模型输入被安全策略阻断');
+      error.code = 'MODEL_POLICY_BLOCKED';
+      throw error;
+    }
+  }
   const credentials=await resolveModelConnection(client,provider,connectionId);
   const {key,baseUrl,headers:customHeaders}=credentials;
   const media=await resolved(messages,client,provider,key,baseUrl,customHeaders);
@@ -140,6 +152,13 @@ export async function completeWithProvider(client,{provider='legacy',connectionI
     if(!response.ok) throw new Error(`${provider} HTTP ${response.status}`);
     const value=parsed(provider,await response.json(),outputKind);
     if(!Number.isInteger(value.promptTokens)||!Number.isInteger(value.completionTokens)) throw new Error('模型响应缺少 token 用量');
+    const outputViolation = policy && scanModelText(value.output || '',policy,'output');
+    if (outputViolation) {
+      await recordModelSecurityEvent(client,audit,'output',outputViolation);
+      value.output = '模型输出触发安全策略，内容已替换。';
+      value.outputParts = [];
+      value.toolCalls = [];
+    }
     promptTokens=value.promptTokens;completionTokens=value.completionTokens;succeeded=true;
     return value;
   } catch(error) { errorCode=statusCode>=400?`HTTP_${statusCode}`:statusCode?'INVALID_RESPONSE':error?.name==='AbortError'?'TIMEOUT':'NETWORK_ERROR'; throw error; }

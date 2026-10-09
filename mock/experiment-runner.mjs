@@ -142,7 +142,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
       } else { await saveRunMetric(pool,id,row.metric_version_id,scored.rule,null,outputKind==='text'?'未配置 LLM Judge':'媒体输出暂无兼容 Judge，保留人工评分',scored.details); await pool.query("UPDATE experiment_runs SET status='completed',completed_at=now() WHERE id=$1", [id]); }
     } catch (error) {
       await pool.query("UPDATE experiment_runs SET status='failed',error=$2,latency_ms=$3,completed_at=now() WHERE id=$1", [id, String(error.message || error).slice(0, 500), Math.round(performance.now() - started)]);
-      await pool.query("UPDATE experiment_runs SET status='queued',started_at=NULL,completed_at=NULL WHERE id=$1 AND attempts <= GREATEST(retry_limit,COALESCE((SELECT s.retry_limit FROM experiment_schedule_occurrences o JOIN experiment_schedules s ON s.id=o.schedule_id WHERE o.batch_id=experiment_runs.batch_id),0))", [id]);
+      if (error.code !== 'MODEL_POLICY_BLOCKED') await pool.query("UPDATE experiment_runs SET status='queued',started_at=NULL,completed_at=NULL WHERE id=$1 AND attempts <= GREATEST(retry_limit,COALESCE((SELECT s.retry_limit FROM experiment_schedule_occurrences o JOIN experiment_schedules s ON s.id=o.schedule_id WHERE o.batch_id=experiment_runs.batch_id),0))", [id]);
     }
     await finalizeExperimentBatch(pool,row.batch_id);
     onChanged();

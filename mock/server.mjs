@@ -51,6 +51,7 @@ import { handleModelCosts, handleModelCostBudget } from './model-costs.mjs';
 import { handleModelRateLimits } from './model-rate-limits.mjs';
 import { handleModelCallAudit, flushModelCallAudits } from './model-call-audit.mjs';
 import { handleModelHealth, processModelHealthAlerts } from './model-health.mjs';
+import { handleModelSecurity } from './model-security.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
@@ -532,6 +533,8 @@ async function handleRequest(req, res) {
     if (callAuditResponse) return send(res, callAuditResponse.status, callAuditResponse.data);
     const modelHealthResponse = await handleModelHealth({ pathname, method, client: activeClient, me });
     if (modelHealthResponse) return send(res, modelHealthResponse.status, modelHealthResponse.data);
+    const modelSecurityResponse = await handleModelSecurity({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (modelSecurityResponse) return send(res, modelSecurityResponse.status, modelSecurityResponse.data);
     if (pathname === '/api/settings/version' && method === 'GET') {
       void checkLatestRelease();
       return send(res, 200, versionInfo());
