@@ -6,7 +6,7 @@
 
 Agent 学习管理端，使用 React、TypeScript、Vite 与 Ant Design，提供学习任务、笔记、实验、会话记录和统计看板。开发 API 使用 PostgreSQL 持久化。
 
-管理员可在 `/model-costs` 查看模型成本报表。`GET /api/model-costs` 支持 `start`、`end`（UTC 日期，最多 367 天）、`dimension=model|user|module` 以及 `modelId`、`userId`、`module` 筛选。主模型与 Judge 按运行时价格快照分别归因；费用写入独立账本，删除运行后仍可查询已记账金额。`GET/PUT /api/model-cost-budget` 读取或带版本号修改月预算，0 表示关闭预算预警。运行结束后检查 80%／100%／120% 阈值，以及今日成本是否超过前七日均值三倍；站内通知去重。PDF 导出和极小金额的端到端误差验收列在 `TODOLIST.md` 的 9.3 后续项。
+管理员可在 `/model-costs` 查看模型成本报表，并下载 CSV 或含趋势图及分页明细的中文 PDF。`GET /api/model-costs` 支持 `start`、`end`（UTC 日期，最多 367 天）、`dimension=model|user|module` 以及 `modelId`、`userId`、`module` 筛选。主模型与 Judge 按运行时价格快照分别归因；费用写入独立账本，删除运行后仍可查询已记账金额。`GET/PUT /api/model-cost-budget` 读取或带版本号修改月预算，0 表示关闭预算预警。运行结束后检查 80%／100%／120% 阈值，以及今日成本是否超过前七日均值三倍；站内通知去重。极小金额的端到端误差验收列在 `TODOLIST.md` 的 9.3 后续项。
 
 ## 本地运行
 

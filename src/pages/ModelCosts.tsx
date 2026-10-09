@@ -20,6 +20,7 @@ export default function ModelCosts() {
   const [budget, setBudget] = useState<ModelCostBudget | null>(null);
   const [budgetInput, setBudgetInput] = useState(0);
   const [savingBudget, setSavingBudget] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     let active = true;
@@ -50,13 +51,18 @@ export default function ModelCosts() {
     setSavingBudget(true);
     void saveModelCostBudget(budgetInput, budget.version).then(value => { setBudget(value); setError(''); }).catch(cause => setError(cause.message)).finally(() => setSavingBudget(false));
   };
+  const exportPdf = () => {
+    if (!report) return;
+    setExportingPdf(true);
+    void import('../utils/modelCostPdf').then(module => module.makeModelCostPdf(report)).then(blob => { downloadBlob(blob, `模型成本-${range[0]}-${range[1]}.pdf`); setError(''); }).catch(cause => setError(cause.message)).finally(() => setExportingPdf(false));
+  };
   return <Space direction="vertical" size="large" style={{ width: '100%' }}>
     <Card title={`月度预算 · ${budget?.month || ''}`}>
       <Space wrap align="center"><Typography.Text>预算 USD</Typography.Text><InputNumber aria-label="模型月预算（美元）" min={0} max={1000000000} precision={6} value={budgetInput} onChange={value => setBudgetInput(value ?? 0)} /><Button type="primary" loading={savingBudget} onClick={saveBudget}>保存预算</Button><Typography.Text>已使用 ${Number(budget?.spentUsd || 0).toFixed(6)}</Typography.Text></Space>
       {budget?.percentage !== null && budget?.percentage !== undefined && <Progress style={{ marginTop: 16 }} percent={Math.min(100, Number(budget.percentage.toFixed(1)))} status={budget.percentage >= 100 ? 'exception' : 'active'} format={() => `${budget.percentage?.toFixed(1)}%`} />}
       <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>预算为 0 时关闭预警；达到 80%、100%、120% 时通知管理员。日成本超过前七日均值三倍时另发异常通知。</Typography.Paragraph>
     </Card>
-    <Card title="成本中心" extra={<Button disabled={!report?.breakdown.length} onClick={exportCsv}>导出 CSV</Button>}>
+    <Card title="成本中心" extra={<Space><Button disabled={!report?.breakdown.length} onClick={exportCsv}>导出 CSV</Button><Button disabled={!report} loading={exportingPdf} onClick={exportPdf}>导出 PDF</Button></Space>}>
       <Typography.Paragraph type="secondary">按 UTC 完成日统计已记账的主模型与 Judge 费用；历史价格取运行时快照。聊天端会话尚未经过本服务执行，不计入本报表。</Typography.Paragraph>
       <Space wrap size="middle" style={{ marginBottom: 20 }}>
         <DatePicker.RangePicker value={[dayjs(range[0]), dayjs(range[1])]} onChange={dates => { if (dates?.[0] && dates[1]) setRange([dates[0].format('YYYY-MM-DD'), dates[1].format('YYYY-MM-DD')]); }} />
