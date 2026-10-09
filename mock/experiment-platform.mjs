@@ -6,6 +6,7 @@ import {mediaCost,preflightMedia,preflightOutput,validateModelCapabilities} from
 import {modelConnectionAvailable} from './model-connections.mjs';
 import {modelUsable,supportedProvider,validateRegistry} from './model-governance.mjs';
 import {checkTokenReservations,reserveRunTokens} from './model-quotas.mjs';
+import {checkModelRate,reserveModelRate} from './model-rate-limits.mjs';
 import { caseInputFingerprint } from './evaluation-datasets.mjs';
 import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 
@@ -156,9 +157,9 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
     const mediaRun=Boolean(usage.imageCount||usage.audioSeconds||usage.videoSeconds||(variant.parameters.output_kind||'text')!=='text');
     const times=retryLimit+1;
     const model=models.get(variant.modelId);
-    const amounts=new Map([[variant.modelId,{tokens:(mediaRun&&model.context_window?model.context_window:inputAllowance+maxOutput)*times,needsContext:mediaRun&&!model.context_window}]]);
+    const amounts=new Map([[variant.modelId,{tokens:(mediaRun&&model.context_window?model.context_window:inputAllowance+maxOutput)*times,needsContext:mediaRun&&!model.context_window,calls:times}]]);
     const selectedJudge=judgeFor(variant.parameters.output_kind||'text');
-    if(selectedJudge){const judgeMedia=mediaRun;const tokens=(judgeMedia&&selectedJudge.context_window?selectedJudge.context_window:inputAllowance+maxOutput*4+1300)*times;const prior=amounts.get(selectedJudge.id);amounts.set(selectedJudge.id,{tokens:(prior?.tokens||0)+tokens,needsContext:Boolean(prior?.needsContext||judgeMedia&&!selectedJudge.context_window)});}
+    if(selectedJudge){const judgeMedia=mediaRun;const tokens=(judgeMedia&&selectedJudge.context_window?selectedJudge.context_window:inputAllowance+maxOutput*4+1300)*times;const prior=amounts.get(selectedJudge.id);amounts.set(selectedJudge.id,{tokens:(prior?.tokens||0)+tokens,needsContext:Boolean(prior?.needsContext||judgeMedia&&!selectedJudge.context_window),calls:(prior?.calls||0)+times});}
     const key=`${variant.id}:${index}`;
     const entries=[...amounts].map(([modelId,value])=>({modelId,...value}));
     quotaByRun.set(key,entries);
@@ -166,6 +167,8 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   }
   const quotaCheck=await checkTokenReservations(client,me,quotaRequests,{dryRun:Boolean(body.dryRun)});
   if(quotaCheck.status!==200)return quotaCheck;
+  const rateCheck=await checkModelRate(client,quotaRequests);
+  if(rateCheck.status!==200)return rateCheck;
   if (body.dryRun) return ok({ runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate, remainingBudgetUsd: settings.daily_budget_usd - spent });
   const batchId = uuid();
   const runReservations=[];
@@ -182,6 +185,7 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
     for (const versionId of usedVersions) await client.query('INSERT INTO prompt_run_uses(run_id,version_id,direct) VALUES($1,$2,$3)',[runId,versionId,versionId===definition.promptVersionId]);
   }
   await reserveRunTokens(client,me,runReservations,quotaCheck);
+  await reserveModelRate(client,runReservations,rateCheck);
   return ok({ batchId, status: 'queued', runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate }, 202);
 }
 

@@ -48,6 +48,7 @@ import { handleRetentionSettings, runRetentionCleanup } from './retention.mjs';
 import { handleRecycleBin } from './recycle-bin.mjs';
 import { handleModelQuotas } from './model-quotas.mjs';
 import { handleModelCosts, handleModelCostBudget } from './model-costs.mjs';
+import { handleModelRateLimits } from './model-rate-limits.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -522,6 +523,8 @@ async function handleRequest(req, res) {
     if (costsResponse) return send(res, costsResponse.status, costsResponse.data);
     const costBudgetResponse = await handleModelCostBudget({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (costBudgetResponse) return send(res, costBudgetResponse.status, costBudgetResponse.data);
+    const rateResponse = await handleModelRateLimits({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (rateResponse) return send(res, rateResponse.status, rateResponse.data);
     if (pathname === '/api/settings/version' && method === 'GET') {
       void checkLatestRelease();
       return send(res, 200, versionInfo());

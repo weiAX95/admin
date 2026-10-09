@@ -8,6 +8,8 @@ Agent 学习管理端，使用 React、TypeScript、Vite 与 Ant Design，提供
 
 管理员可在 `/model-costs` 查看模型成本报表，并下载 CSV 或含趋势图及分页明细的中文 PDF。`GET /api/model-costs` 支持 `start`、`end`（UTC 日期，最多 367 天）、`dimension=model|user|module` 以及 `modelId`、`userId`、`module` 筛选。主模型与 Judge 按运行时价格快照分别归因；费用写入独立账本，删除运行后仍可查询已记账金额。`GET/PUT /api/model-cost-budget` 读取或带版本号修改月预算，0 表示关闭预算预警。运行结束后检查 80%／100%／120% 阈值，以及今日成本是否超过前七日均值三倍；站内通知去重。极小金额的端到端误差验收列在 `TODOLIST.md` 的 9.3 后续项。
 
+管理员在实验模型设置抽屉可配置每个模型的 RPM 和 TPM，`/api/model-rate-limits` 管理规则，`/api/model-rate-status` 查询当前 UTC 分钟的预留请求及 token。批次提交时若任一模型超出上限，全部拒绝并返回 429、`Retry-After` 和超额详情；超过 90% 时生成站内通知。当前值是入队时按最坏上限的**预留**，不是实际模型调用 QPS；调用事实与预留释放列在 9.5 后续项。
+
 ## 本地运行
 
 准备 Node.js、npm 和 Docker，首次运行依次执行：
