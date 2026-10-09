@@ -115,7 +115,7 @@ export default function AdminLayout() {
         collapsed={collapsed} breakpoint="lg" onBreakpoint={setCollapsed}>
         {brandNode}
         <div className="sidebar-label">工作空间</div>
-        {menu}
+        <nav className="sidebar-menu-scroll" aria-label="主导航" tabIndex={0}>{menu}</nav>
         <div className="sidebar-bottom">
           {!collapsed && <div className="sidebar-note"><span className="status-dot" />专注学习，持续进步</div>}
           <Button type="text" block icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
