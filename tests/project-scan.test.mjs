@@ -62,3 +62,14 @@ test('scanner stops new blob calls after rate limit and marks remaining files un
   assert.deepEqual(result.files.map(file => file.status), ['failed', 'unscanned']);
   assert.equal(result.coverageComplete, false);
 });
+
+test('scanner caps persisted index entries and reports the omitted count', async () => {
+  const get = async url => {
+    if (url.endsWith(`/git/commits/${SHA}`)) return json({ tree: { sha: TREE } });
+    return json({ truncated: false, tree: Array.from({ length: 3 }, (_, i) => ({ path: `node_modules/file${i}.js`, type: 'blob', sha: 'c'.repeat(40), size: 1 })) });
+  };
+  const result = await scanPublicRepository({ fullName: 'octocat/example', commitSha: SHA, fetchGithub: get, maxIndexEntries: 2 });
+  assert.equal(result.files.length, 2);
+  assert.equal(result.unscannedCount, 1);
+  assert.equal(result.coverageComplete, false);
+});

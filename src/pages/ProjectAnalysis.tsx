@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Form, Input, Space, Table, Tag, Typography } from 'antd';
 import { createProjectRepository, listProjectRepositories, refreshProjectRepository, type ProjectRepository } from '../api/projectRepositories';
+import ProjectScanPanel from '../components/ProjectScanPanel';
 
 type FormValues = { url: string; branch?: string; goal: string; requirementBaseline?: string };
 
@@ -11,6 +12,7 @@ export default function ProjectAnalysis() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState('');
+  const [selectedRepositoryId, setSelectedRepositoryId] = useState('');
   const [error, setError] = useState('');
 
   const load = async () => {
@@ -34,7 +36,7 @@ export default function ProjectAnalysis() {
   };
 
   return <Space direction="vertical" size={20} style={{ width: '100%' }}>
-    <Alert type="info" showIcon message="第一阶段：公开仓库只读接入" description="当前只读取公开仓库和指定分支的最新 commit；文件扫描、进度报告与学习建议将在后续阶段接入。" />
+    <Alert type="info" showIcon message="第一阶段：公开仓库只读接入与文件扫描" description="扫描固定 commit 并记录覆盖范围；进度报告与学习建议将在后续阶段接入。" />
     <Card title="接入公开 GitHub 仓库">
       <Form form={form} layout="vertical" onFinish={values => void create(values)}>
         <Form.Item name="url" label="仓库地址" rules={[{ required: true, message: '请输入 https://github.com/所有者/仓库' }]}><Input placeholder="https://github.com/owner/repo" /></Form.Item>
@@ -52,9 +54,10 @@ export default function ProjectAnalysis() {
         { title: '当前 commit', dataIndex: 'commitSha', render: (value: string, item: ProjectRepository) => <a href={`${item.url}/commit/${value}`} target="_blank" rel="noopener noreferrer" title={value}><code>{value.slice(0, 10)}</code></a> },
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
-        { title: '分析状态', render: () => <Typography.Text type="secondary">尚未分析</Typography.Text> },
-        { title: '操作', render: (_, item: ProjectRepository) => <Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button> },
+        { title: '分析状态', render: () => <Typography.Text type="secondary">尚无分析报告</Typography.Text> },
+        { title: '操作', render: (_, item: ProjectRepository) => <Space><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />
     </Card>
+    {items.find(item => item.id === selectedRepositoryId) && <ProjectScanPanel key={selectedRepositoryId} repository={items.find(item => item.id === selectedRepositoryId)!} />}
   </Space>;
 }

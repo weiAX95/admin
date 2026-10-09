@@ -32,7 +32,7 @@ async function getJson(fetchGithub, url) {
   return response.json();
 }
 
-export async function scanPublicRepository({ fullName, commitSha, fetchGithub = githubFetch, maxFiles = 200, maxFileBytes = 262144, maxTotalBytes = 5 * 1024 * 1024, maxTreeRequests = 100 }) {
+export async function scanPublicRepository({ fullName, commitSha, fetchGithub = githubFetch, maxFiles = 200, maxFileBytes = 262144, maxTotalBytes = 5 * 1024 * 1024, maxTreeRequests = 100, maxIndexEntries = 5000 }) {
   if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(fullName || '') || !SHA.test(commitSha || '')) throw new Error('仓库或 commit SHA 无效');
   const base = `https://api.github.com/repos/${fullName}/git`;
   const commit = await getJson(fetchGithub, `${base}/commits/${commitSha}`);
@@ -63,8 +63,8 @@ export async function scanPublicRepository({ fullName, commitSha, fetchGithub = 
     unscannedSubtrees += queue.length;
   }
   const files = [];
-  let readCount = 0, attemptedCount = 0, failedCount = 0, excludedCount = 0, totalBytes = 0, unscannedCount = 0, rateLimited = false;
-  for (const entry of entries) {
+  let readCount = 0, attemptedCount = 0, failedCount = 0, excludedCount = 0, totalBytes = 0, unscannedCount = Math.max(0, entries.length - maxIndexEntries), rateLimited = false;
+  for (const entry of entries.slice(0,maxIndexEntries)) {
     if (typeof entry.path !== 'string' || !SHA.test(entry.sha || '')) { unscannedCount++; continue; }
     const file = { path: entry.path, gitSha: entry.sha, size: Number.isSafeInteger(entry.size) ? entry.size : null, category: classification(entry.path) };
     const reason = entry.skippedTree ? 'dependency_or_build' : excludedReason(entry.path, entry, maxFileBytes);

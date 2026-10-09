@@ -54,6 +54,7 @@ import { handleModelHealth, processModelHealthAlerts } from './model-health.mjs'
 import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
+import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
@@ -284,6 +285,10 @@ const publicUser = (u) => ({
 
 function send(res, status, payload) {
   if (activeClient) { res.__pending = { status, payload }; return; }
+  sendImmediate(res, status, payload);
+}
+
+function sendImmediate(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
@@ -1638,16 +1643,18 @@ async function withData(work) {
 
 const server = http.createServer((req, res) => {
   if (new URL(req.url, 'http://localhost').pathname.startsWith('/api/project-repositories')) {
+    if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
       const me = await lookupSession(token);
-      if (!me) return send(res, 401, { error: '未登录或登录已过期' });
+      if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       const pathname = new URL(req.url, 'http://localhost').pathname;
-      const response = await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) });
-      return send(res, response?.status || 404, response?.data || { error: '项目接口不存在' });
+      const response = await handleProjectScans({ pathname, method: req.method, client: pool, me })
+        || await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) });
+      return sendImmediate(res, response?.status || 404, response?.data || { error: '项目接口不存在' });
     })().catch(error => {
       if (!error.status) console.error('[projects] request failed:', error.message);
-      if (!res.headersSent) send(res, error.status || 500, { error: error.status ? error.message : '项目服务不可用' });
+      if (!res.headersSent) sendImmediate(res, error.status || 500, { error: error.status ? error.message : '项目服务不可用' });
     });
     return;
   }
@@ -1754,6 +1761,7 @@ server.on("error", (err) => {
 try {
   await assertSchemaCurrent();
   await recoverBackupJobs(pool);
+  await resumeProjectScans(pool);
   if (process.env.EXPERIMENT_WORKER_MODE !== 'external') await recoverExperimentJobs(pool);
   const users = await pool.query("SELECT 1 FROM users LIMIT 1");
   if (!users.rowCount) throw new Error("数据库尚无账号；请先运行 npm run db:import");
