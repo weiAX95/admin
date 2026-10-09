@@ -50,6 +50,7 @@ import { handleModelQuotas } from './model-quotas.mjs';
 import { handleModelCosts, handleModelCostBudget } from './model-costs.mjs';
 import { handleModelRateLimits } from './model-rate-limits.mjs';
 import { handleModelCallAudit, flushModelCallAudits } from './model-call-audit.mjs';
+import { processDueModelRetirements } from './model-retirement.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
   let changed = false;
@@ -1745,7 +1746,7 @@ try {
       setInterval(() => { void runExperiments(); }, 1500).unref();
     }
     const runSchedules = async () => {
-      try { if (await processDueExperimentSchedules(pool)) notifyLive(); }
+      try { if (await processDueModelRetirements(pool)) notifyLive(); if (await processDueExperimentSchedules(pool)) notifyLive(); }
       catch (error) { console.error("[experiments] schedule failed:", error); }
     };
     if (process.env.EXPERIMENT_WORKER_MODE !== 'external') {

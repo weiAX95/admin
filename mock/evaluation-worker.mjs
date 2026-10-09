@@ -3,6 +3,7 @@ import { recoverExperimentJobs, runExperimentJobs } from './experiment-runner.mj
 import { processDueExperimentSchedules } from './experiment-schedules.mjs';
 import { processDueEvaluationSchedules } from './evaluation-schedules.mjs';
 import { flushModelCallAudits } from './model-call-audit.mjs';
+import { processDueModelRetirements } from './model-retirement.mjs';
 
 let stopping=false;
 process.on('SIGTERM',()=>{stopping=true;void flushModelCallAudits().finally(()=>pool.end().finally(()=>process.exit(0)));});
@@ -18,7 +19,7 @@ try {
 
 async function scheduleLoop() {
   if(stopping)return;
-  try {await processDueExperimentSchedules(pool);await processDueEvaluationSchedules(pool);}
+  try {await processDueModelRetirements(pool);await processDueExperimentSchedules(pool);await processDueEvaluationSchedules(pool);}
   catch(error){console.error('[evaluation-worker] schedule failed:',error);}
   finally {if(!stopping)setTimeout(scheduleLoop,1000);}
 }

@@ -84,7 +84,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const result = await client.query("SELECT id FROM experiment_runs WHERE status='queued' AND provider=ANY($1) AND (judge_api_model IS NULL OR judge_provider=ANY($1)) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT 1",[enabledProviders]);
+      const result = await client.query("SELECT r.id FROM experiment_runs r JOIN experiment_models m ON m.id=r.model_id LEFT JOIN experiment_models j ON j.id=r.judge_model_id WHERE r.status='queued' AND r.provider=ANY($1) AND (r.judge_api_model IS NULL OR r.judge_provider=ANY($1)) AND m.status<>'retired' AND (j.id IS NULL OR j.status<>'retired') ORDER BY r.created_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT 1",[enabledProviders]);
       if (!result.rowCount) { await client.query('COMMIT'); break; }
       const id = result.rows[0].id;
       await client.query("UPDATE experiment_runs SET status='running',started_at=now(),attempts=attempts+1 WHERE id=$1", [id]);

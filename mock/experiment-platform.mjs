@@ -7,6 +7,7 @@ import {modelConnectionAvailable} from './model-connections.mjs';
 import {modelUsable,supportedProvider,validateRegistry} from './model-governance.mjs';
 import {checkTokenReservations,reserveRunTokens} from './model-quotas.mjs';
 import {checkModelRate,reserveModelRate} from './model-rate-limits.mjs';
+import {notifyModelReferenceOwners,failQueuedModelRuns} from './model-retirement.mjs';
 import { caseInputFingerprint } from './evaluation-datasets.mjs';
 import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 
@@ -196,7 +197,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
       const settings = (await client.query('SELECT * FROM experiment_settings WHERE id=1')).rows[0];
       const models = (await client.query('SELECT * FROM experiment_models ORDER BY created_at')).rows.filter(row=>me.role==='admin'||modelUsable(row,me));
       const availability = await Promise.all(models.map(model => modelConnectionAvailable(client, model)));
-      return ok({ configured: await executionConfigured(client), dailyBudgetUsd: settings.daily_budget_usd, concurrencyLimit: settings.concurrency_limit, judgeModelId: settings.judge_model_id, models: models.map((model, index) => ({ id: model.id, name:model.name, displayName: model.display_name, apiModel: model.api_model, provider:model.provider,connectionId:model.connection_id,capabilities:model.capabilities,mediaPricing:model.media_pricing,configured:availability[index],inputUsdPerMillion: model.input_usd_per_million, outputUsdPerMillion: model.output_usd_per_million, active: model.active, status:model.status,allowedRoles:model.allowed_roles,endpointUrl:model.endpoint_url,apiVersion:model.api_version,contextWindow:model.context_window,maxOutputTokens:model.max_output_tokens,featureTags:model.feature_tags,adapterReady:['legacy','openai','qwen','gemini'].includes(model.provider) })) });
+      return ok({ configured: await executionConfigured(client), dailyBudgetUsd: settings.daily_budget_usd, concurrencyLimit: settings.concurrency_limit, judgeModelId: settings.judge_model_id, models: models.map((model, index) => ({ id: model.id, name:model.name, displayName: model.display_name, apiModel: model.api_model, provider:model.provider,connectionId:model.connection_id,capabilities:model.capabilities,mediaPricing:model.media_pricing,configured:availability[index],inputUsdPerMillion: model.input_usd_per_million, outputUsdPerMillion: model.output_usd_per_million, active: model.active, status:model.status,deprecatedAt:model.deprecated_at,retireAt:model.retire_at,retiredAt:model.retired_at,allowedRoles:model.allowed_roles,endpointUrl:model.endpoint_url,apiVersion:model.api_version,contextWindow:model.context_window,maxOutputTokens:model.max_output_tokens,featureTags:model.feature_tags,adapterReady:['legacy','openai','qwen','gemini'].includes(model.provider) })) });
     }
     if (method === 'PUT') {
       if (me.role !== 'admin') return forbidden();
@@ -218,16 +219,29 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     if((await client.query('SELECT 1 FROM experiment_models WHERE name=$1',[registry.name])).rowCount)return fail('模型唯一标识已存在',409);
     const id = uuid();
     if (body.connectionId && !(await client.query('SELECT 1 FROM model_connections WHERE id=$1 AND provider=$2 AND active=true', [body.connectionId, configured.provider])).rowCount) return fail('模型连接不存在或供应商不匹配');
-    await client.query('INSERT INTO experiment_models(id,display_name,api_model,input_usd_per_million,output_usd_per_million,provider,capabilities,media_pricing,connection_id,name,status,allowed_roles,endpoint_url,api_version,context_window,max_output_tokens,feature_tags,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)', [id, body.displayName.trim(), body.apiModel.trim(), body.inputUsdPerMillion, body.outputUsdPerMillion,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),body.connectionId || null,registry.name,registry.status,registry.allowedRoles,registry.endpointUrl,registry.apiVersion,registry.contextWindow,registry.maxOutputTokens,registry.featureTags,supportedProvider.has(configured.provider)]);
+    await client.query("INSERT INTO experiment_models(id,display_name,api_model,input_usd_per_million,output_usd_per_million,provider,capabilities,media_pricing,connection_id,name,status,allowed_roles,endpoint_url,api_version,context_window,max_output_tokens,feature_tags,active,deprecated_at,retire_at,retired_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,CASE WHEN $11='deprecated' THEN now() END,CASE WHEN $11='deprecated' THEN now()+interval '7 days' END,CASE WHEN $11='retired' THEN now() END)", [id, body.displayName.trim(), body.apiModel.trim(), body.inputUsdPerMillion, body.outputUsdPerMillion,configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),body.connectionId || null,registry.name,registry.status,registry.allowedRoles,registry.endpointUrl,registry.apiVersion,registry.contextWindow,registry.maxOutputTokens,registry.featureTags,supportedProvider.has(configured.provider)&&registry.status!=='retired']);
     return ok({ id }, 201);
   }
   const modelRoute = pathname.match(/^\/api\/experiment-platform\/models\/([^/]+)$/);
+  const retireRoute = pathname.match(/^\/api\/experiment-platform\/models\/([^/]+)\/retire$/);
+  if (retireRoute && method === 'POST') {
+    if (me.role !== 'admin') return forbidden();
+    const current=(await client.query('SELECT * FROM experiment_models WHERE id=$1 FOR UPDATE',[retireRoute[1]])).rows[0];
+    if(!current)return fail('模型不存在',404);
+    if(current.status==='retired')return ok({id:current.id,retired:true,alreadyRetired:true});
+    const model=(await client.query("UPDATE experiment_models SET status='retired',active=false,retire_at=NULL,retired_at=now() WHERE id=$1 RETURNING id,display_name",[current.id])).rows[0];
+    await failQueuedModelRuns(client,current.id);
+    await notifyModelReferenceOwners(client,model,'model_retired',current.id);
+    await client.query("INSERT INTO security_audit_logs(actor_id,action,target_type,target_id) VALUES($1,'emergency_retire','experiment_model',$2)",[me.id,current.id]);
+    return ok({id:current.id,retired:true});
+  }
   if (modelRoute && method === 'PATCH') {
     if (me.role !== 'admin') return forbidden();
     const body = await readBody();
     if (typeof body.displayName !== 'string' || !body.displayName.trim() || typeof body.inputUsdPerMillion !== 'number' || !Number.isFinite(body.inputUsdPerMillion) || body.inputUsdPerMillion < 0 || typeof body.outputUsdPerMillion !== 'number' || !Number.isFinite(body.outputUsdPerMillion) || body.outputUsdPerMillion < 0 || typeof body.active !== 'boolean') return fail('模型价格或状态无效');
     const current=(await client.query('SELECT * FROM experiment_models WHERE id=$1',[modelRoute[1]])).rows[0];
     if(!current) return fail('模型不存在',404);
+    if(current.status==='retired')return fail('已退役模型不可恢复或修改',409);
     let registry;
     try{registry=validateRegistry(body,current);}catch(error){return fail(error.message);}
     if((await client.query('SELECT 1 FROM experiment_models WHERE name=$1 AND id<>$2',[registry.name,current.id])).rowCount)return fail('模型唯一标识已存在',409);
@@ -235,7 +249,12 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     try {configured=validateModelCapabilities(body.provider || current.provider,body.capabilities || current.capabilities,body.mediaPricing || current.media_pricing);} catch(error) {return fail(error.message);}
     const connectionId = body.connectionId === undefined ? current.connection_id : body.connectionId || null;
     if (connectionId && !(await client.query('SELECT 1 FROM model_connections WHERE id=$1 AND provider=$2 AND active=true', [connectionId, configured.provider])).rowCount) return fail('模型连接不存在或供应商不匹配');
-    const result = await client.query('UPDATE experiment_models SET display_name=$2,input_usd_per_million=$3,output_usd_per_million=$4,active=$5,provider=$6,capabilities=$7,media_pricing=$8,connection_id=$9,name=$10,status=$11,allowed_roles=$12,endpoint_url=$13,api_version=$14,context_window=$15,max_output_tokens=$16,feature_tags=$17 WHERE id=$1 RETURNING id', [modelRoute[1],body.displayName.trim(),body.inputUsdPerMillion,body.outputUsdPerMillion,body.active&&supportedProvider.has(configured.provider),configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),connectionId,registry.name,registry.status,registry.allowedRoles,registry.endpointUrl,registry.apiVersion,registry.contextWindow,registry.maxOutputTokens,registry.featureTags]);
+    const result = await client.query("UPDATE experiment_models SET display_name=$2,input_usd_per_million=$3,output_usd_per_million=$4,active=CASE WHEN $11='retired' THEN false ELSE $5 END,provider=$6,capabilities=$7,media_pricing=$8,connection_id=$9,name=$10,status=$11,allowed_roles=$12,endpoint_url=$13,api_version=$14,context_window=$15,max_output_tokens=$16,feature_tags=$17,deprecated_at=CASE WHEN $11='deprecated' AND status<>'deprecated' THEN now() WHEN $11='active' THEN NULL ELSE deprecated_at END,retire_at=CASE WHEN $11='deprecated' AND status<>'deprecated' THEN now()+interval '7 days' WHEN $11 IN ('active','retired') THEN NULL ELSE retire_at END,retired_at=CASE WHEN $11='retired' THEN now() ELSE NULL END WHERE id=$1 RETURNING id,display_name,retire_at", [modelRoute[1],body.displayName.trim(),body.inputUsdPerMillion,body.outputUsdPerMillion,body.active&&supportedProvider.has(configured.provider),configured.provider,JSON.stringify(configured.capabilities),JSON.stringify(configured.mediaPricing),connectionId,registry.name,registry.status,registry.allowedRoles,registry.endpointUrl,registry.apiVersion,registry.contextWindow,registry.maxOutputTokens,registry.featureTags]);
+    if(result.rowCount&&current.status!==registry.status){
+      const model=result.rows[0];
+      if(registry.status==='deprecated')await notifyModelReferenceOwners(client,model,'model_deprecated',`${model.id}:${new Date(model.retire_at).toISOString()}`);
+      if(registry.status==='retired'){await failQueuedModelRuns(client,model.id);await notifyModelReferenceOwners(client,model,'model_retired',model.id);}
+    }
     return result.rowCount ? ok({ id: modelRoute[1] }) : fail('模型不存在',404);
   }
   if (pathname === '/api/experiment-platform/prompts') {

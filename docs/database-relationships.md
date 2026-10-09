@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)；9.x 模型治理见 [036_model_registry.sql](../db/migrations/036_model_registry.sql)、[037_model_token_quotas.sql](../db/migrations/037_model_token_quotas.sql)、[038_model_cost_budget.sql](../db/migrations/038_model_cost_budget.sql)、[039_model_cost_ledger.sql](../db/migrations/039_model_cost_ledger.sql)、[040_model_rate_limits.sql](../db/migrations/040_model_rate_limits.sql) 和 [041_model_call_audit.sql](../db/migrations/041_model_call_audit.sql)。迁移后数据库共有 92 张表；本文其他旧章节的表数描述仍以各章节写成时为准。
+> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)；9.x 模型治理见 [036_model_registry.sql](../db/migrations/036_model_registry.sql)、[037_model_token_quotas.sql](../db/migrations/037_model_token_quotas.sql)、[038_model_cost_budget.sql](../db/migrations/038_model_cost_budget.sql)、[039_model_cost_ledger.sql](../db/migrations/039_model_cost_ledger.sql)、[040_model_rate_limits.sql](../db/migrations/040_model_rate_limits.sql) 、[041_model_call_audit.sql](../db/migrations/041_model_call_audit.sql) 和 [042_model_retirement.sql](../db/migrations/042_model_retirement.sql)。迁移后数据库共有 92 张表；本文其他旧章节的表数描述仍以各章节写成时为准。
 
 ## 系统设置与个人偏好
 
@@ -25,7 +25,7 @@ flowchart LR
   Connections -. "管理操作按目标 ID 记账" .-> Audit
 ```
 
-`model_connections` 可为同一供应商保存多条连接，只有一个启用的默认连接；API Key 和自定义 X- 请求头分别以 AES-256-GCM 加密，数据库行记录密钥版本与脱敏显示值。显式绑定的模型通过 `experiment_models.connection_id` 选择连接；创建运行时将主模型与 Judge 的连接 ID 复制到 `experiment_runs`，运行器按该 ID 取密钥。未绑定模型选供应商默认数据库连接，无默认连接才使用旧环境变量。`security_audit_logs` 是独立安全审计表，保存管理动作、操作者及目标 ID，不保存明文密钥；与任务字段历史、笔记版本历史区分。[036_model_registry.sql](../db/migrations/036_model_registry.sql) 扩展 `experiment_models` 的唯一名称、Endpoint／API 版本元数据、token 上限、能力标签、状态和角色白名单。旧模型保留成员可见权限；新增模型默认仅管理员可用。此迁移不增加表。未接入的供应商只能登记目录，不能启用或执行；Endpoint 暂不覆盖加密连接的实际请求地址。运行单价仍按美元／百万 token 存储，管理表单换算显示美元／千 token。
+`model_connections` 可为同一供应商保存多条连接，只有一个启用的默认连接；API Key 和自定义 X- 请求头分别以 AES-256-GCM 加密，数据库行记录密钥版本与脱敏显示值。显式绑定的模型通过 `experiment_models.connection_id` 选择连接；创建运行时将主模型与 Judge 的连接 ID 复制到 `experiment_runs`，运行器按该 ID 取密钥。未绑定模型选供应商默认数据库连接，无默认连接才使用旧环境变量。`security_audit_logs` 是独立安全审计表，保存管理动作、操作者及目标 ID，不保存明文密钥；与任务字段历史、笔记版本历史区分。[036_model_registry.sql](../db/migrations/036_model_registry.sql) 扩展 `experiment_models` 的唯一名称、Endpoint／API 版本元数据、token 上限、能力标签、状态和角色白名单；[042_model_retirement.sql](../db/migrations/042_model_retirement.sql) 增加弃用、计划退役和实际退役时间，**不增加新表或外键**。旧模型保留成员可见权限；新增模型默认仅管理员可用。未接入的供应商只能登记目录，不能启用或执行；Endpoint 暂不覆盖加密连接的实际请求地址。运行单价仍按美元／百万 token 存储，管理表单换算显示美元／千 token。到期退役器按 `retire_at` 自动把状态改为 `retired`，排队运行标记失败；引用者通知存于 `app_notifications`，紧急退役写入 `security_audit_logs`。
 
 ```mermaid
 flowchart LR
