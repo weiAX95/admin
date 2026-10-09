@@ -45,6 +45,7 @@ docker compose exec -T postgres pg_dump -U admin -Fc agent_admin > agent_admin.d
 恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、97 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
 
 “项目分析”页面现支持按账号接入公开 GitHub 仓库，读取默认或指定分支的 commit SHA，并保存项目目标和需求基线文字。服务端仅向固定的 `api.github.com` 公开仓库与分支接口发起只读请求；尚未扫描文件或生成报告。未认证的公开 API 存在速率限制，遇到限制时页面会提示稍后重试。[GitHub 仓库接口](https://docs.github.com/en/rest/repos/repos)与[分支接口](https://docs.github.com/en/rest/branches/branches)为此阶段的读取依据。
+固定 commit 扫描器已有目录截断补读、敏感路径排除和扫描预算逻辑；目前尚未连接页面或保存文件索引，不会在接入仓库时自动发起扫描。[GitHub Trees API](https://docs.github.com/en/rest/git/trees) 对递归响应的 `truncated` 标记和分层补读有明确约定。
 
 可使用 `npm run backup:create` 生成本地加密手动备份，再用 `npm run backup:verify -- /绝对路径/备份文件.agbackup` 独立校验。运行前必须设置 `DATABASE_URL` 和独立的 `BACKUP_ENCRYPTION_KEY`（64 位十六进制，代表 32 字节密钥）；可用 `BACKUP_DIR` 指定输出目录，默认写入已被 Git 忽略的 `backups/`。备份包含 PostgreSQL 自定义格式转储、`ASSET_DIR` 笔记附件及 `PROMPT_MEDIA_DIR` 提示词媒体；缺省附件目录在 `mock/` 下。归档以 AES-256-GCM 加密并附逐文件 SHA-256 清单，生成后立即完整解密和校验。**密钥须在仓库及备份目录之外单独保存**；丢失密钥无法恢复。管理员也可在“系统设置 → 本地加密备份”创建后台任务并下载归档；任务状态记录在数据库中，服务重启后未完成任务标记失败。当前没有自动调度或恢复向导；本地备份不防整机或磁盘丢失。
 
