@@ -37,6 +37,8 @@ flowchart LR
 
 `model_token_quotas` 用 `(model_id, scope, subject_id)` 唯一定位模型默认、角色或账号规则；模型规则的 subject 为 `*`。优先级为用户 > 角色 > 模型，模型默认表示**每账号**的默认日上限。`model_token_reservations` 按 UTC 日期保存已接受运行的保守 token 上限；它故意不对运行或账号设外键，使删除运行或账号不会重置当天已占额度。主模型与 Judge 若相同，在同一运行内合并预留。入队在事务和数据库锁下检查总预留，超过上限返回 429 与下一 UTC 日的 `Retry-After`；达到 80%／90%／100% 生成去重站内通知。当前预留不会按实际结果回退，准确消耗核算须等 9.5 逐次调用审计完成；媒体模型配置配额前须设置上下文窗口，避免无界估算。
 
+`/model-costs` 经 `/api/model-costs` 读取 `experiment_runs` 与其所属 `experiment_batches`；`cost_usd` 是主模型与 Judge 合计，报表以 `cost_usd - judge_cost_usd` 归主模型、`judge_cost_usd` 归 Judge 模型。账号取批次 `owner_id`，`dataset`／`regression` 批次归评测模块，其余归实验模块。读取不新增表或外键。账务日期取 UTC 完成日；没有完成时间的旧记录使用创建日。运行被永久删除时现有级联关系也会删除费用事实，后续须独立账本才能保证历史可追溯。
+
 ## 保留策略与每日清理记录
 
 `retention_settings` 是单行版本化保留配置，保存独立安全审计保留天数、会话保留天数、核心内容回收天数以及系统时区下的清理时间。`retention_cleanup_runs` 以本地日历日为主键，记录每日清理结果和逐项永久删除失败原因，避免重启后重复执行。清理器删除过期 `security_audit_logs` 与 `sessions`；会话删除级联消息和评分，未审核会话候选同时删除，已审核候选和摘录笔记保留并显示“原会话已清理”。[035_core_recycle_bin.sql](../db/migrations/035_core_recycle_bin.sql) 给 `tasks`、`notes`、`experiments` 增加 `deleted_at`；`prompt_library` 已在旧迁移中有该字段。删除后正常读取过滤已删除行，管理员可恢复或永久删除；到期清理按行设置保存点，关联约束阻止删除时保留条目并记录失败。恢复实验不会恢复已撤销的分享或暂停的调度；恢复任务暂不重建删除时从其他任务移除的依赖边。这两张保留策略表无外键。

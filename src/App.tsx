@@ -31,6 +31,7 @@ import PromptDetail from "./pages/PromptDetail";
 import Accounts from "./pages/Accounts";
 import Login from "./pages/Login";
 import Settings from "./pages/Settings";
+import ModelCosts from "./pages/ModelCosts";
 
 export default function App() {
   return (
@@ -68,6 +69,7 @@ export default function App() {
                 <Route path="/prompts/:id" element={<PromptDetail />} />
                 <Route path="/accounts" element={<Accounts />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/model-costs" element={<ModelCosts />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Route>

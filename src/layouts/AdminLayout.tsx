@@ -32,6 +32,7 @@ const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号
 const SETTINGS_ITEM = { key: "/settings", icon: <SettingOutlined />, label: "系统设置" };
 const EVALUATION_ADMIN_ITEM = { key: "/evaluation/candidates", icon: <ExperimentOutlined />, label: "评测候选池" };
 const EVALUATION_ALERTS_ITEM = { key: "/evaluation/alerts", icon: <BellOutlined />, label: "退化告警" };
+const MODEL_COSTS_ITEM = { key: "/model-costs", icon: <ExperimentOutlined />, label: "模型成本" };
 const PAGE_META: Record<string, { title: string; description: string; section: string }> = {
   "/": { title: "学习仪表盘", description: "看见每一步积累，掌握你的学习节奏。", section: "学习概览" },
   "/tasks": { title: "学习任务", description: "从目标到行动，让每一项学习计划有迹可循。", section: "学习工作台" },
@@ -48,6 +49,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/prompts": { title: "提示词库", description: "管理版本、变量与提示词结构。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
   "/settings": { title: "系统设置", description: "配置工作空间与个人偏好。", section: "系统管理" },
+  "/model-costs": { title: "模型成本", description: "按模型、账号和模块查看已记账的调用费用。", section: "系统管理" },
 };
 
 export default function AdminLayout() {
@@ -91,7 +93,7 @@ export default function AdminLayout() {
     return () => socket.close();
   }, [refreshNotifications, refresh]);
   const user = getStoredUser<AuthUser>();
-  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, ACCOUNTS_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, SETTINGS_ITEM];
+  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, MODEL_COSTS_ITEM, ACCOUNTS_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, SETTINGS_ITEM];
   const selected = menuItems.map((m) => m.key)
     .filter((k) => k === "/" ? location.pathname === "/" : location.pathname.startsWith(k))
     .sort((a, b) => b.length - a.length)[0] || "/";
