@@ -63,7 +63,7 @@ async function assetFiles(root, prefix) {
   return files.sort((a, b) => a.archivePath.localeCompare(b.archivePath));
 }
 
-export async function createEncryptedBackup({ outputPath, assetDir, assetDirs, keyHex, dumpDatabase = dumpPostgres }) {
+export async function createEncryptedBackup({ outputPath, assetDir, assetDirs, keyHex, dumpDatabase = dumpPostgres, onPhase = async () => {} }) {
   const key = backupKey(keyHex);
   const temporary = await fsp.mkdtemp(path.join(os.tmpdir(), 'admin-backup-'));
   let created = false;
@@ -91,6 +91,7 @@ export async function createEncryptedBackup({ outputPath, assetDir, assetDirs, k
     const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
     await pipeline(zip.outputStream, cipher, fs.createWriteStream(outputPath, { flags: 'a' }));
     await fsp.appendFile(outputPath, cipher.getAuthTag());
+    await onPhase('verifying');
     await verifyEncryptedBackup({ filePath: outputPath, keyHex });
     return { path: outputPath, manifest };
   } catch (error) { if (created) await fsp.rm(outputPath, { force: true }); throw error; }

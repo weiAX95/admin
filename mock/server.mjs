@@ -52,6 +52,7 @@ import { handleModelRateLimits } from './model-rate-limits.mjs';
 import { handleModelCallAudit, flushModelCallAudits } from './model-call-audit.mjs';
 import { handleModelHealth, processModelHealthAlerts } from './model-health.mjs';
 import { handleModelSecurity } from './model-security.mjs';
+import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
@@ -1618,6 +1619,13 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  if (new URL(req.url, 'http://localhost').pathname.startsWith('/api/settings/backups')) {
+    void handleBackupRequest(req,res,pool,token=>lookupSession(token),notifyLive).catch(error=>{
+      console.error('[backups] request failed:',error.message);
+      if (!res.headersSent) { res.writeHead(500,{'Content-Type':'application/json; charset=utf-8'}); res.end(JSON.stringify({error:'备份服务不可用'})); }
+    });
+    return;
+  }
   if (isPromptSyncPath(new URL(req.url,"http://localhost").pathname)) {
     void handlePromptSync(req,res,pool,token=>lookupSession(token)).catch(error=>{
       console.error('[prompt-sync] request failed:',error);
@@ -1713,6 +1721,7 @@ server.on("error", (err) => {
 
 try {
   await assertSchemaCurrent();
+  await recoverBackupJobs(pool);
   if (process.env.EXPERIMENT_WORKER_MODE !== 'external') await recoverExperimentJobs(pool);
   const users = await pool.query("SELECT 1 FROM users LIMIT 1");
   if (!users.rowCount) throw new Error("数据库尚无账号；请先运行 npm run db:import");

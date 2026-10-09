@@ -7,6 +7,7 @@ import type { AuthUser } from '../types';
 import { useSettings } from '../components/SettingsProvider';
 import ModelConnectionsSettings from '../components/ModelConnectionsSettings';
 import RetentionSettings from '../components/RetentionSettings';
+import BackupSettings from '../components/BackupSettings';
 import { getVersionInfo, type VersionInfo } from '../api/version-info';
 
 const languageOptions = [{ value: 'zh-CN', label: '简体中文' }, { value: 'en-US', label: 'English' }];
@@ -80,6 +81,7 @@ export default function Settings() {
     </Card>}
     {admin && <ModelConnectionsSettings />}
     {admin && <RetentionSettings />}
+    {admin && <BackupSettings />}
     <Card title="个人偏好" loading={!personal}>
       <Form form={personalForm} layout="vertical" onFinish={savePersonal}>
         <Row gutter={20}>

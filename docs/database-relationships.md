@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)；9.x 模型治理见 [036_model_registry.sql](../db/migrations/036_model_registry.sql) 至 [044_model_security.sql](../db/migrations/044_model_security.sql) 的版本化迁移。迁移后数据库共有 95 张表；本文其他旧章节的表数描述仍以各章节写成时为准。
+> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；9.x 模型治理见 [036_model_registry.sql](../db/migrations/036_model_registry.sql) 至 [044_model_security.sql](../db/migrations/044_model_security.sql) 的版本化迁移。迁移后数据库共有 96 张表。
 
 ## 系统设置与个人偏好
 
@@ -11,9 +11,13 @@ flowchart LR
   User["当前账号 /settings"] --> PrefAPI["/api/settings/preferences"] --> Pref[(user_preferences)]
   Users[(users)] -->|"FK user_id · ON DELETE CASCADE"| Pref
   Global -. "仅新登录时读取 session_hours" .-> Tokens[(auth_sessions)]
+  Admin --> BackupAPI["/api/settings/backups"] --> Jobs[(backup_jobs)]
+  Users -->|"FK requested_by · ON DELETE SET NULL"| Jobs
 ```
 
 `system_settings` 是 ID 固定为 1 的单行全局配置，包含系统名称、公开 Logo URL、默认时区／语言／日期格式／分页条数和新登录有效期。`user_preferences` 以 `user_id` 为主键并外键关联 `users.id`；个人时区、语言和日期格式为空时继承全局值，主题、主色与密度按账号保存。两个设置写入接口均使用版本号拒绝过期覆盖。登录会话仍由 `auth_sessions` 保存，修改有效期不会改写旧会话的 `expires_at`。目前仅品牌、基础主题和主要列表分页使用这些设置；全站双语、统一日期展示及自绘图表主题仍在 12.1／12.6 的后续工作中。
+
+`backup_jobs` 保存管理员手动备份的执行状态、阶段、文件大小和结果码，`requested_by` 外键指向 `users.id`，删除账号后置空。加密归档位于本地 `backups/`，文件名由作业 UUID 派生；密钥只从服务端环境变量读取，不存入数据库。后台作业启动时使用独立数据库连接生成 PostgreSQL dump，加入附件后验证加密归档；重启时未完成的作业标记为失败。自动备份、增量链和旁路恢复尚未实现。
 
 ## 模型连接与安全审计
 
@@ -62,7 +66,7 @@ flowchart LR
 
 `retention_settings` 是单行版本化保留配置，保存独立安全审计保留天数、会话保留天数、核心内容回收天数以及系统时区下的清理时间。`retention_cleanup_runs` 以本地日历日为主键，记录每日清理结果和逐项永久删除失败原因，避免重启后重复执行。清理器删除过期 `security_audit_logs` 与 `sessions`；会话删除级联消息和评分，未审核会话候选同时删除，已审核候选和摘录笔记保留并显示“原会话已清理”。[035_core_recycle_bin.sql](../db/migrations/035_core_recycle_bin.sql) 给 `tasks`、`notes`、`experiments` 增加 `deleted_at`；`prompt_library` 已在旧迁移中有该字段。删除后正常读取过滤已删除行，管理员可恢复或永久删除；到期清理按行设置保存点，关联约束阻止删除时保留条目并记录失败。恢复实验不会恢复已撤销的分享或暂停的调度；恢复任务暂不重建删除时从其他任务移除的依赖边。这两张保留策略表无外键。
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)、[笔记引用迁移](../db/migrations/003_note_links.sql)、[图片附件迁移](../db/migrations/004_media_assets.sql)、[笔记分类与标签迁移](../db/migrations/005_note_taxonomy.sql)、[笔记标签目录迁移](../db/migrations/006_note_tag_catalog.sql)、[笔记版本迁移](../db/migrations/007_note_versions.sql)、[复习提醒迁移](../db/migrations/008_note_reviews.sql)、[实验执行基础迁移](../db/migrations/009_experiment_foundation.sql)、[实验评测迁移](../db/migrations/010_experiment_evaluation.sql)、[分享与调度迁移](../db/migrations/011_experiment_sharing_schedules.sql)、[数据集批次约束迁移](../db/migrations/012_experiment_dataset_batch_kind.sql)、[提示词库迁移](../db/migrations/013_prompt_library.sql)、[提示词引用与调用迁移](../db/migrations/014_prompt_references_usage.sql)、[提示词导入来源迁移](../db/migrations/015_prompt_import_sources.sql)、[提示词媒体迁移](../db/migrations/016_prompt_multimodal.sql)、[提示词归档迁移](../db/migrations/017_prompt_archive.sql)和[媒体评分价格快照迁移](../db/migrations/018_media_judge.sql)，描述本地 API 已实现的 PostgreSQL 结构。当前共 **95 张表**；[044_model_security.sql](../db/migrations/044_model_security.sql) 新增策略与安全事件两表。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)。当前共 **96 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 页面如何读写数据
 
