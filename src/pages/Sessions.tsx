@@ -8,6 +8,7 @@ import { createNote } from "../api/notes";
 import { Link, useSearchParams } from "react-router-dom";
 import { listTasks } from "../api/tasks";
 import SessionMessageBubble from "../components/SessionMessageBubble";
+import SessionLearningPath from "../components/SessionLearningPath";
 import { NoteFormDrawer } from "./Notes";
 import type { LearningTask, MessageAnnotationTag, NotePayload, SessionDetail, SessionMessage, SessionSummary } from "../types";
 
@@ -157,7 +158,7 @@ export default function Sessions() {
       }} />)}</div>;
   };
 
-  return <Card className="collection-card" title={<span className="collection-title">会话列表<span className="collection-count">{items.length} 条</span></span>}>
+  return <><Card className="collection-card" title={<span className="collection-title">会话列表<span className="collection-count">{items.length} 条</span></span>}>
     {selectedIds.length > 0 && <Space wrap style={{ marginBottom: 16 }} aria-live="polite">
       <Typography.Text>已选 {selectedIds.length} 条会话（最多导出 50 条）</Typography.Text>
       <Button loading={exporting === "json"} disabled={exporting !== null || selectedIds.length > 50} onClick={() => void downloadSelected("json")}>导出 JSON</Button>
@@ -189,5 +190,5 @@ export default function Sessions() {
       </Space>
     </Modal>
     <NoteFormDrawer open={quickDraft !== null} initial={null} tasks={tasks} prefill={quickDraft || undefined} suppressSuccess onClose={() => setQuickDraft(null)} onSaved={note => { setQuickDraft(null); message.success({ content: <>笔记已保存 · <Link to={`/notes/${note.id}`}>查看笔记</Link></> }); }} />
-  </Card>;
+  </Card><SessionLearningPath userIds={[...new Set(items.map(item => item.userId))].sort()} onOpen={openSearchHit} /></>;
 }

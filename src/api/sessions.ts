@@ -19,6 +19,25 @@ export const searchSessionMessages = (query: string, regex: boolean, page: numbe
     query, regex: String(regex), page: String(page),
   });
 
+export interface LearningPathSession {
+  sessionId: string;
+  at: string;
+  title: string;
+  questionCount: number;
+  stage: "basic" | "advanced" | "practical" | "unknown";
+  stageLabel: string;
+  topics: string[];
+}
+export interface SessionLearningPath {
+  userId: string;
+  sessions: LearningPathSession[];
+  patterns: { id: "linear" | "breadth" | "review"; label: string; detail: string }[];
+  recognizedCount: number;
+  topicCount: number;
+}
+export const getSessionLearningPath = (userId: string) =>
+  http.get<SessionLearningPath>("/sessions/learning-path", { userId });
+
 export const getSession = (id: string) =>
   http.get<SessionDetail>(`/sessions/${id}`);
 

@@ -11,6 +11,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { listActivity } from "./activity.mjs";
 import { searchSessions } from "./session-search.mjs";
 import { exportSessions } from "./session-export.mjs";
+import { getSessionLearningPath } from "./session-learning-path.mjs";
 import { activityHeatmap, activityDay } from "./heatmap.mjs";
 import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
@@ -1689,6 +1690,21 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  if (new URL(req.url, 'http://localhost').pathname === '/api/sessions/learning-path') {
+    if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
+    void (async () => {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      if (!await lookupSession(token)) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      if (req.method !== 'GET') return sendImmediate(res, 405, { error: 'method not allowed' });
+      const userId = new URL(req.url, 'http://localhost').searchParams.get('userId');
+      const result = await getSessionLearningPath(pool, userId);
+      return sendImmediate(res, result.status, result.data);
+    })().catch(error => {
+      console.error('[session-learning-path] request failed:', error.message);
+      if (!res.headersSent) sendImmediate(res, 500, { error: '学习路径分析暂不可用' });
+    });
+    return;
+  }
   if (new URL(req.url, 'http://localhost').pathname === '/api/sessions/export') {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
