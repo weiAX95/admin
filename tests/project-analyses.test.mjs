@@ -9,7 +9,7 @@ import { handleProjectFindingFeedback } from '../mock/project-finding-feedback.m
 import { handleProjectRequirementBaselines } from '../mock/project-requirement-baselines.mjs';
 
 const sha = 'a'.repeat(40);
-const report = JSON.stringify({ summary: '发现项目入口，运行状态尚未验证', findings: [{ title: '入口', status: 'implemented', detail: '存在入口函数', evidence: { path: 'src/main.ts', line: 1, excerpt: 'export function main() {}' } }], suggestions: [{ topic: '验证入口', reason: '静态代码不足以证明运行', practice: '添加集成测试', acceptance: '入口测试通过', findingIndex: 0, impact: 'high', impactReason: '缺少运行验证会阻碍部署', prerequisites: ['集成测试'] }] });
+const report = JSON.stringify({ summary: '发现项目入口，运行状态尚未验证', findings: [{ title: '入口', status: 'implemented', requirementId: null, detail: '存在入口函数', evidence: { path: 'src/main.ts', line: 1, excerpt: 'export function main() {}' } }], suggestions: [{ topic: '验证入口', reason: '静态代码不足以证明运行', practice: '添加集成测试', acceptance: '入口测试通过', findingIndex: 0, impact: 'high', impactReason: '缺少运行验证会阻碍部署', prerequisites: ['集成测试'] }] });
 
 async function fixture(client) {
   const repositoryId = crypto.randomUUID(), scanId = crypto.randomUUID();
@@ -75,7 +75,7 @@ test('analysis calls the model per selected module and merges evidence with cumu
     const input = JSON.parse(messages[1].content);
     assert.equal(input.files.length,1);
     const file = input.files[0];
-    return { output: JSON.stringify({ summary: `已查看 ${input.moduleKey}`, findings: [{ title: input.moduleKey, status: 'implemented', detail: '有代码入口', evidence: { path: file.path, line: 1, excerpt: file.lines.split('\n')[0].replace(/^1: /,'') } }], suggestions: [{ topic: '验证入口', reason: '需要测试', practice: '编写测试', acceptance: '测试通过', findingIndex: 0, impact: 'medium', impactReason: '缺少测试影响维护', prerequisites: ['测试基础'] }] }), promptTokens: 10, completionTokens: 5 };
+    return { output: JSON.stringify({ summary: `已查看 ${input.moduleKey}`, findings: [{ title: input.moduleKey, status: 'implemented', requirementId: null, detail: '有代码入口', evidence: { path: file.path, line: 1, excerpt: file.lines.split('\n')[0].replace(/^1: /,'') } }], suggestions: [{ topic: '验证入口', reason: '需要测试', practice: '编写测试', acceptance: '测试通过', findingIndex: 0, impact: 'medium', impactReason: '缺少测试影响维护', prerequisites: ['测试基础'] }] }), promptTokens: 10, completionTokens: 5 };
   };
   const me = { id: 'member', role: 'member' };
   const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel });
@@ -98,7 +98,7 @@ test('completed report stores fixed-commit package evidence for technology hints
   const me = { id: 'member', role: 'member' };
   const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async (_db,_job,messages) => {
     const input = JSON.parse(messages[1].content);
-    return { output: JSON.stringify({ summary: '已查看模块', findings: [{ title: input.moduleKey, status: 'unverified', detail: '尚未运行验证', evidence: null }], suggestions: [] }), promptTokens: 2, completionTokens: 3 };
+    return { output: JSON.stringify({ summary: '已查看模块', findings: [{ title: input.moduleKey, status: 'unverified', requirementId: null, detail: '尚未运行验证', evidence: null }], suggestions: [] }), promptTokens: 2, completionTokens: 3 };
   } });
   assert.equal(await waitFor(client,started.data.id),'completed');
   const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
@@ -113,9 +113,13 @@ test('analysis fixes the requirement document version and flags a newer version 
   const first = await handleProjectRequirementBaselines({ pathname: baselinePath, method: 'POST', client, me, readBody: async () => ({ content: 'REQ-001: 入口能够启动', currentVersionId: null }) });
   let seenDocument, plannedChars;
   const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async (_db,_job,messages) => {
-    seenDocument = JSON.parse(messages[1].content).requirementDocument;
+    const input = JSON.parse(messages[1].content);
+    seenDocument = input.requirementDocument;
+    assert.deepEqual(input.requirements,[{ id: 'REQ-001', text: '入口能够启动' }]);
     plannedChars = messages.reduce((total,message) => total + message.content.length,0);
-    return { output: report, promptTokens: 2, completionTokens: 3 };
+    const linked = JSON.parse(report);
+    linked.findings[0].requirementId = 'REQ-001';
+    return { output: JSON.stringify(linked), promptTokens: 2, completionTokens: 3 };
   } });
   assert.equal(await waitFor(client,started.data.id),'completed');
   assert.equal(seenDocument,'REQ-001: 入口能够启动');
@@ -124,6 +128,8 @@ test('analysis fixes the requirement document version and flags a newer version 
   assert.equal(second.status,201);
   const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
   assert.equal(detail.baselineVersionId,first.data.id);
+  assert.deepEqual(detail.requirements,[{ id: 'REQ-001', text: '入口能够启动' }]);
+  assert.equal(detail.findings[0].requirementId,'REQ-001');
   assert.deepEqual(detail.staleReasons,['需求基线已变化']);
   assert.equal((await handleProjectRequirementBaselines({ pathname: `${baselinePath}/${first.data.id}`, method: 'GET', client, me })).data.content,'REQ-001: 入口能够启动');
 });
@@ -324,7 +330,7 @@ test('HTTP analysis calls the configured server-side model and returns a persist
     const input = JSON.parse(body.messages[1].content);
     providerCalls.push(input.moduleKey);
     const file = input.files[0];
-    const output = JSON.stringify({ summary: `已查看 ${input.moduleKey}`, findings: [{ title: '入口', status: 'implemented', detail: '存在入口', evidence: { path: file.path, line: 1, excerpt: file.lines.split('\n')[0].replace(/^1: /,'') } }], suggestions: [] });
+    const output = JSON.stringify({ summary: `已查看 ${input.moduleKey}`, findings: [{ title: '入口', status: 'implemented', requirementId: null, detail: '存在入口', evidence: { path: file.path, line: 1, excerpt: file.lines.split('\n')[0].replace(/^1: /,'') } }], suggestions: [] });
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: output } }], usage: { prompt_tokens: 200, completion_tokens: 100 } }));
   });

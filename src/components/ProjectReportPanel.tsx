@@ -126,6 +126,12 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
       {report.baselineVersionId && <Button size="small" loading={requirementLoading} onClick={() => void showRequirement()}>查看本报告固定的需求正文</Button>}
       <Typography.Paragraph>{report.summary}</Typography.Paragraph>
+      <Typography.Title level={5}>需求逐项对照</Typography.Title>
+      {report.requirements.length ? <Table rowKey="id" size="small" pagination={false} dataSource={report.requirements} columns={[
+        { title: '需求 ID', dataIndex: 'id', width: 150 },
+        { title: '需求', dataIndex: 'text' },
+        { title: '本报告结论', render: (_, item: ProjectAnalysisReport['requirements'][number]) => { const related = report.findings.filter(finding => finding.requirementId === item.id); return related.length ? <Space wrap>{related.map(finding => <Tag key={finding.id}>{findingStates[finding.status]} · {finding.title}</Tag>)}</Space> : <Tag>待验证（未关联结论）</Tag>; } },
+      ]} style={{ marginBottom: 16 }} /> : <Typography.Paragraph type="secondary">未提供可逐项识别的需求正文；本报告只显示功能线索，不计算总体完成率。</Typography.Paragraph>}
       <Typography.Title level={5}>技术栈线索</Typography.Title>
       <Typography.Paragraph type="secondary">以下内容来自该 commit 的依赖清单，不代表运行环境已通过验证。</Typography.Paragraph>
       {report.technologies.length ? <Space wrap style={{ marginBottom: 16 }}>{report.technologies.map(item => <Tag key={item.name}><a href={sourceLink(item.evidence.path,item.evidence.line)} target="_blank" rel="noopener noreferrer">{item.name}</a> <Typography.Text type="secondary">({item.packageName})</Typography.Text></Tag>)}</Space> : <Typography.Paragraph type="secondary">扫描范围内未发现可确认的依赖清单线索</Typography.Paragraph>}
@@ -140,7 +146,7 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
         { title: '排除 / 失败 / 未扫描', render: (_, item: ProjectAnalysisReport['modules'][number]) => `${item.excludedCount} / ${item.failedCount} / ${item.unscannedCount}` },
       ]} style={{ marginBottom: 16 }} /> : <Typography.Paragraph type="secondary">此报告创建时尚未记录模块覆盖信息</Typography.Paragraph>}
       <Typography.Title level={5}>进度判断与证据</Typography.Title>
-      {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}{finding.moduleKey && <Tag>{finding.moduleKey}</Tag>}<Tag>{findingStates[finding.status]}</Tag></Space>}>
+      {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}{finding.requirementId && <Tag color="purple">{finding.requirementId}</Tag>}{finding.moduleKey && <Tag>{finding.moduleKey}</Tag>}<Tag>{findingStates[finding.status]}</Tag></Space>}>
         <Typography.Paragraph>{finding.detail}</Typography.Paragraph>
         {finding.evidence && <Typography.Paragraph type="secondary">{finding.evidence.type === 'test' ? '测试证据' : finding.evidence.type === 'document' ? '文档线索' : '代码证据'}：<a href={sourceLink(finding.evidence.path, finding.evidence.line)} target="_blank" rel="noopener noreferrer">{finding.evidence.path}:{finding.evidence.line}</a><br /><code>{finding.evidence.excerpt}</code></Typography.Paragraph>}
         {finding.feedback.map(entry => <Typography.Paragraph key={entry.id} type="secondary"><Tag color="blue">人工判断：{findingStates[entry.correctedStatus]}</Tag>{entry.reason} · {entry.author} · {new Date(entry.createdAt).toLocaleString('zh-CN')}</Typography.Paragraph>)}

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvidence, mergeProjectModuleReports, selectProjectEvidence, validateProjectReport } from '../mock/project-analysis-core.mjs';
+import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvidence, mergeProjectModuleReports, parseProjectRequirements, selectProjectEvidence, validateProjectReport } from '../mock/project-analysis-core.mjs';
 
 const files = [
   { path: 'src/app.ts', category: 'source', status: 'read', content: 'export const app = true;\nrun(app);\n', git_sha: 'a'.repeat(40) },
@@ -40,7 +40,7 @@ test('module plan caps model calls and aggregation keeps each finding and sugges
   assert.equal(groupProjectEvidence(selected).length, 8);
   assert.equal(selected.length, 8);
   const groups = groupProjectEvidence(selected).slice(0,2);
-  const reports = groups.map(({moduleKey,files}) => ({ moduleKey, report: { summary: `已查看 ${moduleKey}`, findings: [{ title: moduleKey, status: 'implemented', detail: '入口存在', evidence: { path: files[0].path, line: 1, excerpt: files[0].lines[0] } }], suggestions: [{ topic: '测试', reason: '需验证', practice: '编写测试', acceptance: '测试通过', findingIndex: 0, impact: 'medium', impactReason: '缺少测试影响后续重构', prerequisites: ['测试基础'] }] } }));
+  const reports = groups.map(({moduleKey,files}) => ({ moduleKey, report: { summary: `已查看 ${moduleKey}`, findings: [{ title: moduleKey, status: 'implemented', requirementId: null, detail: '入口存在', evidence: { path: files[0].path, line: 1, excerpt: files[0].lines[0] } }], suggestions: [{ topic: '测试', reason: '需验证', practice: '编写测试', acceptance: '测试通过', findingIndex: 0, impact: 'medium', impactReason: '缺少测试影响后续重构', prerequisites: ['测试基础'] }] } }));
   const merged = mergeProjectModuleReports(reports);
   assert.deepEqual(merged.findings.map(finding => finding.moduleKey), groups.map(group => group.moduleKey));
   assert.deepEqual(merged.suggestions.map(suggestion => suggestion.findingIndex), [0,1]);
@@ -63,14 +63,28 @@ test('technology hints only quote declared dependencies from readable manifests'
   assert.deepEqual(detectProjectTechnologies([{ ...manifest, content: ambiguous }]).map(item => item.name),['Vite']);
 });
 
+test('requirement IDs remain stable and ignore fenced examples', () => {
+  const first = parseProjectRequirements('REQ-001: 创建任务\n- [ ] 查看任务\n```md\nREQ-999: 示例\n```\nREQ-001: 重复项');
+  assert.equal(first.length,2);
+  assert.equal(first[0].id,'REQ-001');
+  assert.match(first[1].id,/^R-[0-9A-F]{12}$/);
+  const reordered = parseProjectRequirements('- [ ] 查看任务\nREQ-001: 创建任务');
+  assert.equal(reordered[0].id,first[1].id);
+  assert.equal(reordered[1].id,'REQ-001');
+});
+
 test('model report requires exact evidence from selected commit lines', () => {
   const selected = selectProjectEvidence(files);
-  const raw = JSON.stringify({ summary: '已发现应用入口', findings: [{ title: '入口模块', status: 'implemented', detail: '包含运行入口', evidence: { path: 'src/app.ts', line: 2, excerpt: 'run(app);' } }], suggestions: [{ topic: '验证运行流程', reason: '需要运行证明', practice: '编写入口测试', acceptance: '测试通过', findingIndex: 0, impact: 'high', impactReason: '缺少运行证据会影响后续部署', prerequisites: ['集成测试'] }] });
+  const raw = JSON.stringify({ summary: '已发现应用入口', findings: [{ title: '入口模块', status: 'implemented', requirementId: null, detail: '包含运行入口', evidence: { path: 'src/app.ts', line: 2, excerpt: 'run(app);' } }], suggestions: [{ topic: '验证运行流程', reason: '需要运行证明', practice: '编写入口测试', acceptance: '测试通过', findingIndex: 0, impact: 'high', impactReason: '缺少运行证据会影响后续部署', prerequisites: ['集成测试'] }] });
   const report = validateProjectReport(raw, selected);
   assert.equal(report.findings[0].evidence.type, 'code');
   assert.equal(report.findings[0].evidence.gitSha, 'a'.repeat(40));
   assert.equal(report.suggestions[0].findingIndex, 0);
   assert.equal(report.suggestions[0].impact,'high');
+  const requirementLinked = JSON.parse(raw);
+  requirementLinked.findings[0].requirementId = 'REQ-001';
+  assert.equal(validateProjectReport(JSON.stringify(requirementLinked),selected,{ requirementIds: ['REQ-001'] }).findings[0].requirementId,'REQ-001');
+  assert.throws(() => validateProjectReport(JSON.stringify(requirementLinked),selected,{ requirementIds: ['REQ-002'] }),/需求关联/);
   for (const invalid of [
     raw.replace('run(app);', 'made up'),
     raw.replace('src/app.ts', '.env'),
@@ -83,15 +97,15 @@ test('model report requires exact evidence from selected commit lines', () => {
 
 test('unsupported model output is rejected rather than saved as a successful report', () => {
   const selected = selectProjectEvidence(files);
-  for (const raw of ['```json\n{}\n```', '{broken', JSON.stringify({ summary: 'ok', findings: [], suggestions: [], completionPercent: 100 }), JSON.stringify({ summary: 'ok', findings: [{ title: '猜测', status: 'implemented', detail: '无证据', evidence: null }], suggestions: [] })]) {
+  for (const raw of ['```json\n{}\n```', '{broken', JSON.stringify({ summary: 'ok', findings: [], suggestions: [], completionPercent: 100 }), JSON.stringify({ summary: 'ok', findings: [{ title: '猜测', status: 'implemented', requirementId: null, detail: '无证据', evidence: null }], suggestions: [] })]) {
     assert.throws(() => validateProjectReport(raw, selected));
   }
 });
 
 test('documentation claims cannot prove implementation and absence has no positive line evidence', () => {
   const selected = selectProjectEvidence(files);
-  const base = { summary: '待验证', findings: [{ title: '功能', status: 'implemented', detail: '文档声称存在', evidence: { path: 'README.md', line: 2, excerpt: 'Learning app' } }], suggestions: [] };
+  const base = { summary: '待验证', findings: [{ title: '功能', status: 'implemented', requirementId: null, detail: '文档声称存在', evidence: { path: 'README.md', line: 2, excerpt: 'Learning app' } }], suggestions: [] };
   assert.throws(() => validateProjectReport(JSON.stringify(base), selected), /文档|证据/);
-  base.findings[0] = { title: '未发现', status: 'not_found', detail: '扫描范围内未见实现', evidence: { path: 'src/app.ts', line: 1, excerpt: 'export const app = true;' } };
+  base.findings[0] = { title: '未发现', status: 'not_found', requirementId: null, detail: '扫描范围内未见实现', evidence: { path: 'src/app.ts', line: 1, excerpt: 'export const app = true;' } };
   assert.throws(() => validateProjectReport(JSON.stringify(base), selected), /证据/);
 });

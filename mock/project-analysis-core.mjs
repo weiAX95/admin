@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { containsKnownSecret } from './project-scan.mjs';
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -8,6 +9,27 @@ const packageTechnologies = new Map([
   ['react','React'], ['vite','Vite'], ['typescript','TypeScript'], ['next','Next.js'], ['vue','Vue'], ['@angular/core','Angular'],
   ['express','Express'], ['fastify','Fastify'], ['pg','node-postgres'], ['prisma','Prisma'], ['tailwindcss','Tailwind CSS'], ['antd','Ant Design'],
 ]);
+
+export function parseProjectRequirements(content) {
+  if (typeof content !== 'string' || !content.trim()) return [];
+  const items = [], seen = new Set();
+  let fenced = false;
+  for (const rawLine of content.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (/^```/.test(line)) { fenced = !fenced; continue; }
+    if (fenced) continue;
+    const explicit = line.match(/^(REQ-[A-Za-z0-9-]{2,32})\s*[:：]\s*(.+)$/i);
+    const bullet = line.match(/^(?:[-*]|\d+[.)、])\s+(?:\[[ xX]\]\s*)?(.+)$/);
+    const text = (explicit?.[2] || bullet?.[1] || '').trim().replace(/\s+/g,' ');
+    if (!text || text.length > 500) continue;
+    const id = explicit ? explicit[1].toUpperCase() : `R-${crypto.createHash('sha256').update(text.normalize('NFKC')).digest('hex').slice(0,12).toUpperCase()}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    items.push({ id, text });
+    if (items.length >= 50) break;
+  }
+  return items;
+}
 
 export function detectProjectTechnologies(files) {
   const found = new Map();
@@ -120,13 +142,13 @@ export function mergeProjectModuleReports(results) {
   return { summary, findings, suggestions };
 }
 
-export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30 } = {}) {
+export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, requirementIds = [] } = {}) {
   let value;
   try { value = JSON.parse(raw); } catch { throw new Error('模型报告不是有效 JSON'); }
   if (!exactKeys(value, ['summary', 'findings', 'suggestions']) || !boundedText(value.summary, 2000) || !Array.isArray(value.findings) || !value.findings.length || value.findings.length > maxFindings || !Array.isArray(value.suggestions) || value.suggestions.length > maxSuggestions) throw new Error('模型报告结构无效');
   const byPath = new Map(selectedFiles.map(file => [file.path, file]));
   const findings = value.findings.map(item => {
-    if (!exactKeys(item, ['title', 'status', 'detail', 'evidence']) || !boundedText(item.title, 160) || !boundedText(item.detail, 2000) || !['implemented', 'partial', 'not_found', 'unverified'].includes(item.status)) throw new Error('模型结论结构无效');
+    if (!exactKeys(item, ['title', 'status', 'detail', 'evidence', 'requirementId']) || !boundedText(item.title, 160) || !boundedText(item.detail, 2000) || !['implemented', 'partial', 'not_found', 'unverified'].includes(item.status) || item.requirementId !== null && (typeof item.requirementId !== 'string' || !requirementIds.includes(item.requirementId))) throw new Error('模型结论结构或需求关联无效');
     if (item.evidence === null) {
       if (['implemented', 'partial'].includes(item.status)) throw new Error('已实现或部分实现结论缺少证据');
       return item;
