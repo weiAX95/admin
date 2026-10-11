@@ -10,6 +10,7 @@ import http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { listActivity } from "./activity.mjs";
 import { searchSessions } from "./session-search.mjs";
+import { exportSessions } from "./session-export.mjs";
 import { activityHeatmap, activityDay } from "./heatmap.mjs";
 import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
@@ -1688,6 +1689,30 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  if (new URL(req.url, 'http://localhost').pathname === '/api/sessions/export') {
+    if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
+    void (async () => {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      const me = await lookupSession(token);
+      if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      if (req.method !== 'POST') return sendImmediate(res, 405, { error: 'method not allowed' });
+      const result = await exportSessions(pool, await readProjectBody(req), me.role);
+      if (result.status !== 200) return sendImmediate(res, result.status, { error: result.error });
+      res.writeHead(200, {
+        'Content-Type': `${result.contentType}; charset=utf-8`,
+        'Content-Disposition': `attachment; filename="${result.filename}"`,
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Content-Type,Authorization',
+        'Access-Control-Allow-Methods': 'POST,OPTIONS',
+      });
+      res.end(result.content);
+    })().catch(error => {
+      if (!error.status) console.error('[session-export] request failed:', error.message);
+      if (!res.headersSent) sendImmediate(res, error.status || 500, { error: error.status ? error.message : '会话导出失败' });
+    });
+    return;
+  }
   if (new URL(req.url, 'http://localhost').pathname === '/api/sessions/search') {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {

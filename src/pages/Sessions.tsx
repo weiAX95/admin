@@ -2,7 +2,7 @@ import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Card, Empty, Input, Modal, Select, Space, Spin, Switch, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { annotateSessionMessage, getSession, listSessions, searchSessionMessages } from "../api/sessions";
+import { annotateSessionMessage, exportSelectedSessions, getSession, listSessions, searchSessionMessages } from "../api/sessions";
 import type { SessionSearchHit } from "../api/sessions";
 import { createNote } from "../api/notes";
 import { Link, useSearchParams } from "react-router-dom";
@@ -35,6 +35,8 @@ export default function Sessions() {
   const [searchHasMore, setSearchHasMore] = useState(false);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [exporting, setExporting] = useState<"json" | "markdown" | null>(null);
   const searchRequest = useRef(0);
 
   const load = useCallback(async () => {
@@ -104,6 +106,23 @@ export default function Sessions() {
     document.getElementById("session-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const downloadSelected = async (format: "json" | "markdown") => {
+    setExporting(format);
+    try {
+      const { blob, filename } = await exportSelectedSessions(selectedIds, format);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      message.success(`已导出 ${selectedIds.length} 条会话`);
+    } catch (error) { message.error(error instanceof Error ? error.message : "导出失败"); }
+    finally { setExporting(null); }
+  };
+
   const sinkNote = async (session: SessionDetail, entry: SessionMessage, taskId: string | null) => {
     try {
       await createNote({ title: entry.content.slice(0, 30) || "会话沉淀", content: entry.content, taskId, sourceSessionId: session.id });
@@ -139,6 +158,12 @@ export default function Sessions() {
   };
 
   return <Card className="collection-card" title={<span className="collection-title">会话列表<span className="collection-count">{items.length} 条</span></span>}>
+    {selectedIds.length > 0 && <Space wrap style={{ marginBottom: 16 }} aria-live="polite">
+      <Typography.Text>已选 {selectedIds.length} 条会话（最多导出 50 条）</Typography.Text>
+      <Button loading={exporting === "json"} disabled={exporting !== null || selectedIds.length > 50} onClick={() => void downloadSelected("json")}>导出 JSON</Button>
+      <Button loading={exporting === "markdown"} disabled={exporting !== null || selectedIds.length > 50} onClick={() => void downloadSelected("markdown")}>导出 Markdown</Button>
+      <Button disabled={exporting !== null} onClick={() => setSelectedIds([])}>清空选择</Button>
+    </Space>}
     <div className="session-search-controls">
       <Input.Search value={query} onChange={event => { setQuery(event.target.value); setSearchPage(1); }} allowClear placeholder="搜索所有会话消息" aria-label="搜索会话消息" />
       <Space size={8}><Switch checked={regex} onChange={value => { setRegex(value); setSearchPage(1); }} aria-label="正则表达式搜索" /><Typography.Text>正则表达式</Typography.Text></Space>
@@ -154,6 +179,7 @@ export default function Sessions() {
       </> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未找到匹配消息" />)}
     </div>}
     <div id="session-table"><Table rowKey="id" loading={loading} columns={columns} dataSource={items} scroll={{ x: 760 }} pagination={{ pageSize, showSizeChanger: false, current: page, onChange: setPage }}
+      rowSelection={{ selectedRowKeys: selectedIds, preserveSelectedRowKeys: true, onChange: keys => setSelectedIds(keys.map(String)), getCheckboxProps: () => ({ disabled: exporting !== null }) }}
       onRow={row => ({ onClick: () => toggle(row.id), className: "session-clickable-row" })}
       expandable={{ expandedRowRender: expandedRow, expandedRowKeys: expandedId ? [expandedId] : [], showExpandColumn: false, onExpand: (_, row) => toggle(row.id) }} /></div>
     <Modal title="关联到学习任务" open={linkMsg !== null} onCancel={() => { setLinkMsg(null); setLinkSessionId(null); setLinkTaskId(undefined); }}
