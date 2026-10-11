@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    { "requirementId": "REQ-001", "expectedStatus": "implemented", "scenario": "代码与测试均有可定位线索", "evidencePath": "src/tasks.js", "evidenceLine": 3, "suggestionRequired": false },
+    { "requirementId": "REQ-002", "expectedStatus": "partial", "scenario": "保留 ID，但未拒绝空标题", "evidencePath": "src/tasks.js", "evidenceLine": 8, "suggestionRequired": true },
+    { "requirementId": "REQ-003", "expectedStatus": "not_found", "scenario": "完整扫描范围内没有 CSV 导出实现", "evidencePath": null, "evidenceLine": null, "suggestionRequired": true },
+    { "requirementId": "REQ-004", "expectedStatus": "unverified", "scenario": "只有 README 宣称邮件提醒", "evidencePath": "README.md", "evidenceLine": 3, "suggestionRequired": true },
+    { "requirementId": "REQ-005", "expectedStatus": "partial", "scenario": "重复 ID 被静默忽略，且没有对应测试", "evidencePath": "src/tasks.js", "evidenceLine": 13, "suggestionRequired": true },
+    { "requirementId": "REQ-006", "expectedStatus": "not_found", "scenario": "旧提交有入口，当前提交已经删除", "evidencePath": null, "evidenceLine": null, "suggestionRequired": true }
+  ]
+}
