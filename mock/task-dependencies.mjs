@@ -11,7 +11,7 @@ export function validatePlan(start, due) {
 }
 
 export function canUseDependency(task, user) {
-  return user.role === "admin" || !task.ownerId || task.ownerId === user.id;
+  return user.role === "admin" || task.ownerId === user.id;
 }
 
 export function validateDependencies(tasks, taskId, ids, user) {

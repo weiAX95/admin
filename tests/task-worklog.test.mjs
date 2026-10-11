@@ -71,11 +71,13 @@ test("linked records, time entries, completion cycles, and stats use separate pe
   const memberToken = (await call("POST", "/auth/login", { username: "learner", password: "learn123" })).data.token;
   const adminToken = token;
   token = memberToken;
-  assert.equal((await call("PUT", `/tasks/${task.id}/time-entries/${first.id}`, { mode: "duration", workDate: "2026-10-05", hours: 3 })).status, 403);
-  const memberEntry = (await call("POST", `/tasks/${task.id}/time-entries`, { mode: "duration", workDate: "2026-10-05", hours: 0.5 })).data;
-  assert.equal((await call("PUT", `/tasks/${task.id}/time-entries/${memberEntry.id}`, { mode: "duration", workDate: "2026-10-05", hours: 1 })).status, 200);
+  assert.equal((await call("PUT", `/tasks/${task.id}/time-entries/${first.id}`, { mode: "duration", workDate: "2026-10-05", hours: 3 })).status, 404);
+  assert.equal((await call("POST", `/tasks/${task.id}/time-entries`, { mode: "duration", workDate: "2026-10-05", hours: 0.5 })).status, 404);
+  const memberTask = (await call("POST", "/tasks", { title: "成员工时" })).data;
+  const memberEntry = (await call("POST", `/tasks/${memberTask.id}/time-entries`, { mode: "duration", workDate: "2026-10-05", hours: 0.5 })).data;
+  assert.equal((await call("PUT", `/tasks/${memberTask.id}/time-entries/${memberEntry.id}`, { mode: "duration", workDate: "2026-10-05", hours: 1 })).status, 200);
   token = adminToken;
-  assert.equal((await call("DELETE", `/tasks/${task.id}/time-entries/${memberEntry.id}`)).status, 200);
+  assert.equal((await call("DELETE", `/tasks/${memberTask.id}/time-entries/${memberEntry.id}`)).status, 200);
   assert.equal((await call("DELETE", `/tasks/${task.id}/time-entries/${overlapping.id}`)).status, 200);
   assert.equal((await call("GET", `/tasks/${task.id}/time-entries`)).data.actualMinutes, first.durationMinutes + second.durationMinutes);
   assert.equal((await call("GET", "/stats?start=1900-01-01&end=1900-01-02")).data.workVariance.percent, 25);

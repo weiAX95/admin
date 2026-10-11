@@ -413,8 +413,8 @@ function logActivity(type, { taskId = null, title = "", detail = "", actor } = {
   if (db.activity.length > 500) db.activity.length = 500;
 }
 
-function computeStats(tasks, { start, end } = {}) {
-  const trends = computeTaskTrends(db, { start, end });
+function computeStats(tasks, { start, end, source = db } = {}) {
+  const trends = computeTaskTrends(source, { start, end });
   const byStatus = { todo: 0, in_progress: 0, done: 0, blocked: 0 };
   const catMap = new Map();
   let progressSum = 0;
@@ -422,8 +422,8 @@ function computeStats(tasks, { start, end } = {}) {
 
   // 时间窗口过滤 activity：含 start/end 时只统计该区间内的 activity
   const activityInWindow = (!start && !end)
-    ? db.activity
-    : db.activity.filter((a) => {
+    ? source.activity
+    : source.activity.filter((a) => {
         const aDate = dateKey(a.at);
         if (start && aDate < start) return false;
         if (end && aDate > end) return false;
@@ -486,7 +486,7 @@ function computeStats(tasks, { start, end } = {}) {
 
   return {
     total: tasks.length,
-    workVariance: workVariance(tasks, db.timeEntries),
+    workVariance: workVariance(tasks, source.timeEntries),
     byStatus,
     avgProgress: tasks.length ? Math.round(progressSum / tasks.length) : 0,
     byCategory: [...catMap.values()].map((e) => ({
@@ -540,6 +540,27 @@ async function handleRequest(req, res) {
     if (!username) return send(res, 401, { error: "未登录或登录已过期" });
     const me = db.users.find((u) => u.username === username) || null;
     if (!me) return send(res, 401, { error: "登录账号不存在，请重新登录" });
+    const accountTasks = db.tasks.filter(task => canUseDependency(task, me));
+    const accountTaskIds = new Set(accountTasks.map(task => task.id));
+    const visibleTask = task => canUseDependency(task, me);
+    const taskView = task => {
+      if (!task || me.role === "admin") return task;
+      return {
+        ...task,
+        dependencyIds: (task.dependencyIds || []).filter(id => accountTaskIds.has(id)),
+        blockedBy: (task.blockedBy || []).filter(item => accountTaskIds.has(item.id)),
+      };
+    };
+    const accountActivity = me.role === "admin" ? db.activity : db.activity.filter(item => item.taskId ? accountTaskIds.has(item.taskId) : item.userId === me.id);
+    const accountData = me.role === "admin" ? db : {
+      ...db,
+      tasks: accountTasks,
+      activity: accountActivity,
+      timeEntries: db.timeEntries.filter(item => accountTaskIds.has(item.taskId)),
+      taskTrendEvents: db.taskTrendEvents.filter(item => accountTaskIds.has(item.taskId)),
+      // Historical snapshots were global; do not present them as a personal average.
+      taskTrendSnapshots: [],
+    };
 
     const settingsResponse = await handleSystemSettings({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (settingsResponse) return send(res, settingsResponse.status, settingsResponse.data);
@@ -680,28 +701,28 @@ async function handleRequest(req, res) {
 
     if (method === "GET" && pathname === "/api/activity/heatmap") {
       try {
-        return send(res, 200, { items: activityHeatmap(db.activity, url.searchParams.get("start"), url.searchParams.get("end")) });
+        return send(res, 200, { items: activityHeatmap(accountActivity, url.searchParams.get("start"), url.searchParams.get("end")) });
       } catch (error) { return send(res, 400, { error: error.message }); }
     }
     if (method === "GET" && pathname === "/api/activity/day") {
       try {
-        return send(res, 200, activityDay(db.activity, url.searchParams.get("date")));
+        return send(res, 200, activityDay(accountActivity, url.searchParams.get("date")));
       } catch (error) { return send(res, 400, { error: error.message }); }
     }
 
     if (method === "GET" && pathname === "/api/activity") {
       try {
-        return send(res, 200, listActivity(db.activity, db.users, Object.fromEntries(url.searchParams)));
+        return send(res, 200, listActivity(accountActivity, me.role === "admin" ? db.users : [me], Object.fromEntries(url.searchParams)));
       } catch (error) {
         return send(res, 400, { error: error.message });
       }
     }
 
     if (method === "GET" && pathname === "/api/dashboard/quick-actions") {
-      return send(res, 200, quickActionCounts(db));
+      return send(res, 200, quickActionCounts(accountData));
     }
     if (method === "GET" && pathname === "/api/dashboard/quick-preview") {
-      try { return send(res, 200, quickPreview(db, url.searchParams.get("kind"))); }
+      try { return send(res, 200, quickPreview(accountData, url.searchParams.get("kind"))); }
       catch (error) { return send(res, 400, { error: error.message }); }
     }
 
@@ -709,7 +730,7 @@ async function handleRequest(req, res) {
     if (method === "GET" && pathname === "/api/stats") {
       const start = url.searchParams.get("start") || "";
       const end = url.searchParams.get("end") || "";
-      return send(res, 200, computeStats(projectTasks(db.tasks).map(task => ({ ...task, status: task.effectiveStatus })), { start, end }));
+      return send(res, 200, computeStats(projectTasks(db.tasks).filter(visibleTask).map(task => ({ ...taskView(task), status: task.effectiveStatus })), { start, end, source: accountData }));
     }
 
     // ---- 账号管理（仅管理员）----
@@ -804,13 +825,20 @@ async function handleRequest(req, res) {
       return send(res, 405, { error: "method not allowed" });
     }
 
+    // A task ID must never bypass the same owner boundary through a subroute.
+    const taskPath = pathname.match(/^\/api\/tasks\/([^/]+)(?:\/|$)/);
+    if (taskPath && !["bulk", "import", "import-csv", "dependency-options"].includes(taskPath[1])) {
+      const target = db.tasks.find(task => task.id === taskPath[1]);
+      if (!target || !visibleTask(target)) return send(res, 404, { error: "任务不存在" });
+    }
+
     // ---- task templates ----
     if (pathname === "/api/task-templates") {
       if (method === "GET") return send(res, 200, { items: [...PRESET_TEMPLATES, ...db.taskTemplates.filter(item => item.ownerId === me.id)] });
       if (method === "POST") {
         const body = await readBody(req);
         const source = db.tasks.find(item => item.id === body.taskId);
-        if (!source) return send(res, 404, { error: "来源任务不存在" });
+        if (!source || !visibleTask(source)) return send(res, 404, { error: "来源任务不存在" });
         const name = typeof body.name === "string" ? body.name.trim().slice(0, 80) : "";
         if (!name) return send(res, 400, { error: "模板名称不能为空" });
         const template = { id: newId(), ownerId: me.id, name, description: source.description || "", defaultPhase: source.phase || "基础", defaultPriority: source.priority || "medium", checklist: (source.checklist || []).map(item => item.text), suggestedResources: source.resources || [] };
@@ -830,8 +858,7 @@ async function handleRequest(req, res) {
     if (pathname === "/api/recurring-series" && method === "POST") {
       const body = await readBody(req);
       const task = db.tasks.find(item => item.id === body.taskId);
-      if (!task) return send(res, 404, { error: "任务不存在" });
-      if (!canUseDependency(task, me)) return send(res, 403, { error: "无权修改该任务" });
+      if (!task || !visibleTask(task)) return send(res, 404, { error: "任务不存在" });
       if (task.recurringSeriesId) return send(res, 409, { error: "该任务已有重复序列" });
       const series = createSeries(task, body);
       task.recurringSeriesId = series.id;
@@ -876,7 +903,7 @@ async function handleRequest(req, res) {
         const phase = url.searchParams.get("phase");
         const tags = url.searchParams.getAll("tag");
         const keyword = (url.searchParams.get("keyword") || "").trim().toLowerCase();
-        let list = projectTasks(db.tasks);
+        let list = projectTasks(db.tasks).filter(visibleTask);
         if (status) list = list.filter((t) => t.effectiveStatus === status);
         if (category) list = list.filter((t) => t.category === category);
         if (phase) list = list.filter((t) => t.phase === phase);
@@ -889,7 +916,7 @@ async function handleRequest(req, res) {
         }
         list.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
         const ids = new Set(list.map(task => task.recurringSeriesId).filter(Boolean));
-        return send(res, 200, { total: list.length, items: list, recurringSeries: Object.fromEntries(db.recurringSeries.filter(series => ids.has(series.id)).map(series => [series.id, seriesView(series)])), categories: [...new Set(db.tasks.map(task => task.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN")), tags: [...new Set([...PRESET_TAGS, ...db.tasks.flatMap(task => task.tags || [])])] });
+        return send(res, 200, { total: list.length, items: list.map(taskView), recurringSeries: Object.fromEntries(db.recurringSeries.filter(series => ids.has(series.id)).map(series => [series.id, seriesView(series)])), categories: [...new Set(accountTasks.map(task => task.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN")), tags: [...new Set([...PRESET_TAGS, ...accountTasks.flatMap(task => task.tags || [])])] });
       }
       if (method === "POST") {
         const body = await readBody(req);
@@ -927,7 +954,7 @@ async function handleRequest(req, res) {
         logAction("create", { taskId: task.id, title: task.title, detail: "创建任务" });
         saveDb(db);
         if (task.recurringSeriesId) scheduleRecurrences(0);
-        return send(res, 201, projectTasks(db.tasks).find(item => item.id === task.id));
+        return send(res, 201, taskView(projectTasks(db.tasks).find(item => item.id === task.id)));
       }
       return send(res, 405, { error: "method not allowed" });
     }
@@ -1011,7 +1038,7 @@ async function handleRequest(req, res) {
       const draft = structuredClone(db.tasks);
       for (const id of ids) {
         const before = original.get(id);
-        if (!before) issues.push({ taskId: id, reason: "任务不存在" });
+        if (!before || !visibleTask(before)) issues.push({ taskId: id, reason: "任务不存在" });
         else if (!Number.isInteger(body.versions?.[id]) || body.versions[id] !== before.version) issues.push({ taskId: id, reason: "任务版本已变化，请刷新后重试" });
         else if (body.action === "update") {
           try {
@@ -1062,7 +1089,7 @@ async function handleRequest(req, res) {
       const index = db.tasks.findIndex((t) => t.id === id);
       if (index === -1) return send(res, 404, { error: "task not found" });
 
-      if (method === "GET") return send(res, 200, projectTasks(db.tasks)[index]);
+      if (method === "GET") return send(res, 200, taskView(projectTasks(db.tasks)[index]));
 
       if (method === "PUT" || method === "PATCH") {
         const body = await readBody(req);
@@ -1105,7 +1132,7 @@ async function handleRequest(req, res) {
         logReleasedDependencies(previousStates);
         saveDb(db);
         if (body.recurrence !== undefined) scheduleRecurrences(0);
-        return send(res, 200, projectTasks(db.tasks)[index]);
+        return send(res, 200, taskView(projectTasks(db.tasks)[index]));
       }
 
       if (method === "DELETE") {
@@ -1188,7 +1215,7 @@ async function handleRequest(req, res) {
       recordTaskTrendSnapshot(db, after.updatedAt);
       logAction("update", { taskId: after.id, title: after.title, detail: before.status !== after.status ? "取消已完成检查项，状态恢复为进行中" : "更新检查清单" });
       saveDb(db);
-      return send(res, 200, projectTasks(db.tasks).find(item => item.id === after.id));
+      return send(res, 200, taskView(projectTasks(db.tasks).find(item => item.id === after.id)));
     }
 
     const tagsRoute = pathname.match(/^\/api\/tasks\/([^/]+)\/tags$/);
@@ -1197,14 +1224,14 @@ async function handleRequest(req, res) {
       if (!task) return send(res, 404, { error: "task not found" });
       const body = await readBody(req);
       if (!Number.isInteger(body.version)) return send(res, 400, { error: "version 为必填整数" });
-      if (body.version !== task.version) return send(res, 409, { error: "任务已被其他操作修改，请加载最新版本后重试", latest: projectTasks(db.tasks).find(item => item.id === task.id) });
+      if (body.version !== task.version) return send(res, 409, { error: "任务已被其他操作修改，请加载最新版本后重试", latest: taskView(projectTasks(db.tasks).find(item => item.id === task.id)) });
       const before = structuredClone(task);
       const after = prepareTaskUpdate(task, { tags: body.tags });
       db.tasks[db.tasks.indexOf(task)] = after;
       recordTaskChanges(db, before, after, me);
       logAction("update", { taskId: after.id, title: after.title, detail: "更新任务标签" });
       saveDb(db);
-      return send(res, 200, projectTasks(db.tasks).find(item => item.id === after.id));
+      return send(res, 200, taskView(projectTasks(db.tasks).find(item => item.id === after.id)));
     }
 
     const historyRoute = pathname.match(/^\/api\/tasks\/([^/]+)\/change-logs$/);
@@ -1225,7 +1252,7 @@ async function handleRequest(req, res) {
       if (!task || !entry) return send(res, 404, { error: "任务或历史记录不存在" });
       const body = await readBody(req);
       if (!Number.isInteger(body.version) || body.version !== task.version) {
-        return send(res, 409, { error: "任务已被其他操作修改，请刷新后重试", latest: projectTasks(db.tasks).find(item => item.id === task.id) });
+        return send(res, 409, { error: "任务已被其他操作修改，请刷新后重试", latest: taskView(projectTasks(db.tasks).find(item => item.id === task.id)) });
       }
       if (!AUDITED_TASK_FIELDS.includes(entry.fieldName)) return send(res, 400, { error: "该字段不可回滚" });
       if (JSON.stringify(task[entry.fieldName]) === JSON.stringify(entry.oldValue)) return send(res, 409, { error: "该字段当前已是目标值" });
@@ -1240,7 +1267,7 @@ async function handleRequest(req, res) {
       logAction("update", { taskId: task.id, title: after.title, detail: `回滚 ${entry.fieldName}` });
       logReleasedDependencies(previousStates);
       saveDb(db);
-      return send(res, 200, projectTasks(db.tasks).find(item => item.id === task.id));
+      return send(res, 200, taskView(projectTasks(db.tasks).find(item => item.id === task.id)));
     }
 
     // 单任务审计
