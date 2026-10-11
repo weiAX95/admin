@@ -13,6 +13,7 @@ const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
 const fail = (error, status = 400) => ok({ error }, status);
 const allowedTags = new Set(['幻觉','不完整','格式错误','推理错误','完美','偏题','冗余']);
+const canAccessLinkedTask = async (client, me, taskId) => !taskId || me.role === 'admin' || Boolean((await client.query('SELECT 1 FROM tasks WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL', [taskId, me.id])).rowCount);
 
 const validatedCases = validateEvaluationCases;
 async function validateAssets(client, datasetId, cases, actor) {
@@ -349,6 +350,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   if (chainSuggest && method === 'GET') {
     const target = (await client.query('SELECT * FROM experiments WHERE id=$1', [chainSuggest[1]])).rows[0];
     if (!target) return fail('实验不存在', 404);
+    if (!await canAccessLinkedTask(client, me, target.task_id)) return ok({ items: [] });
     const items = (await client.query('SELECT id,title,task_id,chain_id FROM experiments WHERE id<>$1 AND task_id IS NOT DISTINCT FROM $2', [target.id,target.task_id])).rows.map(item => ({ ...item, similarity: titleSimilarity(target.title,item.title) })).filter(item => item.similarity >= 0.6).sort((a,b)=>b.similarity-a.similarity);
     return ok({ items });
   }
@@ -357,9 +359,11 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     const target = (await client.query('SELECT * FROM experiments WHERE id=$1', [chainConfirm[1]])).rows[0];
     if (!target) return fail('实验不存在', 404);
     if (me.role !== 'admin' && target.owner_id !== me.id) return fail('无权加入版本链', 403);
+    if (!await canAccessLinkedTask(client, me, target.task_id)) return fail('关联任务不存在', 404);
     const body = await readBody();
     const peer = (await client.query('SELECT * FROM experiments WHERE id=$1', [body.peerId])).rows[0];
     if (!peer || (me.role !== 'admin' && peer.owner_id !== me.id)) return fail('目标实验不存在或无权管理', 404);
+    if (!await canAccessLinkedTask(client, me, peer.task_id)) return fail('关联任务不存在', 404);
     if (peer.task_id !== target.task_id) return fail('版本链任务必须一致');
     const chainId = peer.chain_id || target.chain_id || uuid();
     if (!peer.chain_id && !target.chain_id) await client.query('INSERT INTO experiment_chains(id,title,task_id,created_by) VALUES($1,$2,$3,$4)', [chainId, target.title, target.task_id, me.id]);

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createPgTestServer } from './pg-helper.mjs';
 
 test('member cannot read or mutate another account task through task subroutes', async t => {
-  const { base } = await createPgTestServer(t);
+  const { base, client } = await createPgTestServer(t);
   const login = async (username, password) => (await (await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) })).json()).token;
   const admin = await login('admin', 'admin123');
   const member = await login('member', 'test');
@@ -14,6 +14,9 @@ test('member cannot read or mutate another account task through task subroutes',
   const own = (await request(member, 'POST', '/tasks', { title: '成员任务' })).data;
   const linkedNote = (await request(admin, 'POST', '/notes', { title: '共享笔记', taskId: 'seed-task-1' })).data;
   const linkedExperiment = (await request(admin, 'POST', '/experiments', { title: '共享实验', taskId: 'seed-task-1' })).data;
+  const linkedPeer = (await request(admin, 'POST', '/experiments', { title: '共享实验', taskId: 'seed-task-1' })).data;
+  // Simulate older data whose experiment owner differs from its linked task owner.
+  await client.query("UPDATE experiments SET owner_id='member' WHERE id=ANY($1::text[])", [[linkedExperiment.id, linkedPeer.id]]);
   const model = await request(admin, 'POST', '/experiment-platform/models', { name: 'boundary-test', displayName: '权限测试模型', apiModel: 'boundary', inputUsdPerMillion: 1, outputUsdPerMillion: 1, allowedRoles: ['admin', 'member'] });
   assert.equal(model.status, 201);
   const definition = taskId => ({ title: '任务关联定义', taskId, systemPrompt: '', userPrompt: '测试', variables: {}, variants: [{ modelId: model.data.id, parameters: {} }] });
@@ -29,6 +32,9 @@ test('member cannot read or mutate another account task through task subroutes',
   assert.ok((await request(member, 'GET', '/activity')).data.items.every(item => item.taskId === own.id || item.userId === 'member'));
   assert.equal((await request(member, 'GET', `/notes/${linkedNote.id}`)).data.taskId, null);
   assert.equal((await request(member, 'GET', `/experiments/${linkedExperiment.id}`)).data.taskId, null);
+  assert.deepEqual((await request(member, 'GET', `/experiments/${linkedExperiment.id}/chain-suggestions`)).data.items, []);
+  assert.equal((await request(member, 'POST', `/experiments/${linkedExperiment.id}/chain`, { peerId: linkedPeer.id })).status, 404);
+  assert.ok((await request(admin, 'GET', `/experiments/${linkedExperiment.id}/chain-suggestions`)).data.items.length > 0);
   assert.equal((await request(member, 'GET', `/experiment-definitions/${linkedDefinition.data.id}`)).data.taskId, null);
   assert.equal((await request(member, 'POST', '/experiment-definitions', definition('seed-task-1'))).status, 404);
   assert.equal((await request(member, 'POST', '/experiment-definitions', definition(own.id))).status, 201);
