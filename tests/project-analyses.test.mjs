@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { createPgTestServer } from './pg-helper.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from '../mock/project-analyses.mjs';
+import { handleProjectSuggestionAction } from '../mock/project-suggestion-actions.mjs';
 
 const sha = 'a'.repeat(40);
 const report = JSON.stringify({ summary: '发现项目入口，运行状态尚未验证', findings: [{ title: '入口', status: 'implemented', detail: '存在入口函数', evidence: { path: 'src/main.ts', line: 1, excerpt: 'export function main() {}' } }], suggestions: [{ topic: '验证入口', reason: '静态代码不足以证明运行', practice: '添加集成测试', acceptance: '入口测试通过', findingIndex: 0 }] });
@@ -101,6 +102,63 @@ test('a later module failure retains earlier call cost without publishing a part
   assert.deepEqual(detail.modules,[]);
   assert.equal(detail.promptTokens,20);
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_model_charges WHERE analysis_id=$1', [started.data.id])).rows[0].n,2);
+});
+
+test('accepting a learning suggestion creates one linked task with task history side effects', async t => {
+  const { client, base } = await createPgTestServer(t);
+  const { scanId, path } = await fixture(client);
+  const me = { id: 'member', username: 'member', role: 'member' };
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: report, promptTokens: 2, completionTokens: 3 }) });
+  assert.equal(await waitFor(client,started.data.id),'completed');
+  const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  const actionPath = `${path}/${started.data.id}/suggestions/${detail.suggestions[0].id}/accept`;
+  const accepted = await handleProjectSuggestionAction({ pathname: actionPath, method: 'POST', client, me });
+  assert.equal(accepted.status,201);
+  const repeated = await handleProjectSuggestionAction({ pathname: actionPath, method: 'POST', client, me });
+  assert.equal(repeated.status,200);
+  assert.equal(repeated.data.taskId,accepted.data.taskId);
+  assert.equal((await fetch(`${base}${actionPath.slice(4)}`, { method: 'POST' })).status,401);
+  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
+  const { token } = await login.json();
+  const httpRepeat = await fetch(`${base}${actionPath.slice(4)}`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(httpRepeat.status,200);
+  assert.equal((await httpRepeat.json()).taskId,accepted.data.taskId);
+  const task = (await client.query('SELECT * FROM tasks WHERE id=$1', [accepted.data.taskId])).rows[0];
+  assert.equal(task.title,'验证入口');
+  assert.match(task.description,/添加集成测试/);
+  assert.match(task.description,/入口测试通过/);
+  assert.match(task.description,/github.com\/octocat\/example\/blob\//);
+  assert.equal(task.owner_id,'member');
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM task_trend_events WHERE task_id=$1 AND type='create'", [task.id])).rows[0].n,1);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM activity WHERE task_id=$1 AND type='create'", [task.id])).rows[0].n,1);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_suggestion_decisions WHERE suggestion_id=$1', [detail.suggestions[0].id])).rows[0].n,1);
+  const refreshed = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.deepEqual(refreshed.suggestions[0].decision.status,'accepted');
+  assert.equal(refreshed.suggestions[0].decision.taskId,task.id);
+  const second = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: report, promptTokens: 2, completionTokens: 3 }) });
+  assert.equal(await waitFor(client,second.data.id),'completed');
+  const secondDetail = (await handleProjectAnalyses({ pathname: `${path}/${second.data.id}`, method: 'GET', client, me })).data;
+  const duplicate = await handleProjectSuggestionAction({ pathname: `${path}/${second.data.id}/suggestions/${secondDetail.suggestions[0].id}/accept`, method: 'POST', client, me });
+  assert.equal(duplicate.status,409);
+  assert.equal(duplicate.data.taskId,task.id);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM tasks WHERE title='验证入口'")).rows[0].n,1);
+});
+
+test('suggestion decisions reject stale reports and preserve an ignored choice', async t => {
+  const { client } = await createPgTestServer(t);
+  const { repositoryId, scanId, path } = await fixture(client);
+  const me = { id: 'member', username: 'member', role: 'member' };
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: report, promptTokens: 2, completionTokens: 3 }) });
+  assert.equal(await waitFor(client,started.data.id),'completed');
+  const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  const base = `${path}/${started.data.id}/suggestions/${detail.suggestions[0].id}`;
+  assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/accept`, method: 'POST', client, me: { id: 'learner', role: 'member' } })).status,404);
+  await client.query('UPDATE project_repositories SET goal=$2 WHERE id=$1', [repositoryId,'新的项目目标']);
+  assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/accept`, method: 'POST', client, me })).status,409);
+  assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/ignore`, method: 'POST', client, me })).status,200);
+  assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/ignore`, method: 'POST', client, me })).status,200);
+  assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/accept`, method: 'POST', client, me })).status,409);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM tasks WHERE category='项目学习'")).rows[0].n,0);
 });
 
 test('analysis submission rejects unavailable models and exhausted daily budget before charging', async t => {

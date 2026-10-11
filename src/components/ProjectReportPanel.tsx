@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Empty, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Link } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
-import { cancelProjectAnalysis, getProjectAnalysis, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
+import { cancelProjectAnalysis, decideProjectSuggestion, getProjectAnalysis, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
 
 const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败', canceled: '已取消' };
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
@@ -16,6 +17,7 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
   const [report, setReport] = useState<ProjectAnalysisReport | null>(null);
   const [starting, setStarting] = useState(false);
   const [actingId, setActingId] = useState('');
+  const [actingSuggestionId, setActingSuggestionId] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -57,6 +59,16 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
     finally { setActingId(''); }
   };
   const sourceLink = (path: string, line: number) => `https://github.com/${report?.fullName}/blob/${report?.commitSha}/${path.split('/').map(encodeURIComponent).join('/')}#L${line}`;
+  const decide = async (suggestionId: string, action: 'accept' | 'ignore') => {
+    if (!report) return;
+    setActingSuggestionId(suggestionId);
+    try {
+      await decideProjectSuggestion(repository.id,report.id,suggestionId,action);
+      setReport(await getProjectAnalysis(repository.id,report.id));
+      message.success(action === 'accept' ? '已创建学习任务' : '已忽略建议');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '建议处理失败'); }
+    finally { setActingSuggestionId(''); }
+  };
 
   return <Card title="项目分析报告">
     <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
@@ -105,6 +117,12 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
         <Typography.Paragraph>{suggestion.reason}</Typography.Paragraph>
         <Typography.Paragraph><strong>实践：</strong>{suggestion.practice}</Typography.Paragraph>
         <Typography.Paragraph><strong>验收：</strong>{suggestion.acceptance}</Typography.Paragraph>
+        {suggestion.decision?.status === 'accepted' && <Space><Tag color="success">已加入任务</Tag>{suggestion.decision.taskId && <Link to={`/tasks/${suggestion.decision.taskId}`}>查看任务</Link>}</Space>}
+        {suggestion.decision?.status === 'ignored' && <Tag>已忽略</Tag>}
+        {!suggestion.decision && <Space>
+          <Popconfirm title="确认将此建议创建为学习任务？" description="任务会保留实践、验收要求与当前报告来源。" onConfirm={() => void decide(suggestion.id,'accept')}><Button type="primary" size="small" loading={actingSuggestionId === suggestion.id}>加入任务</Button></Popconfirm>
+          <Popconfirm title="确认忽略此建议？" onConfirm={() => void decide(suggestion.id,'ignore')}><Button size="small" loading={actingSuggestionId === suggestion.id}>忽略</Button></Popconfirm>
+        </Space>}
       </Card>) : <Empty description="暂无建议" />}
     </Card>}
   </Card>;

@@ -56,6 +56,7 @@ import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
+import { handleProjectSuggestionAction } from './project-suggestion-actions.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
@@ -1650,10 +1651,13 @@ const server = http.createServer((req, res) => {
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       const pathname = new URL(req.url, 'http://localhost').pathname;
-      const response = await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
+      const response = await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
+        || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
         || await handleProjectScans({ pathname, method: req.method, client: pool, me, url: new URL(req.url, 'http://localhost') })
         || await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) });
-      return sendImmediate(res, response?.status || 404, response?.data || { error: '项目接口不存在' });
+      sendImmediate(res, response?.status || 404, response?.data || { error: '项目接口不存在' });
+      if (response?.status === 201 && pathname.endsWith('/accept')) notifyLive();
+      return;
     })().catch(error => {
       if (!error.status) console.error('[projects] request failed:', error.message);
       if (!res.headersSent) sendImmediate(res, error.status || 500, { error: error.status ? error.message : '项目服务不可用' });

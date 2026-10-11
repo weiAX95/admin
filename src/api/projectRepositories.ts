@@ -56,10 +56,11 @@ export interface ProjectAnalysisReport extends ProjectAnalysisJob {
   fullName: string; goal: string; requirementBaseline: string;
   modules: { moduleKey: string; indexedCount: number; readCount: number; selectedCount: number; truncatedCount: number; excludedCount: number; failedCount: number; unscannedCount: number; summary: string | null }[];
   findings: { id: string; moduleKey: string | null; title: string; status: 'implemented' | 'partial' | 'not_found' | 'unverified'; detail: string; evidence: null | { type: 'code' | 'test' | 'document'; path: string; line: number; excerpt: string; gitSha: string } }[];
-  suggestions: { id: string; findingId: string | null; topic: string; reason: string; practice: string; acceptance: string }[];
+  suggestions: { id: string; findingId: string | null; topic: string; reason: string; practice: string; acceptance: string; decision: null | { status: 'accepted' | 'ignored'; taskId: string | null; decidedAt: string } }[];
 }
 export const listProjectAnalyses = (repositoryId: string) => http.get<{ items: ProjectAnalysisJob[] }>(`/project-repositories/${repositoryId}/analyses`);
 export const startProjectAnalysis = (repositoryId: string, scanId: string, modelId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses`, { scanId, modelId });
 export const getProjectAnalysis = (repositoryId: string, analysisId: string) => http.get<ProjectAnalysisReport>(`/project-repositories/${repositoryId}/analyses/${analysisId}`);
 export const cancelProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/cancel`, {});
 export const retryProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/retry`, {});
+export const decideProjectSuggestion = (repositoryId: string, analysisId: string, suggestionId: string, action: 'accept' | 'ignore') => http.post<{ suggestionId: string; status: 'accepted' | 'ignored'; taskId: string | null; decidedAt: string }>(`/project-repositories/${repositoryId}/analyses/${analysisId}/suggestions/${suggestionId}/${action}`, {});
