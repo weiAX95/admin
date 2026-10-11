@@ -8,6 +8,7 @@ export interface ProjectRepository {
   branch: string;
   goal: string;
   requirementBaseline: string;
+  baselineVersionId: string | null;
   commitSha: string;
   lastCheckedAt: string;
   createdAt: string;
@@ -17,6 +18,10 @@ export interface ProjectRepository {
 export const listProjectRepositories = () => http.get<{ items: ProjectRepository[] }>('/project-repositories');
 export const createProjectRepository = (body: { url: string; branch?: string; goal: string; requirementBaseline?: string }) => http.post<ProjectRepository>('/project-repositories', body);
 export const refreshProjectRepository = (id: string) => http.post<ProjectRepository>(`/project-repositories/${id}/refresh`, {});
+export interface ProjectRequirementBaseline { id: string; repositoryId: string; version: number; contentSha256: string; createdAt: string; content?: string }
+export const listProjectRequirementBaselines = (repositoryId: string) => http.get<{ items: ProjectRequirementBaseline[] }>(`/project-repositories/${repositoryId}/baselines`);
+export const getProjectRequirementBaseline = (repositoryId: string, baselineId: string) => http.get<ProjectRequirementBaseline>(`/project-repositories/${repositoryId}/baselines/${baselineId}`);
+export const createProjectRequirementBaseline = (repositoryId: string, content: string, currentVersionId: string | null) => http.post<ProjectRequirementBaseline>(`/project-repositories/${repositoryId}/baselines`, { content, currentVersionId });
 
 export interface ProjectScan {
   id: string;
@@ -45,6 +50,7 @@ export const getProjectScanFile = (repositoryId: string, scanId: string, path: s
 
 export interface ProjectAnalysisJob {
   id: string; repositoryId: string; scanId: string; commitSha: string; branch: string;
+  baselineVersionId: string | null;
   modelId: string; model: string; status: 'queued' | 'analyzing' | 'completed' | 'failed' | 'canceled';
   attempts: number; maxAttempts: number; canceledAt: string | null;
   errorCode: string | null; summary: string | null; selectedFileCount: number;

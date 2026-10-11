@@ -26,7 +26,7 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
     await connection.query('BEGIN');
     await connection.query('SELECT pg_advisory_xact_lock(748201)');
     const row = (await connection.query(`SELECT s.*,a.id AS analysis_id,a.status AS analysis_status,a.goal AS report_goal,a.requirement_baseline AS report_baseline,a.commit_sha,a.full_name,
-      r.goal AS current_goal,r.requirement_baseline AS current_baseline,r.commit_sha AS current_commit,r.branch AS current_branch,
+      a.baseline_version_id AS report_baseline_version_id,r.goal AS current_goal,r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,r.commit_sha AS current_commit,r.branch AS current_branch,
       f.title AS finding_title,f.evidence_path,f.evidence_line
       FROM project_analysis_suggestions s JOIN project_analyses a ON a.id=s.analysis_id
       JOIN project_repositories r ON r.id=a.repository_id
@@ -42,7 +42,7 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
     const key = fingerprint(row);
     let taskId = null;
     if (action === 'accept') {
-      if (row.report_goal !== row.current_goal || row.report_baseline !== row.current_baseline || row.commit_sha.trim() !== row.current_commit?.trim()) { await connection.query('ROLLBACK'); return fail(409,'项目目标、需求基线或 commit 已变化，请重新分析后确认'); }
+      if (row.report_goal !== row.current_goal || row.report_baseline !== row.current_baseline || row.report_baseline_version_id !== row.current_baseline_version_id || row.commit_sha.trim() !== row.current_commit?.trim()) { await connection.query('ROLLBACK'); return fail(409,'项目目标、需求基线或 commit 已变化，请重新分析后确认'); }
       const duplicate = (await connection.query("SELECT task_id FROM project_suggestion_decisions WHERE owner_id=$1 AND repository_id=$2 AND fingerprint=$3 AND state='accepted' LIMIT 1", [me.id,repositoryId,key])).rows[0];
       if (duplicate) { await connection.query('ROLLBACK'); return fail(409,'相同实践建议已转为任务', { taskId: duplicate.task_id }); }
       const data = await loadData(connection);

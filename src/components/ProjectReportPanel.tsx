@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
-import { addProjectFindingFeedback, cancelProjectAnalysis, decideProjectSuggestion, getProjectAnalysis, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
+import { addProjectFindingFeedback, cancelProjectAnalysis, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
 
 const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败', canceled: '已取消' };
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
@@ -24,6 +24,8 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
   const [feedbackStatus, setFeedbackStatus] = useState<ProjectAnalysisReport['findings'][number]['status']>('unverified');
   const [feedbackReason, setFeedbackReason] = useState('');
   const [savingFeedback, setSavingFeedback] = useState(false);
+  const [requirementContent, setRequirementContent] = useState<string | null>(null);
+  const [requirementLoading, setRequirementLoading] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -87,6 +89,13 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
     } catch (cause) { setError(cause instanceof Error ? cause.message : '校正保存失败'); }
     finally { setSavingFeedback(false); }
   };
+  const showRequirement = async () => {
+    if (!report?.baselineVersionId) return;
+    setRequirementLoading(true);
+    try { setRequirementContent((await getProjectRequirementBaseline(repository.id,report.baselineVersionId)).content || ''); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '需求文档读取失败'); }
+    finally { setRequirementLoading(false); }
+  };
 
   return <Card title="项目分析报告">
     <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
@@ -115,6 +124,7 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
       {!report.analysisCoverageComplete && <Alert type="warning" showIcon message="本次报告只覆盖部分已扫描内容；未发现实现不代表整个仓库没有实现" style={{ marginBottom: 12 }} />}
       <Typography.Paragraph><strong>项目目标：</strong>{report.goal}</Typography.Paragraph>
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
+      {report.baselineVersionId && <Button size="small" loading={requirementLoading} onClick={() => void showRequirement()}>查看本报告固定的需求正文</Button>}
       <Typography.Paragraph>{report.summary}</Typography.Paragraph>
       <Typography.Title level={5}>技术栈线索</Typography.Title>
       <Typography.Paragraph type="secondary">以下内容来自该 commit 的依赖清单，不代表运行环境已通过验证。</Typography.Paragraph>
@@ -155,6 +165,9 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
       <Typography.Paragraph type="secondary">校正会作为独立记录保存，原始模型结论和证据不变。</Typography.Paragraph>
       <Select aria-label="人工判断" value={feedbackStatus} onChange={setFeedbackStatus} style={{ width: '100%', marginBottom: 12 }} options={Object.entries(findingStates).map(([value,label]) => ({ value,label }))} />
       <Input.TextArea aria-label="校正理由" value={feedbackReason} onChange={event => setFeedbackReason(event.target.value)} rows={4} maxLength={1000} showCount placeholder="请说明判断依据（至少 10 字）" />
+    </Modal>
+    <Modal title="报告引用的需求文档" open={requirementContent !== null} onCancel={() => setRequirementContent(null)} footer={<Button onClick={() => setRequirementContent(null)}>关闭</Button>} width={720}>
+      <Typography.Paragraph style={{ whiteSpace: 'pre-wrap' }}>{requirementContent}</Typography.Paragraph>
     </Modal>
   </Card>;
 }

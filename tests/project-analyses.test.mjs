@@ -6,6 +6,7 @@ import { createPgTestServer } from './pg-helper.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from '../mock/project-analyses.mjs';
 import { handleProjectSuggestionAction } from '../mock/project-suggestion-actions.mjs';
 import { handleProjectFindingFeedback } from '../mock/project-finding-feedback.mjs';
+import { handleProjectRequirementBaselines } from '../mock/project-requirement-baselines.mjs';
 
 const sha = 'a'.repeat(40);
 const report = JSON.stringify({ summary: '发现项目入口，运行状态尚未验证', findings: [{ title: '入口', status: 'implemented', detail: '存在入口函数', evidence: { path: 'src/main.ts', line: 1, excerpt: 'export function main() {}' } }], suggestions: [{ topic: '验证入口', reason: '静态代码不足以证明运行', practice: '添加集成测试', acceptance: '入口测试通过', findingIndex: 0, impact: 'high', impactReason: '缺少运行验证会阻碍部署', prerequisites: ['集成测试'] }] });
@@ -102,6 +103,29 @@ test('completed report stores fixed-commit package evidence for technology hints
   assert.equal(await waitFor(client,started.data.id),'completed');
   const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
   assert.deepEqual(detail.technologies,[{ name: 'React', packageName: 'react', evidence: { path: 'package.json', line: 3, excerpt: '"react": "^19.0.0"', gitSha: 'd'.repeat(40) } }]);
+});
+
+test('analysis fixes the requirement document version and flags a newer version as stale', async t => {
+  const { client } = await createPgTestServer(t);
+  const { repositoryId, scanId, path } = await fixture(client);
+  const me = { id: 'member', role: 'member' };
+  const baselinePath = `/api/project-repositories/${repositoryId}/baselines`;
+  const first = await handleProjectRequirementBaselines({ pathname: baselinePath, method: 'POST', client, me, readBody: async () => ({ content: 'REQ-001: 入口能够启动', currentVersionId: null }) });
+  let seenDocument, plannedChars;
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async (_db,_job,messages) => {
+    seenDocument = JSON.parse(messages[1].content).requirementDocument;
+    plannedChars = messages.reduce((total,message) => total + message.content.length,0);
+    return { output: report, promptTokens: 2, completionTokens: 3 };
+  } });
+  assert.equal(await waitFor(client,started.data.id),'completed');
+  assert.equal(seenDocument,'REQ-001: 入口能够启动');
+  assert.equal(Number((await client.query('SELECT reserved_tokens FROM model_rate_reservations WHERE run_id=$1',[`${started.data.id}:1`])).rows[0].reserved_tokens),plannedChars + 2048);
+  const second = await handleProjectRequirementBaselines({ pathname: baselinePath, method: 'POST', client, me, readBody: async () => ({ content: 'REQ-001: 入口启动并处理错误', currentVersionId: first.data.id }) });
+  assert.equal(second.status,201);
+  const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.equal(detail.baselineVersionId,first.data.id);
+  assert.deepEqual(detail.staleReasons,['需求基线已变化']);
+  assert.equal((await handleProjectRequirementBaselines({ pathname: `${baselinePath}/${first.data.id}`, method: 'GET', client, me })).data.content,'REQ-001: 入口能够启动');
 });
 
 test('a later module failure retains earlier call cost without publishing a partial report', async t => {

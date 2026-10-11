@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import { createPgTestServer } from './pg-helper.mjs';
+import { handleProjectRequirementBaselines } from '../mock/project-requirement-baselines.mjs';
+
+test('requirement documents are immutable versions with ownership and optimistic checks', async t => {
+  const { client, base } = await createPgTestServer(t);
+  const repositoryId = crypto.randomUUID();
+  await client.query("INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,requirement_baseline,commit_sha) VALUES($1,'member','octocat/baseline','main','学习项目','旧标签',$2)",[repositoryId,'a'.repeat(40)]);
+  const pathname = `/api/project-repositories/${repositoryId}/baselines`;
+  const me = { id: 'member' };
+  const firstContent = 'REQ-001: 支持创建任务\nREQ-002: 支持查看任务';
+  const first = await handleProjectRequirementBaselines({ pathname, method: 'POST', client, me, readBody: async () => ({ content: firstContent, currentVersionId: null }) });
+  assert.equal(first.status,201);
+  assert.equal(first.data.version,1);
+  assert.equal(first.data.content,firstContent);
+  assert.equal((await handleProjectRequirementBaselines({ pathname, method: 'POST', client, me, readBody: async () => ({ content: '新内容', currentVersionId: null }) })).status,409);
+  assert.equal((await handleProjectRequirementBaselines({ pathname, method: 'POST', client, me: { id: 'learner' }, readBody: async () => ({ content: '新内容', currentVersionId: null }) })).status,404);
+  assert.equal((await handleProjectRequirementBaselines({ pathname, method: 'POST', client, me, readBody: async () => ({ content: 'api_key=' + 'x'.repeat(30), currentVersionId: first.data.id }) })).status,400);
+  const second = await handleProjectRequirementBaselines({ pathname, method: 'POST', client, me, readBody: async () => ({ content: 'REQ-001: 支持创建并编辑任务', currentVersionId: first.data.id }) });
+  assert.equal(second.status,201);
+  assert.equal(second.data.version,2);
+  const list = await handleProjectRequirementBaselines({ pathname, method: 'GET', client, me });
+  assert.deepEqual(list.data.items.map(row => row.version),[2,1]);
+  assert.equal('content' in list.data.items[0],false);
+  const original = await handleProjectRequirementBaselines({ pathname: `${pathname}/${first.data.id}`, method: 'GET', client, me });
+  assert.equal(original.data.content,firstContent);
+  assert.equal((await client.query('SELECT baseline_version_id,requirement_baseline FROM project_repositories WHERE id=$1',[repositoryId])).rows[0].baseline_version_id,second.data.id);
+  assert.equal((await fetch(`${base}${pathname.slice(4)}`)).status,401);
+  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
+  const { token } = await login.json();
+  assert.equal((await fetch(`${base}${pathname.slice(4)}`, { headers: { Authorization: `Bearer ${token}` } })).status,200);
+});
