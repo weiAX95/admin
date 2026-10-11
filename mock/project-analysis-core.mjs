@@ -4,6 +4,31 @@ const isObject = value => value !== null && typeof value === 'object' && !Array.
 const exactKeys = (value, keys) => isObject(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const boundedText = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 const categoryOrder = { documentation: 0, config: 1, source: 2, test: 3 };
+const packageTechnologies = new Map([
+  ['react','React'], ['vite','Vite'], ['typescript','TypeScript'], ['next','Next.js'], ['vue','Vue'], ['@angular/core','Angular'],
+  ['express','Express'], ['fastify','Fastify'], ['pg','node-postgres'], ['prisma','Prisma'], ['tailwindcss','Tailwind CSS'], ['antd','Ant Design'],
+]);
+
+export function detectProjectTechnologies(files) {
+  const found = new Map();
+  for (const file of [...files].sort((a,b) => a.path.localeCompare(b.path))) {
+    if (file.status !== 'read' || typeof file.content !== 'string' || !/(^|\/)package\.json$/.test(file.path) || containsKnownSecret(file.content)) continue;
+    let manifest;
+    try { manifest = JSON.parse(file.content); } catch { continue; }
+    if (!isObject(manifest)) continue;
+    const dependencies = { ...(isObject(manifest.dependencies) ? manifest.dependencies : {}), ...(isObject(manifest.devDependencies) ? manifest.devDependencies : {}) };
+    const lines = file.content.split(/\r?\n/);
+    for (const [dependency,name] of packageTechnologies) {
+      if (typeof dependencies[dependency] !== 'string' || found.has(name)) continue;
+      const literal = JSON.stringify(dependency);
+      const matches = lines.flatMap((line,index) => line.length <= 300 && line.includes(literal) && /^\s*"[^"\n]+"\s*:/.test(line) ? [index] : []);
+      if (matches.length !== 1) continue;
+      const index = matches[0];
+      found.set(name,{ name, packageName: dependency, path: file.path, line: index + 1, excerpt: lines[index].trim(), gitSha: String(file.git_sha || file.gitSha).trim() });
+    }
+  }
+  return [...found.values()].sort((a,b) => a.name.localeCompare(b.name)).slice(0,30);
+}
 
 export function projectModuleKey(path) {
   const parts = path.split('/');

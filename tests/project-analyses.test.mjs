@@ -87,6 +87,21 @@ test('analysis calls the model per selected module and merges evidence with cumu
   assert.equal((await client.query('SELECT reserved_requests::int AS calls FROM model_rate_reservations WHERE run_id=$1', [`${started.data.id}:1`])).rows[0].calls,2);
 });
 
+test('completed report stores fixed-commit package evidence for technology hints', async t => {
+  const { client } = await createPgTestServer(t);
+  const { scanId, path } = await fixture(client);
+  const content = '{\n  "dependencies": {\n    "react": "^19.0.0"\n  }\n}';
+  await client.query("INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,content,content_sha256) VALUES($1,'package.json',$2,$3,'config','read',$4,$5)",[scanId,'d'.repeat(40),content.length,content,crypto.createHash('sha256').update(content).digest('hex')]);
+  const me = { id: 'member', role: 'member' };
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async (_db,_job,messages) => {
+    const input = JSON.parse(messages[1].content);
+    return { output: JSON.stringify({ summary: '已查看模块', findings: [{ title: input.moduleKey, status: 'unverified', detail: '尚未运行验证', evidence: null }], suggestions: [] }), promptTokens: 2, completionTokens: 3 };
+  } });
+  assert.equal(await waitFor(client,started.data.id),'completed');
+  const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.deepEqual(detail.technologies,[{ name: 'React', packageName: 'react', evidence: { path: 'package.json', line: 3, excerpt: '"react": "^19.0.0"', gitSha: 'd'.repeat(40) } }]);
+});
+
 test('a later module failure retains earlier call cost without publishing a partial report', async t => {
   const { client } = await createPgTestServer(t);
   const { scanId, path } = await fixture(client);

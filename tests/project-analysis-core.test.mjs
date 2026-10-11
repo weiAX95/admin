@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildProjectModuleCoverage, groupProjectEvidence, mergeProjectModuleReports, selectProjectEvidence, validateProjectReport } from '../mock/project-analysis-core.mjs';
+import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvidence, mergeProjectModuleReports, selectProjectEvidence, validateProjectReport } from '../mock/project-analysis-core.mjs';
 
 const files = [
   { path: 'src/app.ts', category: 'source', status: 'read', content: 'export const app = true;\nrun(app);\n', git_sha: 'a'.repeat(40) },
@@ -50,6 +50,17 @@ test('module plan caps model calls and aggregation keeps each finding and sugges
 test('legacy scan content containing a known credential is never selected for a model', () => {
   const legacy = { path: 'src/old.ts', category: 'source', status: 'read', content: 'const key = "sk-' + 'x'.repeat(24) + '";', git_sha: 'd'.repeat(40) };
   assert.deepEqual(selectProjectEvidence([...files, legacy]).map(file => file.path), ['README.md', 'src/app.ts']);
+});
+
+test('technology hints only quote declared dependencies from readable manifests', () => {
+  const manifest = { path: 'package.json', status: 'read', content: '{\n  "dependencies": {\n    "react": "^19.0.0",\n    "vite": "^6.0.0"\n  },\n  "scripts": {\n    "express": "not a dependency"\n  }\n}', git_sha: 'e'.repeat(40) };
+  const hidden = { path: 'packages/hidden/package.json', status: 'excluded', content: '{"dependencies":{"next":"1"}}', git_sha: 'f'.repeat(40) };
+  const detected = detectProjectTechnologies([hidden,manifest]);
+  assert.deepEqual(detected.map(item => item.name),['React','Vite']);
+  assert.deepEqual(detected[0],{ name: 'React', packageName: 'react', path: 'package.json', line: 3, excerpt: '"react": "^19.0.0",', gitSha: 'e'.repeat(40) });
+  assert.deepEqual(detectProjectTechnologies([{ ...manifest, content: '{invalid' }]),[]);
+  const ambiguous = manifest.content.replace('"express": "not a dependency"','"react": "not a dependency"');
+  assert.deepEqual(detectProjectTechnologies([{ ...manifest, content: ambiguous }]).map(item => item.name),['Vite']);
 });
 
 test('model report requires exact evidence from selected commit lines', () => {

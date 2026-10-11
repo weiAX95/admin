@@ -52,6 +52,8 @@ docker compose exec -T postgres pg_dump -U admin -Fc agent_admin > agent_admin.d
 
 仓库所属账号可对报告结论另存人工校正，指定状态并填写依据；所有校正按时间展示，原模型判断及证据不变。报告若与当前目标、需求基线或 commit 不一致，页面显示重审提醒并禁用旧建议转任务；后端也独立检查。
 
+报告另列技术栈线索：当前仅从固定扫描 commit 的可读 `package.json` 依赖项提取已知技术，保存包名及源文件行链接。它是依赖声明证据，不代表运行验证；其他生态清单与核心流程分析仍在待办。
+
 可使用 `npm run backup:create` 生成本地加密手动备份，再用 `npm run backup:verify -- /绝对路径/备份文件.agbackup` 独立校验。运行前必须设置 `DATABASE_URL` 和独立的 `BACKUP_ENCRYPTION_KEY`（64 位十六进制，代表 32 字节密钥）；可用 `BACKUP_DIR` 指定输出目录，默认写入已被 Git 忽略的 `backups/`。备份包含 PostgreSQL 自定义格式转储、`ASSET_DIR` 笔记附件及 `PROMPT_MEDIA_DIR` 提示词媒体；缺省附件目录在 `mock/` 下。归档以 AES-256-GCM 加密并附逐文件 SHA-256 清单，生成后立即完整解密和校验。**密钥须在仓库及备份目录之外单独保存**；丢失密钥无法恢复。管理员也可在“系统设置 → 本地加密备份”创建后台任务并下载归档；任务状态记录在数据库中，服务重启后未完成任务标记失败。当前没有自动调度或恢复向导；本地备份不防整机或磁盘丢失。
 
 隔离恢复演练：先创建一个**空白且未供 API 使用**的 PostgreSQL 数据库；把其连接 URL 放入 `RESTORE_DATABASE_URL`，当前源库 URL 保留在 `DATABASE_URL`。将两个新的、不存在的附件目录分别指定为 `RESTORE_ASSET_DIR` 和 `RESTORE_PROMPT_MEDIA_DIR`，再运行 `npm run backup:restore:isolated -- /绝对路径/备份文件.agbackup`。命令先完整校验归档，再检查目标库为空和附件路径未占用，最后执行 `pg_restore` 并放置附件；不会自动切换运行中的 API。失败后应丢弃该隔离库并重新建库演练，尤其是 `pg_restore` 中途失败时。当前归档的数据库快照与文件附件采集不在同一个原子事务中，正式恢复前还需业务一致性核对。

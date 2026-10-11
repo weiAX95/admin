@@ -55,6 +55,7 @@ export interface ProjectAnalysisJob {
 export interface ProjectAnalysisReport extends ProjectAnalysisJob {
   fullName: string; goal: string; requirementBaseline: string; staleReasons: string[];
   modules: { moduleKey: string; indexedCount: number; readCount: number; selectedCount: number; truncatedCount: number; excludedCount: number; failedCount: number; unscannedCount: number; summary: string | null }[];
+  technologies: { name: string; packageName: string; evidence: { path: string; line: number; excerpt: string; gitSha: string } }[];
   findings: { id: string; moduleKey: string | null; title: string; status: 'implemented' | 'partial' | 'not_found' | 'unverified'; detail: string; evidence: null | { type: 'code' | 'test' | 'document'; path: string; line: number; excerpt: string; gitSha: string }; feedback: { id: string; correctedStatus: 'implemented' | 'partial' | 'not_found' | 'unverified'; reason: string; author: string; createdAt: string }[] }[];
   suggestions: { id: string; findingId: string | null; topic: string; reason: string; practice: string; acceptance: string; decision: null | { status: 'accepted' | 'ignored'; taskId: string | null; decidedAt: string } }[];
 }

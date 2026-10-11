@@ -5,7 +5,7 @@ import { modelConnectionAvailable } from './model-connections.mjs';
 import { modelUsable, supportedProvider } from './model-governance.mjs';
 import { checkTokenReservations, reserveRunTokens } from './model-quotas.mjs';
 import { checkModelRate, reserveModelRate } from './model-rate-limits.mjs';
-import { buildProjectModuleCoverage, groupProjectEvidence, mergeProjectModuleReports, selectProjectEvidence, validateProjectReport } from './project-analysis-core.mjs';
+import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvidence, mergeProjectModuleReports, selectProjectEvidence, validateProjectReport } from './project-analysis-core.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -66,6 +66,7 @@ async function saveReport(db, job, report, metadata) {
     if (!updated.rowCount) throw new Error('分析作业已失效');
     const moduleSummaries = new Map(metadata.results.map(result => [result.moduleKey,result.report.summary]));
     for (const module of metadata.modules) await client.query('INSERT INTO project_analysis_modules(analysis_id,module_key,indexed_count,read_count,selected_count,truncated_count,excluded_count,failed_count,unscanned_count,summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [job.id,module.moduleKey,module.indexedCount,module.readCount,module.selectedCount,module.truncatedCount,module.excludedCount,module.failedCount,module.unscannedCount,moduleSummaries.get(module.moduleKey) || null]);
+    for (const item of metadata.technologies) await client.query('INSERT INTO project_analysis_technologies(analysis_id,name,package_name,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha) VALUES($1,$2,$3,$4,$5,$6,$7)', [job.id,item.name,item.packageName,item.path,item.line,item.excerpt,item.gitSha]);
     const findingIds = [];
     for (const [position, finding] of report.findings.entries()) {
       const id = crypto.randomUUID();
@@ -94,6 +95,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     const files = (await db.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1', [job.scan_id])).rows;
     const selected = selectProjectEvidence(files);
     const modules = buildProjectModuleCoverage(files,selected);
+    const technologies = detectProjectTechnologies(files);
     if (!selected.length) throw Object.assign(new Error('扫描没有可分析文本'), { code: 'NO_EVIDENCE' });
     const plan = modelPlan(job,selected);
     const availableCount = files.filter(file => file.status === 'read' && file.content !== null).length;
@@ -111,7 +113,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
       if (!coverageComplete) report.findings = report.findings.map(finding => finding.status === 'not_found' ? { ...finding, status: 'unverified', detail: `${finding.detail}（本次分析未覆盖全部可读文件）` } : finding);
       results.push({ moduleKey: group.moduleKey, report });
     }
-    await saveReport(db, job, mergeProjectModuleReports(results), { selectedCount: selected.length, availableCount, coverageComplete, modules, results });
+    await saveReport(db, job, mergeProjectModuleReports(results), { selectedCount: selected.length, availableCount, coverageComplete, modules, technologies, results });
   } catch (error) {
     const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
     await db.query("UPDATE project_analyses SET status='failed',error_code=$2,summary=NULL,finished_at=now() WHERE id=$1 AND status='analyzing'", [id,errorCode]);
@@ -149,8 +151,9 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     const findings = (await client.query('SELECT * FROM project_analysis_findings WHERE analysis_id=$1 ORDER BY position', [analysisId])).rows.map(row => ({ id: row.id, moduleKey: row.module_key, title: row.title, status: row.status, detail: row.detail, evidence: row.evidence_path === null ? null : { type: row.evidence_type, path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha?.trim() || null }, feedback: feedbackByFinding.get(row.id) || [] }));
     const suggestions = (await client.query('SELECT s.*,d.state AS decision_state,d.task_id,d.decided_at FROM project_analysis_suggestions s LEFT JOIN project_suggestion_decisions d ON d.suggestion_id=s.id WHERE s.analysis_id=$1 ORDER BY s.position', [analysisId])).rows.map(row => ({ id: row.id, findingId: row.finding_id, topic: row.topic, reason: row.reason, practice: row.practice, acceptance: row.acceptance, decision: row.decision_state ? { status: row.decision_state, taskId: row.task_id, decidedAt: row.decided_at } : null }));
     const modules = (await client.query('SELECT * FROM project_analysis_modules WHERE analysis_id=$1 ORDER BY module_key', [analysisId])).rows.map(row => ({ moduleKey: row.module_key, indexedCount: row.indexed_count, readCount: row.read_count, selectedCount: row.selected_count, truncatedCount: row.truncated_count, excludedCount: row.excluded_count, failedCount: row.failed_count, unscannedCount: row.unscanned_count, summary: row.summary }));
+    const technologies = (await client.query('SELECT * FROM project_analysis_technologies WHERE analysis_id=$1 ORDER BY name', [analysisId])).rows.map(row => ({ name: row.name, packageName: row.package_name, evidence: { path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha.trim() } }));
     const staleReasons = [job.goal !== repository.goal ? '项目目标已变化' : null, job.requirement_baseline !== repository.requirement_baseline ? '需求基线已变化' : null, job.commit_sha.trim() !== repository.commit_sha.trim() ? '仓库 commit 已变化' : null].filter(Boolean);
-    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, staleReasons, findings, suggestions, modules } };
+    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, staleReasons, findings, suggestions, modules, technologies } };
   }
   if (method === 'POST' && analysisId && action === 'cancel') {
     const pooled = client instanceof pg.Pool;

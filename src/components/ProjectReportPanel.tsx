@@ -114,6 +114,9 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
       <Typography.Paragraph><strong>项目目标：</strong>{report.goal}</Typography.Paragraph>
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
       <Typography.Paragraph>{report.summary}</Typography.Paragraph>
+      <Typography.Title level={5}>技术栈线索</Typography.Title>
+      <Typography.Paragraph type="secondary">以下内容来自该 commit 的依赖清单，不代表运行环境已通过验证。</Typography.Paragraph>
+      {report.technologies.length ? <Space wrap style={{ marginBottom: 16 }}>{report.technologies.map(item => <Tag key={item.name}><a href={sourceLink(item.evidence.path,item.evidence.line)} target="_blank" rel="noopener noreferrer">{item.name}</a> <Typography.Text type="secondary">({item.packageName})</Typography.Text></Tag>)}</Space> : <Typography.Paragraph type="secondary">扫描范围内未发现可确认的依赖清单线索</Typography.Paragraph>}
       <Typography.Title level={5}>模块覆盖</Typography.Title>
       {report.modules.length ? <Table rowKey="moduleKey" size="small" pagination={false} dataSource={report.modules} scroll={{ x: 650 }} columns={[
         { title: '模块', dataIndex: 'moduleKey' },
