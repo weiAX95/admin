@@ -232,7 +232,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     const datasetVersionId = url.searchParams.get('datasetVersionId');
     const metricVersionId = url.searchParams.get('metricVersionId');
     if (!datasetVersionId || !metricVersionId) return fail('请选择数据集和指标版本');
-    const rows = (await client.query("SELECT b.id,b.created_at,e.title AS experiment_title FROM experiment_batches b JOIN experiments e ON e.id=b.experiment_id JOIN experiment_dataset_versions selected ON selected.id=$1 JOIN experiment_dataset_versions source ON source.id=b.dataset_version_id WHERE source.dataset_id=selected.dataset_id AND b.metric_version_id=$2 AND b.status IN ('completed','partial') AND EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status='completed' AND r.auto_score IS NOT NULL) ORDER BY b.created_at DESC LIMIT 100", [datasetVersionId, metricVersionId])).rows;
+    const rows = (await client.query("SELECT b.id,b.created_at,e.title AS experiment_title FROM experiment_batches b JOIN experiments e ON e.id=b.experiment_id JOIN experiment_dataset_versions selected ON selected.id=$1 JOIN experiment_dataset_versions source ON source.id=b.dataset_version_id WHERE source.dataset_id=selected.dataset_id AND b.metric_version_id=$2 AND ($3='admin' OR b.owner_id=$4) AND b.status IN ('completed','partial') AND EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status='completed' AND r.auto_score IS NOT NULL) ORDER BY b.created_at DESC LIMIT 100", [datasetVersionId, metricVersionId, me.role, me.id])).rows;
     return ok({ items: rows });
   }
   if (pathname === '/api/experiment-metrics') {
@@ -303,7 +303,12 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   const datasetRunRoute = pathname.match(/^\/api\/experiment-definitions\/([^/]+)\/(dataset-run|regression)$/);
   if (datasetRunRoute && method === 'POST') return createBatch(client, datasetRunRoute[1], me, await readBody(), datasetRunRoute[2] === 'regression' ? 'regression' : 'dataset');
   const reportRoute = pathname.match(/^\/api\/experiment-batches\/([^/]+)\/report$/);
-  if (reportRoute && method === 'GET') return regressionReport(client, reportRoute[1]);
+  if (reportRoute && method === 'GET') {
+    const batch = (await client.query("SELECT owner_id FROM experiment_batches WHERE id=$1 AND kind='regression'", [reportRoute[1]])).rows[0];
+    if (!batch) return fail('回归报告不存在', 404);
+    if (me.role !== 'admin' && batch.owner_id !== me.id) return fail('无权查看此报告', 403);
+    return regressionReport(client, reportRoute[1]);
+  }
   const annotationRoute = pathname.match(/^\/api\/experiment-runs\/([^/]+)\/annotation$/);
   if (annotationRoute) {
     const run = (await client.query('SELECT id,experiment_id,status,user_prompt,output,output_parts,request_messages FROM experiment_runs WHERE id=$1', [annotationRoute[1]])).rows[0];

@@ -36,6 +36,11 @@ test('versioned dataset regression, annotations, candidate pool, chains and cost
   let status='queued';
   for(let i=0;i<50;i++){await new Promise(resolve=>setTimeout(resolve,100));status=(await request(admin,`/experiment-batches/${baseline.data.batchId}`)).data.status;if(status==='completed')break;}
   assert.equal(status,'completed');
+  await api.client.query("UPDATE experiment_models SET allowed_roles=ARRAY['admin','member'] WHERE id=$1",[model.data.id]);
+  const memberDefinition=await request(member,'/experiment-definitions','POST',{...definitionBody,title:'成员自己的实验'});
+  assert.equal(memberDefinition.status,201);
+  const crossOwnerBaseline=await request(member,`/experiment-definitions/${memberDefinition.data.id}/regression`,'POST',{datasetVersionId:versionId,metricVersionId:'default-v1',baselineBatchId:baseline.data.batchId,variantIds:[memberDefinition.data.variants[0].id]});
+  assert.equal(crossOwnerBaseline.status,403);
   const regression=await request(admin,`/experiment-definitions/${peer.id}/regression`,'POST',{datasetVersionId:versionId,metricVersionId:'default-v1',baselineBatchId:baseline.data.batchId,variantIds:[peer.variants[0].id]});
   assert.equal(regression.status,202);
   let batch;
@@ -43,6 +48,10 @@ test('versioned dataset regression, annotations, candidate pool, chains and cost
   assert.equal(batch.status,'completed');
   const report=await request(admin,`/experiment-batches/${regression.data.batchId}/report`);
   assert.equal(report.data.total,2);
+  assert.equal((await request(member,`/experiment-batches/${regression.data.batchId}/report`)).status,403);
+  const memberBaselines=await request(member,`/experiment-baselines?datasetVersionId=${versionId}&metricVersionId=default-v1`);
+  assert.equal(memberBaselines.status,200);
+  assert.deepEqual(memberBaselines.data.items,[]);
   assert.equal(report.data.passRate,1);
   assert.deepEqual(report.data.degraded,[]);
   assert.equal(report.data.byDifficulty.length,2);

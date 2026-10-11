@@ -69,6 +69,7 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   if (kind === 'regression') {
     const baseline = (await client.query('SELECT * FROM experiment_batches WHERE id=$1', [body.baselineBatchId])).rows[0];
     if (!baseline) return fail('固定 baseline 不存在', 409);
+    if (!own(baseline, me)) return fail('无权使用该 baseline', 403);
     if (baseline.metric_version_id !== metricVersionId) return fail('baseline 指标版本不同，不能比较', 409);
     const baselineVersion = (await client.query('SELECT dataset_id FROM experiment_dataset_versions WHERE id=$1', [baseline.dataset_version_id])).rows[0];
     const currentVersion = (await client.query('SELECT dataset_id FROM experiment_dataset_versions WHERE id=$1', [body.datasetVersionId])).rows[0];
