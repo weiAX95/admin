@@ -57,6 +57,7 @@ import { handleProjectRepositories } from './project-repositories.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
 import { handleProjectSuggestionAction } from './project-suggestion-actions.mjs';
+import { handleProjectFindingFeedback } from './project-finding-feedback.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
@@ -1651,7 +1652,8 @@ const server = http.createServer((req, res) => {
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       const pathname = new URL(req.url, 'http://localhost').pathname;
-      const response = await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
+      const response = await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
+        || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
         || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
         || await handleProjectScans({ pathname, method: req.method, client: pool, me, url: new URL(req.url, 'http://localhost') })
         || await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) });

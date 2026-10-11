@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Alert, App, Button, Card, Empty, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
-import { cancelProjectAnalysis, decideProjectSuggestion, getProjectAnalysis, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
+import { addProjectFindingFeedback, cancelProjectAnalysis, decideProjectSuggestion, getProjectAnalysis, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
 
 const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败', canceled: '已取消' };
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
@@ -18,6 +18,10 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
   const [starting, setStarting] = useState(false);
   const [actingId, setActingId] = useState('');
   const [actingSuggestionId, setActingSuggestionId] = useState('');
+  const [feedbackFindingId, setFeedbackFindingId] = useState('');
+  const [feedbackStatus, setFeedbackStatus] = useState<ProjectAnalysisReport['findings'][number]['status']>('unverified');
+  const [feedbackReason, setFeedbackReason] = useState('');
+  const [savingFeedback, setSavingFeedback] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -69,6 +73,18 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
     } catch (cause) { setError(cause instanceof Error ? cause.message : '建议处理失败'); }
     finally { setActingSuggestionId(''); }
   };
+  const saveFeedback = async () => {
+    if (!report || !feedbackFindingId) return;
+    setSavingFeedback(true);
+    try {
+      await addProjectFindingFeedback(repository.id,report.id,feedbackFindingId,feedbackStatus,feedbackReason);
+      setReport(await getProjectAnalysis(repository.id,report.id));
+      setFeedbackFindingId('');
+      setFeedbackReason('');
+      message.success('人工校正已记录');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '校正保存失败'); }
+    finally { setSavingFeedback(false); }
+  };
 
   return <Card title="项目分析报告">
     <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
@@ -93,6 +109,7 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
       </Space> },
     ]} />
     {report && <Card size="small" title={`报告 · ${report.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setReport(null)}>关闭</Button>}>
+      {report.staleReasons.length > 0 && <Alert type="warning" showIcon message="报告基线已变化，旧建议需重审" description={report.staleReasons.join('；')} style={{ marginBottom: 12 }} />}
       {!report.analysisCoverageComplete && <Alert type="warning" showIcon message="本次报告只覆盖部分已扫描内容；未发现实现不代表整个仓库没有实现" style={{ marginBottom: 12 }} />}
       <Typography.Paragraph><strong>项目目标：</strong>{report.goal}</Typography.Paragraph>
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
@@ -111,6 +128,8 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
       {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}{finding.moduleKey && <Tag>{finding.moduleKey}</Tag>}<Tag>{findingStates[finding.status]}</Tag></Space>}>
         <Typography.Paragraph>{finding.detail}</Typography.Paragraph>
         {finding.evidence && <Typography.Paragraph type="secondary">{finding.evidence.type === 'test' ? '测试证据' : finding.evidence.type === 'document' ? '文档线索' : '代码证据'}：<a href={sourceLink(finding.evidence.path, finding.evidence.line)} target="_blank" rel="noopener noreferrer">{finding.evidence.path}:{finding.evidence.line}</a><br /><code>{finding.evidence.excerpt}</code></Typography.Paragraph>}
+        {finding.feedback.map(entry => <Typography.Paragraph key={entry.id} type="secondary"><Tag color="blue">人工判断：{findingStates[entry.correctedStatus]}</Tag>{entry.reason} · {entry.author} · {new Date(entry.createdAt).toLocaleString('zh-CN')}</Typography.Paragraph>)}
+        <Button size="small" onClick={() => { setFeedbackFindingId(finding.id); setFeedbackStatus(finding.feedback[0]?.correctedStatus || finding.status); setFeedbackReason(''); }}>修正判断</Button>
       </Card>) : <Empty description="暂无结论" />}
       <Typography.Title level={5}>学习建议</Typography.Title>
       {report.suggestions.length ? report.suggestions.map(suggestion => <Card key={suggestion.id} size="small" style={{ marginBottom: 8 }} title={suggestion.topic}>
@@ -120,10 +139,15 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
         {suggestion.decision?.status === 'accepted' && <Space><Tag color="success">已加入任务</Tag>{suggestion.decision.taskId && <Link to={`/tasks/${suggestion.decision.taskId}`}>查看任务</Link>}</Space>}
         {suggestion.decision?.status === 'ignored' && <Tag>已忽略</Tag>}
         {!suggestion.decision && <Space>
-          <Popconfirm title="确认将此建议创建为学习任务？" description="任务会保留实践、验收要求与当前报告来源。" onConfirm={() => void decide(suggestion.id,'accept')}><Button type="primary" size="small" loading={actingSuggestionId === suggestion.id}>加入任务</Button></Popconfirm>
+          <Popconfirm title="确认将此建议创建为学习任务？" description="任务会保留实践、验收要求与当前报告来源。" onConfirm={() => void decide(suggestion.id,'accept')}><Button type="primary" size="small" disabled={report.staleReasons.length > 0} loading={actingSuggestionId === suggestion.id}>加入任务</Button></Popconfirm>
           <Popconfirm title="确认忽略此建议？" onConfirm={() => void decide(suggestion.id,'ignore')}><Button size="small" loading={actingSuggestionId === suggestion.id}>忽略</Button></Popconfirm>
         </Space>}
       </Card>) : <Empty description="暂无建议" />}
     </Card>}
+    <Modal title="修正报告判断" open={Boolean(feedbackFindingId)} onCancel={() => setFeedbackFindingId('')} onOk={() => void saveFeedback()} okText="保存校正" okButtonProps={{ disabled: feedbackReason.trim().length < 10 || feedbackReason.trim().length > 1000, loading: savingFeedback }}>
+      <Typography.Paragraph type="secondary">校正会作为独立记录保存，原始模型结论和证据不变。</Typography.Paragraph>
+      <Select aria-label="人工判断" value={feedbackStatus} onChange={setFeedbackStatus} style={{ width: '100%', marginBottom: 12 }} options={Object.entries(findingStates).map(([value,label]) => ({ value,label }))} />
+      <Input.TextArea aria-label="校正理由" value={feedbackReason} onChange={event => setFeedbackReason(event.target.value)} rows={4} maxLength={1000} showCount placeholder="请说明判断依据（至少 10 字）" />
+    </Modal>
   </Card>;
 }

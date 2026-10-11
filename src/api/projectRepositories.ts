@@ -53,9 +53,9 @@ export interface ProjectAnalysisJob {
   createdAt: string; startedAt: string | null; finishedAt: string | null;
 }
 export interface ProjectAnalysisReport extends ProjectAnalysisJob {
-  fullName: string; goal: string; requirementBaseline: string;
+  fullName: string; goal: string; requirementBaseline: string; staleReasons: string[];
   modules: { moduleKey: string; indexedCount: number; readCount: number; selectedCount: number; truncatedCount: number; excludedCount: number; failedCount: number; unscannedCount: number; summary: string | null }[];
-  findings: { id: string; moduleKey: string | null; title: string; status: 'implemented' | 'partial' | 'not_found' | 'unverified'; detail: string; evidence: null | { type: 'code' | 'test' | 'document'; path: string; line: number; excerpt: string; gitSha: string } }[];
+  findings: { id: string; moduleKey: string | null; title: string; status: 'implemented' | 'partial' | 'not_found' | 'unverified'; detail: string; evidence: null | { type: 'code' | 'test' | 'document'; path: string; line: number; excerpt: string; gitSha: string }; feedback: { id: string; correctedStatus: 'implemented' | 'partial' | 'not_found' | 'unverified'; reason: string; author: string; createdAt: string }[] }[];
   suggestions: { id: string; findingId: string | null; topic: string; reason: string; practice: string; acceptance: string; decision: null | { status: 'accepted' | 'ignored'; taskId: string | null; decidedAt: string } }[];
 }
 export const listProjectAnalyses = (repositoryId: string) => http.get<{ items: ProjectAnalysisJob[] }>(`/project-repositories/${repositoryId}/analyses`);
@@ -64,3 +64,4 @@ export const getProjectAnalysis = (repositoryId: string, analysisId: string) => 
 export const cancelProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/cancel`, {});
 export const retryProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/retry`, {});
 export const decideProjectSuggestion = (repositoryId: string, analysisId: string, suggestionId: string, action: 'accept' | 'ignore') => http.post<{ suggestionId: string; status: 'accepted' | 'ignored'; taskId: string | null; decidedAt: string }>(`/project-repositories/${repositoryId}/analyses/${analysisId}/suggestions/${suggestionId}/${action}`, {});
+export const addProjectFindingFeedback = (repositoryId: string, analysisId: string, findingId: string, correctedStatus: ProjectAnalysisReport['findings'][number]['status'], reason: string) => http.post(`/project-repositories/${repositoryId}/analyses/${analysisId}/findings/${findingId}/feedback`, { correctedStatus, reason });

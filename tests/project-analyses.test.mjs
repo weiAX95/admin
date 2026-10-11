@@ -5,6 +5,7 @@ import http from 'node:http';
 import { createPgTestServer } from './pg-helper.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from '../mock/project-analyses.mjs';
 import { handleProjectSuggestionAction } from '../mock/project-suggestion-actions.mjs';
+import { handleProjectFindingFeedback } from '../mock/project-finding-feedback.mjs';
 
 const sha = 'a'.repeat(40);
 const report = JSON.stringify({ summary: '发现项目入口，运行状态尚未验证', findings: [{ title: '入口', status: 'implemented', detail: '存在入口函数', evidence: { path: 'src/main.ts', line: 1, excerpt: 'export function main() {}' } }], suggestions: [{ topic: '验证入口', reason: '静态代码不足以证明运行', practice: '添加集成测试', acceptance: '入口测试通过', findingIndex: 0 }] });
@@ -159,6 +160,35 @@ test('suggestion decisions reject stale reports and preserve an ignored choice',
   assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/ignore`, method: 'POST', client, me })).status,200);
   assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/accept`, method: 'POST', client, me })).status,409);
   assert.equal((await client.query("SELECT count(*)::int AS n FROM tasks WHERE category='项目学习'")).rows[0].n,0);
+});
+
+test('human feedback preserves model evidence, author, history, and stale report warning', async t => {
+  const { client, base } = await createPgTestServer(t);
+  const { repositoryId, scanId, path } = await fixture(client);
+  const me = { id: 'member', username: 'member', role: 'member' };
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: report, promptTokens: 2, completionTokens: 3 }) });
+  assert.equal(await waitFor(client,started.data.id),'completed');
+  const initial = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  const findingId = initial.findings[0].id;
+  const pathname = `${path}/${started.data.id}/findings/${findingId}/feedback`;
+  const request = { pathname, method: 'POST', client, me };
+  assert.equal((await handleProjectFindingFeedback({ ...request, readBody: async () => ({ correctedStatus: 'done', reason: '已经人工验证运行正常' }) })).status,400);
+  assert.equal((await handleProjectFindingFeedback({ ...request, me: { id: 'learner' }, readBody: async () => ({ correctedStatus: 'partial', reason: '仅静态代码可见，尚未在环境中运行' }) })).status,404);
+  assert.equal((await handleProjectFindingFeedback({ ...request, readBody: async () => ({ correctedStatus: 'partial', reason: '仅静态代码可见，尚未在环境中运行' }) })).status,201);
+  assert.equal((await handleProjectFindingFeedback({ ...request, readBody: async () => ({ correctedStatus: 'unverified', reason: '回归测试显示入口尚未通过完整验收' }) })).status,201);
+  assert.equal((await fetch(`${base}${pathname.slice(4)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ correctedStatus: 'partial', reason: '已经确认只覆盖一部分实现' }) })).status,401);
+  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
+  const { token } = await login.json();
+  assert.equal((await fetch(`${base}${pathname.slice(4)}`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ correctedStatus: 'partial', reason: '已经确认只覆盖一部分实现' }) })).status,201);
+  await client.query('UPDATE project_repositories SET commit_sha=$2 WHERE id=$1',[repositoryId,'d'.repeat(40)]);
+  const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.deepEqual(detail.staleReasons,['仓库 commit 已变化']);
+  assert.equal(detail.findings[0].status,'implemented');
+  assert.equal(detail.findings[0].evidence.path,'src/main.ts');
+  assert.equal(detail.findings[0].feedback.length,3);
+  assert.deepEqual(new Set(detail.findings[0].feedback.map(entry => entry.correctedStatus)),new Set(['unverified','partial']));
+  assert.deepEqual(detail.findings[0].feedback.map(entry => entry.author),['member','member','member']);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_finding_feedback WHERE finding_id=$1',[findingId])).rows[0].n,3);
 });
 
 test('analysis submission rejects unavailable models and exhausted daily budget before charging', async t => {

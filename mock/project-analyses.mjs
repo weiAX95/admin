@@ -139,10 +139,18 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (method === 'GET' && analysisId && !action) {
     const job = (await client.query('SELECT * FROM project_analyses WHERE id=$1 AND repository_id=$2', [analysisId,repositoryId])).rows[0];
     if (!job) return fail(404,'分析不存在');
-    const findings = (await client.query('SELECT * FROM project_analysis_findings WHERE analysis_id=$1 ORDER BY position', [analysisId])).rows.map(row => ({ id: row.id, moduleKey: row.module_key, title: row.title, status: row.status, detail: row.detail, evidence: row.evidence_path === null ? null : { type: row.evidence_type, path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha?.trim() || null } }));
+    const feedbackRows = (await client.query('SELECT b.*,u.username FROM project_finding_feedback b JOIN users u ON u.id=b.owner_id WHERE b.analysis_id=$1 ORDER BY b.created_at DESC,b.id DESC', [analysisId])).rows;
+    const feedbackByFinding = new Map();
+    for (const feedback of feedbackRows) {
+      const entries = feedbackByFinding.get(feedback.finding_id) || [];
+      entries.push({ id: feedback.id, correctedStatus: feedback.corrected_status, reason: feedback.reason, author: feedback.username, createdAt: feedback.created_at });
+      feedbackByFinding.set(feedback.finding_id,entries);
+    }
+    const findings = (await client.query('SELECT * FROM project_analysis_findings WHERE analysis_id=$1 ORDER BY position', [analysisId])).rows.map(row => ({ id: row.id, moduleKey: row.module_key, title: row.title, status: row.status, detail: row.detail, evidence: row.evidence_path === null ? null : { type: row.evidence_type, path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha?.trim() || null }, feedback: feedbackByFinding.get(row.id) || [] }));
     const suggestions = (await client.query('SELECT s.*,d.state AS decision_state,d.task_id,d.decided_at FROM project_analysis_suggestions s LEFT JOIN project_suggestion_decisions d ON d.suggestion_id=s.id WHERE s.analysis_id=$1 ORDER BY s.position', [analysisId])).rows.map(row => ({ id: row.id, findingId: row.finding_id, topic: row.topic, reason: row.reason, practice: row.practice, acceptance: row.acceptance, decision: row.decision_state ? { status: row.decision_state, taskId: row.task_id, decidedAt: row.decided_at } : null }));
     const modules = (await client.query('SELECT * FROM project_analysis_modules WHERE analysis_id=$1 ORDER BY module_key', [analysisId])).rows.map(row => ({ moduleKey: row.module_key, indexedCount: row.indexed_count, readCount: row.read_count, selectedCount: row.selected_count, truncatedCount: row.truncated_count, excludedCount: row.excluded_count, failedCount: row.failed_count, unscannedCount: row.unscanned_count, summary: row.summary }));
-    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, findings, suggestions, modules } };
+    const staleReasons = [job.goal !== repository.goal ? '项目目标已变化' : null, job.requirement_baseline !== repository.requirement_baseline ? '需求基线已变化' : null, job.commit_sha.trim() !== repository.commit_sha.trim() ? '仓库 commit 已变化' : null].filter(Boolean);
+    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, staleReasons, findings, suggestions, modules } };
   }
   if (method === 'POST' && analysisId && action === 'cancel') {
     const pooled = client instanceof pg.Pool;
