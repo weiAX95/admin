@@ -10,11 +10,11 @@ const owner=(row,me)=>me.role==='admin'||row.owner_id===me.id;
 async function publicView(client, experimentId) {
   const experiment=(await client.query('SELECT * FROM experiments WHERE id=$1 AND deleted_at IS NULL',[experimentId])).rows[0];
   if(!experiment)return null;
-  if(experiment.record_kind==='manual')return {id:experiment.id,recordKind:'manual',title:experiment.title,taskId:experiment.task_id,prompt:experiment.prompt,model:experiment.model,params:experiment.params,result:experiment.result,score:experiment.score};
+  if(experiment.record_kind==='manual')return {id:experiment.id,recordKind:'manual',title:experiment.title,prompt:experiment.prompt,model:experiment.model,params:experiment.params,result:experiment.result,score:experiment.score};
   const variants=(await client.query('SELECT v.label,m.display_name AS model,v.parameters FROM experiment_variants v JOIN experiment_models m ON m.id=v.model_id WHERE v.experiment_id=$1 AND v.active=true ORDER BY v.position',[experiment.id])).rows.map(row=>({label:row.label,model:row.model,parameters:row.parameters}));
   const batch=(await client.query("SELECT id,created_at,status FROM experiment_batches WHERE experiment_id=$1 AND status IN ('completed','partial') ORDER BY created_at DESC LIMIT 1",[experiment.id])).rows[0];
   const runs=batch?(await client.query('SELECT model_id,api_model,parameters,input_index,status,output,auto_score,prompt_tokens,completion_tokens,latency_ms,cost_usd FROM experiment_runs WHERE batch_id=$1 ORDER BY input_index,created_at',[batch.id])).rows.map(row=>({modelId:row.model_id,apiModel:row.api_model,parameters:row.parameters,inputIndex:row.input_index,status:row.status,output:row.output,autoScore:row.auto_score,promptTokens:row.prompt_tokens,completionTokens:row.completion_tokens,latencyMs:row.latency_ms,costUsd:row.cost_usd})):[];
-  return {id:experiment.id,recordKind:'definition',title:experiment.title,taskId:experiment.task_id,systemPrompt:experiment.system_prompt,userPrompt:experiment.user_prompt,variables:experiment.variables,variants,latestBatch:batch?{createdAt:batch.created_at,status:batch.status,runs}:null};
+  return {id:experiment.id,recordKind:'definition',title:experiment.title,systemPrompt:experiment.system_prompt,userPrompt:experiment.user_prompt,variables:experiment.variables,variants,latestBatch:batch?{createdAt:batch.created_at,status:batch.status,runs}:null};
 }
 
 export async function handlePublicExperimentShare({pathname,method,client}){

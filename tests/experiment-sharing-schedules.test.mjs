@@ -8,7 +8,7 @@ test('public sharing is hashed, live, expiring and revocable', async t => {
   const login=async(username,password)=>{const r=await fetch(`${api.base}/auth/login`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});return(await r.json()).token;};
   const admin=await login('admin','admin123'),member=await login('member','test');
   const call=async(token,path,method='GET',body)=>{const response=await fetch(`${api.base}${path}`,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},body:body===undefined?undefined:JSON.stringify(body)});return{status:response.status,data:await response.json()};};
-  const experiment=(await call(admin,'/experiments','POST',{title:'公开实验',prompt:'原提示',model:'manual',result:'原结果',score:3})).data;
+  const experiment=(await call(admin,'/experiments','POST',{title:'公开实验',taskId:'seed-task-1',prompt:'原提示',model:'manual',result:'原结果',score:3})).data;
   const pixel=Buffer.from('R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=','base64');
   const upload=await fetch(`${api.base}/assets`,{method:'POST',headers:{Authorization:`Bearer ${admin}`,'Content-Type':'image/gif'},body:pixel});
   const asset=(await upload.json()).url;
@@ -16,12 +16,15 @@ test('public sharing is hashed, live, expiring and revocable', async t => {
   assert.equal((await call(member,`/experiments/${experiment.id}/shares`)).status,403);
   const preview=await call(admin,`/experiments/${experiment.id}/share-preview`);
   assert.ok(preview.data.experiment.prompt.includes(asset));
+  assert.equal(Object.hasOwn(preview.data.experiment,'taskId'),false);
   const share=await call(admin,`/experiments/${experiment.id}/shares`,'POST',{expiry:'1h'});
   assert.equal(share.status,201);
   const rows=(await api.client.query('SELECT token_hash FROM experiment_shares WHERE id=$1',[share.data.id])).rows;
   assert.notEqual(rows[0].token_hash,share.data.token);
   const path=`/public/experiments/${share.data.token}`;
-  assert.equal((await call(null,path)).data.experiment.result,'原结果');
+  const publicExperiment=(await call(null,path)).data.experiment;
+  assert.equal(publicExperiment.result,'原结果');
+  assert.equal(Object.hasOwn(publicExperiment,'taskId'),false);
   assert.equal((await fetch(`${api.base.replace(/\/api$/,'')}${asset}?share=${share.data.token}`)).status,200);
   await call(admin,`/experiments/${experiment.id}`,'PATCH',{result:'更新结果'});
   assert.equal((await call(null,path)).data.experiment.result,'更新结果');
@@ -31,6 +34,15 @@ test('public sharing is hashed, live, expiring and revocable', async t => {
   const expiry=(await call(admin,`/experiments/${experiment.id}/shares`,'POST',{expiry:'24h'})).data;
   await api.client.query("UPDATE experiment_shares SET expires_at=now()-interval '1 second' WHERE id=$1",[expiry.id]);
   assert.equal((await call(null,`/public/experiments/${expiry.token}`)).data.error,'分享已过期');
+
+  const model=await call(admin,'/experiment-platform/models','POST',{name:'share-boundary',displayName:'分享测试',apiModel:'share-model',inputUsdPerMillion:1,outputUsdPerMillion:1});
+  assert.equal(model.status,201);
+  const definition=await call(admin,'/experiment-definitions','POST',{title:'公开定义',taskId:'seed-task-1',systemPrompt:'系统',userPrompt:'输入',variables:{},variants:[{modelId:model.data.id,parameters:{}}]});
+  assert.equal(definition.status,201);
+  assert.equal(Object.hasOwn((await call(admin,`/experiments/${definition.data.id}/share-preview`)).data.experiment,'taskId'),false);
+  const definitionShare=await call(admin,`/experiments/${definition.data.id}/shares`,'POST',{expiry:'1h'});
+  assert.equal(definitionShare.status,201);
+  assert.equal(Object.hasOwn((await call(null,`/public/experiments/${definitionShare.data.token}`)).data.experiment,'taskId'),false);
 });
 
 test('scheduled run uses account timezone, dedupes occurrence and notifies on completion', async t => {
