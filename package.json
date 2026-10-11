@@ -22,7 +22,8 @@
     "benchmark:evaluation": "node --test tests/evaluation-benchmark.benchmark.mjs",
     "benchmark:evaluation-report": "node --test tests/evaluation-report-large.benchmark.mjs",
     "benchmark:project-analysis": "node scripts/project-analysis-benchmark.mjs",
-    "benchmark:project-scan": "node --test tests/project-scan-large.benchmark.mjs"
+    "benchmark:project-scan": "node --test tests/project-scan-large.benchmark.mjs",
+    "benchmark:session-search": "node --test tests/session-search.benchmark.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.4",

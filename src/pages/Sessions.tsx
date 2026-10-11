@@ -1,8 +1,9 @@
 import { useSettings } from "../components/SettingsProvider";
-import { useCallback, useEffect, useState } from "react";
-import { App, Button, Card, Empty, Modal, Select, Space, Spin, Table, Tag, Typography } from "antd";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Alert, App, Button, Card, Empty, Input, Modal, Select, Space, Spin, Switch, Table, Tag, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { annotateSessionMessage, getSession, listSessions } from "../api/sessions";
+import { annotateSessionMessage, getSession, listSessions, searchSessionMessages } from "../api/sessions";
+import type { SessionSearchHit } from "../api/sessions";
 import { createNote } from "../api/notes";
 import { Link, useSearchParams } from "react-router-dom";
 import { listTasks } from "../api/tasks";
@@ -27,6 +28,14 @@ export default function Sessions() {
   const [linkSessionId, setLinkSessionId] = useState<string | null>(null);
   const [linkTaskId, setLinkTaskId] = useState<string | undefined>();
   const [quickDraft, setQuickDraft] = useState<Partial<NotePayload> | null>(null);
+  const [query, setQuery] = useState("");
+  const [regex, setRegex] = useState(false);
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchItems, setSearchItems] = useState<SessionSearchHit[]>([]);
+  const [searchHasMore, setSearchHasMore] = useState(false);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const searchRequest = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -40,12 +49,38 @@ export default function Sessions() {
     void listTasks({}).then(result => setTasks(result.items)).catch(() => setTasks([]));
   }, [load]);
   useEffect(() => {
+    const term = query.trim();
+    const requestId = ++searchRequest.current;
+    if (!term) {
+      setSearchItems([]);
+      setSearchHasMore(false);
+      setSearchError("");
+      setSearchLoading(false);
+      return;
+    }
+    setSearchLoading(true);
+    const timer = window.setTimeout(() => {
+      void searchSessionMessages(term, regex, searchPage).then(result => {
+        if (searchRequest.current !== requestId) return;
+        setSearchItems(result.items);
+        setSearchHasMore(result.hasMore);
+        setSearchError("");
+      }).catch(error => {
+        if (searchRequest.current !== requestId) return;
+        setSearchItems([]);
+        setSearchHasMore(false);
+        setSearchError(error instanceof Error ? error.message : "搜索失败");
+      }).finally(() => { if (searchRequest.current === requestId) setSearchLoading(false); });
+    }, 300);
+    return () => { window.clearTimeout(timer); if (searchRequest.current === requestId) searchRequest.current++; };
+  }, [query, regex, searchPage]);
+  useEffect(() => {
     if (requestedSessionId && items.some(item => item.id === requestedSessionId)) {
-      setPage(Math.floor(items.findIndex(item => item.id === requestedSessionId) / 8) + 1);
+      setPage(Math.floor(items.findIndex(item => item.id === requestedSessionId) / pageSize) + 1);
       setExpandedId(requestedSessionId);
       if (!details[requestedSessionId]) void loadDetail(requestedSessionId);
     }
-  }, [requestedSessionId, items]);
+  }, [requestedSessionId, items, pageSize]);
 
   const loadDetail = async (id: string) => {
     setDetailLoading(id);
@@ -60,6 +95,13 @@ export default function Sessions() {
     if (expandedId === id) { setExpandedId(null); return; }
     setExpandedId(id);
     if (!details[id]) void loadDetail(id);
+  };
+  const openSearchHit = (sessionId: string) => {
+    const index = items.findIndex(item => item.id === sessionId);
+    if (index >= 0) setPage(Math.floor(index / pageSize) + 1);
+    setExpandedId(sessionId);
+    if (!details[sessionId]) void loadDetail(sessionId);
+    document.getElementById("session-table")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const sinkNote = async (session: SessionDetail, entry: SessionMessage, taskId: string | null) => {
@@ -97,9 +139,23 @@ export default function Sessions() {
   };
 
   return <Card className="collection-card" title={<span className="collection-title">会话列表<span className="collection-count">{items.length} 条</span></span>}>
-    <Table rowKey="id" loading={loading} columns={columns} dataSource={items} scroll={{ x: 760 }} pagination={{ pageSize, showSizeChanger: false, current: page, onChange: setPage }}
+    <div className="session-search-controls">
+      <Input.Search value={query} onChange={event => { setQuery(event.target.value); setSearchPage(1); }} allowClear placeholder="搜索所有会话消息" aria-label="搜索会话消息" />
+      <Space size={8}><Switch checked={regex} onChange={value => { setRegex(value); setSearchPage(1); }} aria-label="正则表达式搜索" /><Typography.Text>正则表达式</Typography.Text></Space>
+    </div>
+    {query.trim() && <div className="session-search-results" aria-live="polite">
+      {searchError && <Alert type="warning" showIcon message={searchError} />}
+      {searchLoading ? <div className="session-detail-state"><Spin /> 正在搜索…</div> : !searchError && (searchItems.length ? <>
+        {searchItems.map(hit => <div className="session-search-hit" key={`${hit.sessionId}:${hit.messageId}`}>
+          <Space size={10} wrap><Button type="link" size="small" onClick={() => openSearchHit(hit.sessionId)}>{hit.sessionTitle}</Button><Tag>{hit.role === "user" ? "User" : "Assistant"}</Tag><Typography.Text type="secondary">{hit.userId} · {new Date(hit.at).toLocaleString("zh-CN", { hour12: false })}</Typography.Text></Space>
+          <div className="session-search-snippet">{hit.snippet.before}<mark>{hit.snippet.match}</mark>{hit.snippet.after}</div>
+        </div>)}
+        <Space style={{ marginTop: 12 }}><Button disabled={searchPage === 1} onClick={() => setSearchPage(value => value - 1)}>上一页</Button><Typography.Text type="secondary">第 {searchPage} 页</Typography.Text><Button disabled={!searchHasMore} onClick={() => setSearchPage(value => value + 1)}>下一页</Button></Space>
+      </> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未找到匹配消息" />)}
+    </div>}
+    <div id="session-table"><Table rowKey="id" loading={loading} columns={columns} dataSource={items} scroll={{ x: 760 }} pagination={{ pageSize, showSizeChanger: false, current: page, onChange: setPage }}
       onRow={row => ({ onClick: () => toggle(row.id), className: "session-clickable-row" })}
-      expandable={{ expandedRowRender: expandedRow, expandedRowKeys: expandedId ? [expandedId] : [], showExpandColumn: false, onExpand: (_, row) => toggle(row.id) }} />
+      expandable={{ expandedRowRender: expandedRow, expandedRowKeys: expandedId ? [expandedId] : [], showExpandColumn: false, onExpand: (_, row) => toggle(row.id) }} /></div>
     <Modal title="关联到学习任务" open={linkMsg !== null} onCancel={() => { setLinkMsg(null); setLinkSessionId(null); setLinkTaskId(undefined); }}
       onOk={() => { const detail = linkSessionId ? details[linkSessionId] : null; if (detail && linkMsg) void sinkNote(detail, linkMsg, linkTaskId || null); }} okText="确认关联" cancelText="取消">
       <Space direction="vertical" size={8} style={{ width: "100%" }}><Typography.Text type="secondary">将该条 Agent 回答沉淀为笔记；不选任务则创建独立笔记。</Typography.Text>

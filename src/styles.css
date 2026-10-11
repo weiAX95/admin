@@ -138,6 +138,13 @@ body { min-width: 320px; -webkit-font-smoothing: antialiased; }
 .session-message-user { border-color: #9582ff25; background: #9582ff0d; }
 .session-message-content { white-space: pre-wrap; font-size: 13px; line-height: 1.85; color: #d7dcec; }
 .session-clickable-row { cursor: pointer; }
+.session-search-controls { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; flex-wrap: wrap; }
+.session-search-controls .ant-input-search { width: min(100%, 460px); }
+.session-search-results { margin-bottom: 20px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; }
+.session-search-hit { padding: 10px 4px; border-bottom: 1px solid var(--line); }
+.session-search-hit:last-of-type { border-bottom: 0; }
+.session-search-snippet { margin: 4px 0 0 8px; line-height: 1.7; overflow-wrap: anywhere; }
+.session-search-snippet mark { color: inherit; background: #e6bb7766; border-radius: 3px; padding: 0 2px; }
 .session-detail-state { display: flex; align-items: center; gap: 10px; min-height: 80px; }
 .session-timeline { display: flex; flex-direction: column; gap: 18px; padding: 8px 4px; }
 .session-bubble-row { display: flex; justify-content: flex-start; }
