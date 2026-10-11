@@ -10,7 +10,7 @@ export const containsKnownSecret = content => SENSITIVE_CONTENT.test(content);
 function classification(path) {
   if (/(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|\.)|\.(?:test|spec)\./i.test(path)) return 'test';
   if (/(?:^|\/)(?:README|CHANGELOG|CONTRIBUTING)(?:\.|$)|\.(?:md|mdx|rst)$/i.test(path)) return 'documentation';
-  if (/(?:^|\/)(?:package\.json|pyproject\.toml|Cargo\.toml|Dockerfile|vite\.config\.[^/]+)$/i.test(path)) return 'config';
+  if (/(?:^|\/)(?:package\.json|requirements\.txt|go\.mod|pyproject\.toml|Cargo\.toml|Dockerfile|vite\.config\.[^/]+)$/i.test(path)) return 'config';
   return 'source';
 }
 

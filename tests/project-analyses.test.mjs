@@ -106,6 +106,8 @@ test('completed report stores fixed-commit package evidence for technology hints
   const { scanId, path } = await fixture(client);
   const content = '{\n  "dependencies": {\n    "react": "^19.0.0"\n  }\n}';
   await client.query("INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,content,content_sha256) VALUES($1,'package.json',$2,$3,'config','read',$4,$5)",[scanId,'d'.repeat(40),content.length,content,crypto.createHash('sha256').update(content).digest('hex')]);
+  const goManifest = 'module example.com/service\nrequire github.com/gin-gonic/gin v1.10.0';
+  await client.query("INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,content,content_sha256) VALUES($1,'go.mod',$2,$3,'config','read',$4,$5)",[scanId,'f'.repeat(40),goManifest.length,goManifest,crypto.createHash('sha256').update(goManifest).digest('hex')]);
   const me = { id: 'member', role: 'member' };
   const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async (_db,_job,messages) => {
     const input = JSON.parse(messages[1].content);
@@ -113,7 +115,10 @@ test('completed report stores fixed-commit package evidence for technology hints
   } });
   assert.equal(await waitFor(client,started.data.id),'completed');
   const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
-  assert.deepEqual(detail.technologies,[{ name: 'React', packageName: 'react', evidence: { path: 'package.json', line: 3, excerpt: '"react": "^19.0.0"', gitSha: 'd'.repeat(40) } }]);
+  assert.deepEqual(detail.technologies,[
+    { name: 'Gin', packageName: 'github.com/gin-gonic/gin', evidence: { path: 'go.mod', line: 2, excerpt: 'require github.com/gin-gonic/gin v1.10.0', gitSha: 'f'.repeat(40) } },
+    { name: 'React', packageName: 'react', evidence: { path: 'package.json', line: 3, excerpt: '"react": "^19.0.0"', gitSha: 'd'.repeat(40) } },
+  ]);
 });
 
 test('analysis fixes the requirement document version and flags a newer version as stale', async t => {

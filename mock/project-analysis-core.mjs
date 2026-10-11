@@ -9,6 +9,9 @@ const packageTechnologies = new Map([
   ['react','React'], ['vite','Vite'], ['typescript','TypeScript'], ['next','Next.js'], ['vue','Vue'], ['@angular/core','Angular'],
   ['express','Express'], ['fastify','Fastify'], ['pg','node-postgres'], ['prisma','Prisma'], ['tailwindcss','Tailwind CSS'], ['antd','Ant Design'],
 ]);
+const pythonTechnologies = new Map([['fastapi','FastAPI'], ['django','Django'], ['flask','Flask'], ['torch','PyTorch'], ['pandas','pandas']]);
+const goTechnologies = new Map([['github.com/gin-gonic/gin','Gin'], ['gorm.io/gorm','GORM']]);
+const rustTechnologies = new Map([['tokio','Tokio'], ['axum','Axum'], ['serde','Serde']]);
 
 export function parseProjectRequirements(content) {
   if (typeof content !== 'string' || !content.trim()) return [];
@@ -34,19 +37,62 @@ export function parseProjectRequirements(content) {
 export function detectProjectTechnologies(files) {
   const found = new Map();
   for (const file of [...files].sort((a,b) => a.path.localeCompare(b.path))) {
-    if (file.status !== 'read' || typeof file.content !== 'string' || !/(^|\/)package\.json$/.test(file.path) || containsKnownSecret(file.content)) continue;
-    let manifest;
-    try { manifest = JSON.parse(file.content); } catch { continue; }
-    if (!isObject(manifest)) continue;
-    const dependencies = { ...(isObject(manifest.dependencies) ? manifest.dependencies : {}), ...(isObject(manifest.devDependencies) ? manifest.devDependencies : {}) };
+    if (file.status !== 'read' || typeof file.content !== 'string' || !/(^|\/)(?:package\.json|requirements\.txt|pyproject\.toml|go\.mod|Cargo\.toml)$/.test(file.path) || containsKnownSecret(file.content)) continue;
     const lines = file.content.split(/\r?\n/);
-    for (const [dependency,name] of packageTechnologies) {
-      if (typeof dependencies[dependency] !== 'string' || found.has(name)) continue;
-      const literal = JSON.stringify(dependency);
-      const matches = lines.flatMap((line,index) => line.length <= 300 && line.includes(literal) && /^\s*"[^"\n]+"\s*:/.test(line) ? [index] : []);
-      if (matches.length !== 1) continue;
-      const index = matches[0];
+    const add = (dependency, name, index) => {
+      if (!name || found.has(name) || lines[index].length > 300) return;
       found.set(name,{ name, packageName: dependency, path: file.path, line: index + 1, excerpt: lines[index].trim(), gitSha: String(file.git_sha || file.gitSha).trim() });
+    };
+    if (/(^|\/)package\.json$/.test(file.path)) {
+      let manifest;
+      try { manifest = JSON.parse(file.content); } catch { continue; }
+      if (!isObject(manifest)) continue;
+      const dependencies = { ...(isObject(manifest.dependencies) ? manifest.dependencies : {}), ...(isObject(manifest.devDependencies) ? manifest.devDependencies : {}) };
+      for (const [dependency,name] of packageTechnologies) {
+        if (typeof dependencies[dependency] !== 'string') continue;
+        const literal = JSON.stringify(dependency);
+        const matches = lines.flatMap((line,index) => line.length <= 300 && line.includes(literal) && /^\s*"[^"\n]+"\s*:/.test(line) ? [index] : []);
+        if (matches.length === 1) add(dependency,name,matches[0]);
+      }
+    } else if (/(^|\/)requirements\.txt$/.test(file.path)) {
+      lines.forEach((line,index) => {
+        const match = line.trim().match(/^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*(?:[<>=!~].*)?$/);
+        if (match) { const dependency = match[1].toLowerCase().replaceAll('_','-'); add(dependency,pythonTechnologies.get(dependency),index); }
+      });
+    } else if (/(^|\/)pyproject\.toml$/.test(file.path)) {
+      let section = '', inDependencies = false;
+      lines.forEach((line,index) => {
+        const trimmed = line.trim();
+        if (/^\[[^\]]+\]$/.test(trimmed)) { section = trimmed.slice(1,-1); inDependencies = false; return; }
+        if (section === 'project') {
+          if (/^dependencies\s*=\s*\[$/.test(trimmed)) { inDependencies = true; return; }
+          if (inDependencies && /^\]/.test(trimmed)) { inDependencies = false; return; }
+          if (!inDependencies) return;
+          const match = trimmed.match(/^["']([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?(?:[^"']*)["'],?(?:\s+#.*)?$/);
+          if (match) { const dependency = match[1].toLowerCase().replaceAll('_','-'); add(dependency,pythonTechnologies.get(dependency),index); }
+        } else if (section === 'tool.poetry.dependencies') {
+          const match = trimmed.match(/^([A-Za-z0-9_.-]+)\s*=\s*(?:["'][^"']+["']|\{[^}\n]+\})(?:\s+#.*)?$/);
+          if (match) { const dependency = match[1].toLowerCase().replaceAll('_','-'); add(dependency,pythonTechnologies.get(dependency),index); }
+        }
+      });
+    } else if (/(^|\/)go\.mod$/.test(file.path)) {
+      let inRequire = false;
+      lines.forEach((line,index) => {
+        const trimmed = line.trim();
+        if (/^require\s+\($/.test(trimmed)) { inRequire = true; return; }
+        if (inRequire && trimmed === ')') { inRequire = false; return; }
+        const match = inRequire ? trimmed.match(/^([^\s]+)\s+v[^\s]+(?:\s+\/\/.*)?$/) : trimmed.match(/^require\s+([^\s]+)\s+v[^\s]+(?:\s+\/\/.*)?$/);
+        if (match) add(match[1],goTechnologies.get(match[1]),index);
+      });
+    } else if (/(^|\/)Cargo\.toml$/.test(file.path)) {
+      let dependencies = false;
+      lines.forEach((line,index) => {
+        const trimmed = line.trim();
+        if (/^\[[^\]]+\]$/.test(trimmed)) { dependencies = /^\[(?:dev-|build-)?dependencies\]$/.test(trimmed); return; }
+        if (!dependencies) return;
+        const match = trimmed.match(/^([A-Za-z0-9_-]+)\s*=\s*(?:"[^"\n]+"|\{[^\n}]+\})(?:\s+#.*)?$/);
+        if (match) add(match[1],rustTechnologies.get(match[1]),index);
+      });
     }
   }
   return [...found.values()].sort((a,b) => a.name.localeCompare(b.name)).slice(0,30);

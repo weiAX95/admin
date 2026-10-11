@@ -63,6 +63,19 @@ test('technology hints only quote declared dependencies from readable manifests'
   assert.deepEqual(detectProjectTechnologies([{ ...manifest, content: ambiguous }]).map(item => item.name),['Vite']);
 });
 
+test('technology hints cite Python, Go and Rust dependency lines without treating comments as declarations', () => {
+  const files = [
+    { path: 'backend/requirements.txt', status: 'read', content: '# django==5\nfastapi==0.115\npandas>=2', gitSha: 'a'.repeat(40) },
+    { path: 'api/pyproject.toml', status: 'read', content: '[project]\nname = "api"\ndependencies = [\n  "django>=5",\n]\n[tool.poetry.dependencies]\nflask = "^3"\n[tool.other]\ntorch = "not a dependency"', gitSha: 'd'.repeat(40) },
+    { path: 'service/go.mod', status: 'read', content: 'module example.com/service\nrequire (\n  github.com/gin-gonic/gin v1.10.0\n  gorm.io/gorm v1.25.0 // indirect\n)\nreplace github.com/gin-gonic/gin => ../local', gitSha: 'b'.repeat(40) },
+    { path: 'worker/Cargo.toml', status: 'read', content: '[package]\nname = "worker"\n[dependencies]\ntokio = { version = "1", features = ["full"] }\naxum = "0.8"\n[features]\nserde = "not a dependency"', gitSha: 'c'.repeat(40) },
+  ];
+  const found = detectProjectTechnologies(files);
+  assert.deepEqual(found.map(item => item.name), ['Axum','Django','FastAPI','Flask','Gin','GORM','pandas','Tokio']);
+  assert.deepEqual(found.find(item => item.name === 'Gin'), { name: 'Gin', packageName: 'github.com/gin-gonic/gin', path: 'service/go.mod', line: 3, excerpt: 'github.com/gin-gonic/gin v1.10.0', gitSha: 'b'.repeat(40) });
+  assert.equal(found.some(item => item.name === 'PyTorch' || item.name === 'Serde'), false);
+});
+
 test('requirement IDs remain stable and ignore fenced examples', () => {
   const first = parseProjectRequirements('REQ-001: 创建任务\n- [ ] 查看任务\n```md\nREQ-999: 示例\n```\nREQ-001: 重复项');
   assert.equal(first.length,2);
