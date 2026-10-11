@@ -5,7 +5,7 @@ import { modelConnectionAvailable } from './model-connections.mjs';
 import { modelUsable, supportedProvider } from './model-governance.mjs';
 import { checkTokenReservations, reserveRunTokens } from './model-quotas.mjs';
 import { checkModelRate, reserveModelRate } from './model-rate-limits.mjs';
-import { selectProjectEvidence, validateProjectReport } from './project-analysis-core.mjs';
+import { buildProjectModuleCoverage, selectProjectEvidence, validateProjectReport } from './project-analysis-core.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -41,6 +41,7 @@ async function saveReport(db, job, report, metadata) {
       await client.query('INSERT INTO project_analysis_findings(id,analysis_id,position,title,status,detail,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [id,job.id,position,finding.title,finding.status,finding.detail,evidence?.type || null,evidence?.path || null,evidence?.line || null,evidence?.excerpt || null,evidence?.gitSha || null]);
     }
     for (const [position, suggestion] of report.suggestions.entries()) await client.query('INSERT INTO project_analysis_suggestions(id,analysis_id,finding_id,position,topic,reason,practice,acceptance) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [crypto.randomUUID(),job.id,suggestion.findingIndex === null ? null : findingIds[suggestion.findingIndex],position,suggestion.topic,suggestion.reason,suggestion.practice,suggestion.acceptance]);
+    for (const module of metadata.modules) await client.query('INSERT INTO project_analysis_modules(analysis_id,module_key,indexed_count,read_count,selected_count,truncated_count,excluded_count,failed_count,unscanned_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [job.id,module.moduleKey,module.indexedCount,module.readCount,module.selectedCount,module.truncatedCount,module.excludedCount,module.failedCount,module.unscannedCount]);
     await client.query("UPDATE project_analysis_attempts SET status='completed' WHERE analysis_id=$1 AND attempt=$2", [job.id,job.attempts]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
@@ -60,6 +61,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     if (!scan) throw Object.assign(new Error('扫描记录不存在'), { code: 'SCAN_MISSING' });
     const files = (await db.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1', [job.scan_id])).rows;
     const selected = selectProjectEvidence(files);
+    const modules = buildProjectModuleCoverage(files,selected);
     if (!selected.length) throw Object.assign(new Error('扫描没有可分析文本'), { code: 'NO_EVIDENCE' });
     const availableCount = files.filter(file => file.status === 'read' && file.content !== null).length;
     const coverageComplete = Boolean(scan.coverage_complete && selected.length === availableCount && selected.every(file => !file.truncated));
@@ -72,7 +74,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     try { report = validateProjectReport(response.output, selected); }
     catch { throw Object.assign(new Error('模型报告或证据无效'), { code: 'INVALID_REPORT' }); }
     if (!coverageComplete) report.findings = report.findings.map(finding => finding.status === 'not_found' ? { ...finding, status: 'unverified', detail: `${finding.detail}（本次分析未覆盖全部可读文件）` } : finding);
-    await saveReport(db, job, report, { selectedCount: selected.length, availableCount, coverageComplete });
+    await saveReport(db, job, report, { selectedCount: selected.length, availableCount, coverageComplete, modules });
   } catch (error) {
     const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
     await db.query("UPDATE project_analyses SET status='failed',error_code=$2,summary=NULL,finished_at=now() WHERE id=$1 AND status='analyzing'", [id,errorCode]);
@@ -102,7 +104,8 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     if (!job) return fail(404,'分析不存在');
     const findings = (await client.query('SELECT * FROM project_analysis_findings WHERE analysis_id=$1 ORDER BY position', [analysisId])).rows.map(row => ({ id: row.id, title: row.title, status: row.status, detail: row.detail, evidence: row.evidence_path === null ? null : { type: row.evidence_type, path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha?.trim() || null } }));
     const suggestions = (await client.query('SELECT * FROM project_analysis_suggestions WHERE analysis_id=$1 ORDER BY position', [analysisId])).rows.map(row => ({ id: row.id, findingId: row.finding_id, topic: row.topic, reason: row.reason, practice: row.practice, acceptance: row.acceptance }));
-    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, findings, suggestions } };
+    const modules = (await client.query('SELECT * FROM project_analysis_modules WHERE analysis_id=$1 ORDER BY module_key', [analysisId])).rows.map(row => ({ moduleKey: row.module_key, indexedCount: row.indexed_count, readCount: row.read_count, selectedCount: row.selected_count, truncatedCount: row.truncated_count, excludedCount: row.excluded_count, failedCount: row.failed_count, unscannedCount: row.unscanned_count }));
+    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, findings, suggestions, modules } };
   }
   if (method === 'POST' && analysisId && action === 'cancel') {
     const pooled = client instanceof pg.Pool;

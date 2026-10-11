@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectProjectEvidence, validateProjectReport } from '../mock/project-analysis-core.mjs';
+import { buildProjectModuleCoverage, selectProjectEvidence, validateProjectReport } from '../mock/project-analysis-core.mjs';
 
 const files = [
   { path: 'src/app.ts', category: 'source', status: 'read', content: 'export const app = true;\nrun(app);\n', git_sha: 'a'.repeat(40) },
@@ -15,6 +15,23 @@ test('analysis evidence is bounded, line-numbered, and only includes read text',
   assert.equal(selected[0].numberedContent, '1: # Project\n2: Learning app');
   assert.ok(selected.reduce((sum, file) => sum + file.numberedContent.length, 0) <= 100);
   assert.equal(selected.some(file => file.path === '.env'), false);
+});
+
+test('evidence selection spreads a small budget across modules and reports omitted scope', () => {
+  const scoped = [
+    { path: 'src/api/a.ts', category: 'source', status: 'read', content: 'export const a = 1;', git_sha: 'a'.repeat(40) },
+    { path: 'src/api/b.ts', category: 'source', status: 'read', content: 'export const b = 2;', git_sha: 'b'.repeat(40) },
+    { path: 'src/pages/home.ts', category: 'source', status: 'read', content: 'export const home = 1;', git_sha: 'c'.repeat(40) },
+    { path: 'src/pages/about.ts', category: 'source', status: 'read', content: 'export const about = 1;', git_sha: 'd'.repeat(40) },
+    { path: 'tests/api.test.ts', category: 'test', status: 'unscanned', content: null, git_sha: 'e'.repeat(40) },
+  ];
+  const selected = selectProjectEvidence(scoped, { maxFiles: 2 });
+  assert.deepEqual(selected.map(file => file.path), ['src/api/a.ts','src/pages/about.ts']);
+  assert.deepEqual(buildProjectModuleCoverage(scoped,selected), [
+    { moduleKey: 'src/api', indexedCount: 2, readCount: 2, selectedCount: 1, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 0 },
+    { moduleKey: 'src/pages', indexedCount: 2, readCount: 2, selectedCount: 1, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 0 },
+    { moduleKey: 'tests', indexedCount: 1, readCount: 0, selectedCount: 0, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 1 },
+  ]);
 });
 
 test('legacy scan content containing a known credential is never selected for a model', () => {

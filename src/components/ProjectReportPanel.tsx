@@ -85,6 +85,15 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
       <Typography.Paragraph><strong>项目目标：</strong>{report.goal}</Typography.Paragraph>
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
       <Typography.Paragraph>{report.summary}</Typography.Paragraph>
+      <Typography.Title level={5}>模块覆盖</Typography.Title>
+      {report.modules.length ? <Table rowKey="moduleKey" size="small" pagination={false} dataSource={report.modules} scroll={{ x: 650 }} columns={[
+        { title: '模块', dataIndex: 'moduleKey' },
+        { title: '已索引', dataIndex: 'indexedCount' },
+        { title: '已读取', dataIndex: 'readCount' },
+        { title: '进入模型', dataIndex: 'selectedCount' },
+        { title: '截断', dataIndex: 'truncatedCount' },
+        { title: '排除 / 失败 / 未扫描', render: (_, item: ProjectAnalysisReport['modules'][number]) => `${item.excludedCount} / ${item.failedCount} / ${item.unscannedCount}` },
+      ]} style={{ marginBottom: 16 }} /> : <Typography.Paragraph type="secondary">此报告创建时尚未记录模块覆盖信息</Typography.Paragraph>}
       <Typography.Title level={5}>进度判断与证据</Typography.Title>
       {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}<Tag>{findingStates[finding.status]}</Tag></Space>}>
         <Typography.Paragraph>{finding.detail}</Typography.Paragraph>

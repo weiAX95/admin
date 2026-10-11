@@ -3,14 +3,54 @@ import { containsKnownSecret } from './project-scan.mjs';
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => isObject(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 const boundedText = (value, max) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
+const categoryOrder = { documentation: 0, config: 1, source: 2, test: 3 };
+
+export function projectModuleKey(path) {
+  const parts = path.split('/');
+  if (parts.length === 1) return '(root)';
+  if (['src','app','lib','packages','apps','services'].includes(parts[0]) && parts.length >= 3) return `${parts[0]}/${parts[1]}`;
+  return parts[0];
+}
+
+export function buildProjectModuleCoverage(files, selectedFiles) {
+  const modules = new Map();
+  for (const file of files) {
+    const moduleKey = projectModuleKey(file.path);
+    if (!modules.has(moduleKey)) modules.set(moduleKey, { moduleKey, indexedCount: 0, readCount: 0, selectedCount: 0, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 0 });
+    const module = modules.get(moduleKey);
+    module.indexedCount++;
+    if (file.status === 'read') module.readCount++;
+    if (file.status === 'excluded') module.excludedCount++;
+    if (file.status === 'failed') module.failedCount++;
+    if (file.status === 'unscanned') module.unscannedCount++;
+  }
+  for (const file of selectedFiles) {
+    const module = modules.get(projectModuleKey(file.path));
+    if (!module) continue;
+    module.selectedCount++;
+    if (file.truncated) module.truncatedCount++;
+  }
+  return [...modules.values()].sort((a,b) => a.moduleKey.localeCompare(b.moduleKey));
+}
 
 export function selectProjectEvidence(files, { maxFiles = 30, maxChars = 30000, maxCharsPerFile = 3000 } = {}) {
-  const order = { documentation: 0, config: 1, source: 2, test: 3 };
   const eligible = files.filter(file => file.status === 'read' && typeof file.content === 'string' && !containsKnownSecret(file.content))
-    .sort((a, b) => (order[a.category] ?? 4) - (order[b.category] ?? 4) || a.path.localeCompare(b.path));
+    .sort((a, b) => (categoryOrder[a.category] ?? 4) - (categoryOrder[b.category] ?? 4) || a.path.localeCompare(b.path));
+  const groups = new Map();
+  for (const file of eligible) {
+    const key = projectModuleKey(file.path);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(file);
+  }
+  const spread = [];
+  for (let index = 0; index < eligible.length; index++) {
+    let found = false;
+    for (const group of groups.values()) if (group[index]) { spread.push(group[index]); found = true; }
+    if (!found) break;
+  }
   const selected = [];
   let remaining = maxChars;
-  for (const file of eligible) {
+  for (const file of spread) {
     if (selected.length >= maxFiles || remaining <= 0) break;
     const lines = [];
     let used = 0;

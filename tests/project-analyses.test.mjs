@@ -47,6 +47,7 @@ test('analysis persists validated report and source evidence, isolates owners, a
   assert.equal(detail.data.findings[0].evidence.line, 1);
   assert.equal(detail.data.suggestions[0].findingId, detail.data.findings[0].id);
   assert.equal(detail.data.commitSha, sha);
+  assert.deepEqual(detail.data.modules, [{ moduleKey: 'src', indexedCount: 1, readCount: 1, selectedCount: 1, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 0 }]);
   assert.equal((await handleProjectAnalyses({ pathname: `${path}/${start.data.id}`, method: 'GET', client, me: other })).status, 404);
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_findings')).rows[0].n, 1);
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_suggestions')).rows[0].n, 1);
