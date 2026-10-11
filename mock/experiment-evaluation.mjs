@@ -378,9 +378,10 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     return ok({ id: chain.id, title: chain.title, items });
   }
   if (pathname === '/api/experiment-costs' && method === 'GET') {
-    const total = (await client.query("SELECT COALESCE(sum(cost_usd),0) AS total FROM experiment_runs WHERE status='completed' AND date_trunc('month',created_at AT TIME ZONE 'Asia/Shanghai')=date_trunc('month',now() AT TIME ZONE 'Asia/Shanghai')")).rows[0].total;
-    const byModel = (await client.query("SELECT api_model,sum(cost_usd) AS cost FROM experiment_runs WHERE status='completed' AND date_trunc('month',created_at AT TIME ZONE 'Asia/Shanghai')=date_trunc('month',now() AT TIME ZONE 'Asia/Shanghai') GROUP BY api_model ORDER BY cost DESC")).rows;
-    const top = (await client.query("SELECT e.id,e.title,sum(r.cost_usd) AS cost FROM experiment_runs r JOIN experiments e ON e.id=r.experiment_id WHERE r.status='completed' GROUP BY e.id ORDER BY cost DESC LIMIT 10")).rows;
+    const scope = [me.role, me.id];
+    const total = (await client.query("SELECT COALESCE(sum(r.cost_usd),0) AS total FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id WHERE r.status='completed' AND ($1='admin' OR b.owner_id=$2) AND date_trunc('month',r.created_at AT TIME ZONE 'Asia/Shanghai')=date_trunc('month',now() AT TIME ZONE 'Asia/Shanghai')", scope)).rows[0].total;
+    const byModel = (await client.query("SELECT r.api_model,sum(r.cost_usd) AS cost FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id WHERE r.status='completed' AND ($1='admin' OR b.owner_id=$2) AND date_trunc('month',r.created_at AT TIME ZONE 'Asia/Shanghai')=date_trunc('month',now() AT TIME ZONE 'Asia/Shanghai') GROUP BY r.api_model ORDER BY cost DESC", scope)).rows;
+    const top = (await client.query("SELECT e.id,e.title,sum(r.cost_usd) AS cost FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiments e ON e.id=r.experiment_id WHERE r.status='completed' AND ($1='admin' OR b.owner_id=$2) GROUP BY e.id ORDER BY cost DESC LIMIT 10", scope)).rows;
     return ok({ monthTotalUsd: total, byModel, top });
   }
   return null;

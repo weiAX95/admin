@@ -97,6 +97,15 @@ test('versioned dataset regression, annotations, candidate pool, chains and cost
   assert.equal((await request(admin,`/experiment-chains/${chain.data.chainId}`)).data.items.length,2);
   const costs=await request(admin,'/experiment-costs');
   assert.ok(costs.data.monthTotalUsd>0);
+  const memberCosts=await request(member,'/experiment-costs');
+  assert.equal(Number(memberCosts.data.monthTotalUsd),0);
+  assert.deepEqual(memberCosts.data.byModel,[]);
+  assert.deepEqual(memberCosts.data.top,[]);
+  await api.client.query('UPDATE experiment_batches SET owner_id=$1 WHERE id=$2',[ 'member', baseline.data.batchId ]);
+  const ownCosts=await request(member,'/experiment-costs');
+  assert.ok(Number(ownCosts.data.monthTotalUsd)>0);
+  assert.ok(ownCosts.data.top.some(item=>item.id===definition.id));
+  await api.client.query('UPDATE experiment_batches SET owner_id=$1 WHERE id=$2',[ 'admin', baseline.data.batchId ]);
   await api.client.query("UPDATE experiment_runs SET auto_score=0,latency_ms=100000 WHERE id=$1",[batch.runs[0].id]);
   await api.client.query("UPDATE experiment_run_metrics SET combined_score=0,passed=false,metric_details=jsonb_set(metric_details,'{exact}','0'::jsonb) WHERE run_id=$1",[batch.runs[0].id]);
   const runnerPool=new pg.Pool({connectionString:api.url});
