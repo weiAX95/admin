@@ -45,7 +45,7 @@ export async function handleModelCallAudit({ pathname, method, client, me, url }
   const userId = url.searchParams.get('userId') || '';
   const module = url.searchParams.get('module') || '';
   const page = Number(url.searchParams.get('page') || 1);
-  if ((start && (!DATE.test(start) || Number.isNaN(Date.parse(`${start}T00:00:00Z`)))) || (end && (!DATE.test(end) || Number.isNaN(Date.parse(`${end}T00:00:00Z`)))) || (start && end && start > end) || (module && !['experiments','evaluations'].includes(module)) || !Number.isSafeInteger(page) || page < 1 || page > 10000) return { status: 400, data: { error: '审计筛选条件无效' } };
+  if ((start && (!DATE.test(start) || Number.isNaN(Date.parse(`${start}T00:00:00Z`)))) || (end && (!DATE.test(end) || Number.isNaN(Date.parse(`${end}T00:00:00Z`)))) || (start && end && start > end) || (module && !['experiments','evaluations','project_analysis'].includes(module)) || !Number.isSafeInteger(page) || page < 1 || page > 10000) return { status: 400, data: { error: '审计筛选条件无效' } };
   const params = [start,end,modelId,userId,module];
   const where = "($1::text='' OR a.created_at >= $1::date) AND ($2::text='' OR a.created_at < $2::date + interval '1 day') AND ($3::text='' OR a.model_id=$3) AND ($4::text='' OR a.user_id=$4) AND ($5::text='' OR a.module=$5)";
   const total = Number((await client.query(`SELECT count(*)::bigint AS n FROM model_call_audit a WHERE ${where}`, params)).rows[0].n);

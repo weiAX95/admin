@@ -55,6 +55,7 @@ import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
+import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
 
 function reconcileNoteLinks(preserveContentId = null) {
@@ -1649,7 +1650,8 @@ const server = http.createServer((req, res) => {
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       const pathname = new URL(req.url, 'http://localhost').pathname;
-      const response = await handleProjectScans({ pathname, method: req.method, client: pool, me, url: new URL(req.url, 'http://localhost') })
+      const response = await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
+        || await handleProjectScans({ pathname, method: req.method, client: pool, me, url: new URL(req.url, 'http://localhost') })
         || await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) });
       return sendImmediate(res, response?.status || 404, response?.data || { error: '项目接口不存在' });
     })().catch(error => {
@@ -1762,6 +1764,7 @@ try {
   await assertSchemaCurrent();
   await recoverBackupJobs(pool);
   await resumeProjectScans(pool);
+  await resumeProjectAnalyses(pool);
   if (process.env.EXPERIMENT_WORKER_MODE !== 'external') await recoverExperimentJobs(pool);
   const users = await pool.query("SELECT 1 FROM users LIMIT 1");
   if (!users.rowCount) throw new Error("数据库尚无账号；请先运行 npm run db:import");

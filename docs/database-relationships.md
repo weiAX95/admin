@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接与扫描见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql) 和 [048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)。迁移后数据库共有 99 张表。
+> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql) 和 [050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)。迁移后数据库共有 102 张表。
 
 ## 系统设置与个人偏好
 
@@ -43,7 +43,7 @@ flowchart LR
 
 `model_rate_limits` 以模型 ID 为主键，外键到 `experiment_models.id`（删除模型时级联删除规则）。`model_rate_reservations` 以 `(run_id, model_id)` 为主键，`model_id` 外键到模型，`run_id` 为无外键原始 ID；每行保存 UTC 分钟、保守请求次数和 token 上限。`/api/model-rate-status` 只汇总当前分钟。批次入队与日配额使用相同事务，在另一个数据库锁下检查 RPM／TPM；任一超限整批返回 429 和下一分钟 `Retry-After`。超过 90% 的分钟按模型去重通知管理员。旧分钟预留在后续批次入队时清理；实际调用与失败释放仍待 9.5。
 
-`model_call_audit` 以 UUID `request_id` 为主键，记录实际模型 HTTP 调用的运行 ID、主模型或 Judge 环节、尝试次数、账号 ID、模型 ID、模块、脱敏提示词预览、token 用量、延迟、HTTP 状态与失败代码。运行、模型和账号 ID 故意不设外键，永久删除业务实体后在保留期内仍可核对调用。`/model-call-audit` 只允许管理员检索；聊天端会话尚未接入本地模型适配器，因此无可信调用事实可写。模型审计和独立安全审计日志都按 `retention_settings.audit_days` 清理，默认 90 天。
+`model_call_audit` 以 UUID `request_id` 为主键，记录实际模型 HTTP 调用的运行 ID、主模型或 Judge 环节、尝试次数、账号 ID、模型 ID、模块、脱敏提示词预览、token 用量、延迟、HTTP 状态与失败代码。模块允许实验、评测及项目分析；项目分析审计只记录“仓库代码输入已省略”占位符，不复制仓库正文。运行、模型和账号 ID 故意不设外键，永久删除业务实体后在保留期内仍可核对调用。`/model-call-audit` 只允许管理员检索；聊天端会话尚未接入本地模型适配器，因此无可信调用事实可写。模型审计和独立安全审计日志都按 `retention_settings.audit_days` 清理，默认 90 天。
 
 `model_security_policies` 以 `model_id` 为主键及指向 `experiment_models.id` 的级联外键，按模型保存输入 PII／越狱、输出 PII 开关与敏感词／品牌风险词表及并发版本。`model_security_events` 保存模型和运行原始 ID、主模型或 Judge 环节、输入／输出方向、命中规则及阻断／替换动作，**不保存命中原文且不设模型或运行外键**，使历史审计可保留至配置的审计期限。管理员通过模型设置抽屉读取和修改策略；模型调用适配器先检查文本输入，再调用提供商，返回文本输出时执行替换。媒体内容与工具参数尚未扫描。
 
@@ -66,7 +66,7 @@ flowchart LR
 
 `retention_settings` 是单行版本化保留配置，保存独立安全审计保留天数、会话保留天数、核心内容回收天数以及系统时区下的清理时间。`retention_cleanup_runs` 以本地日历日为主键，记录每日清理结果和逐项永久删除失败原因，避免重启后重复执行。清理器删除过期 `security_audit_logs` 与 `sessions`；会话删除级联消息和评分，未审核会话候选同时删除，已审核候选和摘录笔记保留并显示“原会话已清理”。[035_core_recycle_bin.sql](../db/migrations/035_core_recycle_bin.sql) 给 `tasks`、`notes`、`experiments` 增加 `deleted_at`；`prompt_library` 已在旧迁移中有该字段。删除后正常读取过滤已删除行，管理员可恢复或永久删除；到期清理按行设置保存点，关联约束阻止删除时保留条目并记录失败。恢复实验不会恢复已撤销的分享或暂停的调度；恢复任务暂不重建删除时从其他任务移除的依赖边。这两张保留策略表无外键。
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)。当前共 **99 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)。当前共 **102 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -77,11 +77,20 @@ flowchart LR
   API --> GitHub["GitHub 公开仓库与分支 REST API"]
   Repositories -->|"FK repository_id · ON DELETE CASCADE"| Scans[(project_scans)]
   Scans -->|"FK scan_id · ON DELETE CASCADE"| Files[(project_scan_files)]
+  Repositories -->|"FK repository_id · ON DELETE CASCADE"| Analyses[(project_analyses)]
+  Scans -->|"FK scan_id · ON DELETE CASCADE"| Analyses
+  Users -->|"FK owner_id · ON DELETE CASCADE"| Analyses
+  Models[(experiment_models)] -->|"FK model_id"| Analyses
+  Analyses -->|"FK analysis_id · ON DELETE CASCADE"| Findings[(project_analysis_findings)]
+  Analyses -->|"FK analysis_id · ON DELETE CASCADE"| Suggestions[(project_analysis_suggestions)]
+  Findings -->|"FK finding_id · ON DELETE SET NULL"| Suggestions
 ```
 
 `project_repositories` 保存公开仓库规范名称、分支、项目目标、需求基线文字、最近读取的 commit SHA 和读取时间；`owner_id` 是管理端账号外键，删除账号时级联清除连接。唯一索引限制同一账号重复接入同一仓库分支。列表与详情都按当前账号过滤，猜测 UUID 不会读到其他账号的连接。`last_checked_at` 表示读取分支的时间，不代表完成分析的时间。
 
-`project_scans` 固定创建时的仓库名称、分支与 commit，记录排队、扫描中、完整、部分或失败状态及各类覆盖计数。进行中的相同仓库／commit 扫描由唯一索引合并；服务重启后排队或扫描中的作业重新运行。`project_scan_files` 以扫描 ID 与路径为复合主键，保存文件 Git SHA、大小、分类、读取状态、内容哈希及成功读取的 UTF-8 正文；非读取成功的记录由 CHECK 约束禁止保存正文。列表只返回索引字段，正文读取接口先验证当前账号拥有仓库连接。迁移前的旧扫描正文为空，需要重新扫描。两个表随仓库连接删除级联清理；尚无项目分析报告表。
+`project_scans` 固定创建时的仓库名称、分支与 commit，记录排队、扫描中、完整、部分或失败状态及各类覆盖计数。进行中的相同仓库／commit 扫描由唯一索引合并；服务重启后排队或扫描中的作业重新运行。`project_scan_files` 以扫描 ID 与路径为复合主键，保存文件 Git SHA、大小、分类、读取状态、内容哈希及成功读取的 UTF-8 正文；非读取成功的记录由 CHECK 约束禁止保存正文。列表只返回索引字段，正文读取接口先验证当前账号拥有仓库连接。迁移前的旧扫描正文为空，需要重新扫描。
+
+`project_analyses` 兼作后台任务和已完成报告的固定头部，保存账号、仓库、扫描、模型的外键，以及提交时冻结的仓库名称、分支、commit、目标、需求基线、供应商／模型和单价。相同扫描与模型的进行中任务由部分唯一索引合并；启动后排队或分析中的任务会重新处理。`project_analysis_findings` 逐条保存状态、说明和文件行证据；`project_analysis_suggestions` 保存实践任务与验收要求，可用外键指向关联结论，删除结论时置空。两张子表随分析删除级联。分析结果在一个事务中写入；只有完整 JSON 结构及路径／行号／原文证据校验通过才置为已完成。当前模型调用由 API 进程内队列执行，跨进程崩溃时外部模型调用仍可能重复计费；尚无取消与失败重试接口。
 
 ## 页面如何读写数据
 

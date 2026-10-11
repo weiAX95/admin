@@ -30,7 +30,7 @@ export default function ModelCallAudit() {
       <DatePicker.RangePicker value={range} onChange={value => { setRange(value || [null, null]); setPage(1); }} />
       <Select aria-label="筛选模型" value={modelId} onChange={value => { setModelId(value); setPage(1); }} style={{ width: 180 }} options={[{ value: '', label: '全部模型' }, ...models.map(item => ({ value: item.id, label: item.displayName }))]} />
       <Select aria-label="筛选账号" value={userId} onChange={value => { setUserId(value); setPage(1); }} style={{ width: 160 }} options={[{ value: '', label: '全部账号' }, ...users.map(item => ({ value: item.id, label: item.username }))]} />
-      <Select aria-label="筛选模块" value={module} onChange={value => { setModule(value); setPage(1); }} style={{ width: 150 }} options={[{ value: '', label: '全部模块' }, { value: 'experiments', label: '实验' }, { value: 'evaluations', label: '评测' }]} />
+      <Select aria-label="筛选模块" value={module} onChange={value => { setModule(value); setPage(1); }} style={{ width: 150 }} options={[{ value: '', label: '全部模块' }, { value: 'experiments', label: '实验' }, { value: 'evaluations', label: '评测' }, { value: 'project_analysis', label: '项目分析' }]} />
     </Space>
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
     <Table rowKey="requestId" loading={loading} dataSource={items} scroll={{ x: 1050 }} pagination={{ current: page, pageSize: 100, total, showSizeChanger: false, onChange: setPage }} columns={[
@@ -38,7 +38,7 @@ export default function ModelCallAudit() {
       { title: '请求 ID', dataIndex: 'requestId', width: 155, ellipsis: true },
       { title: '模型 / 环节', width: 170, render: (_, item) => <Space><span>{item.modelName}</span><Tag>{item.phase === 'judge' ? 'Judge' : '主模型'}</Tag></Space> },
       { title: '账号', dataIndex: 'userName', width: 100 },
-      { title: '模块', dataIndex: 'module', width: 80, render: value => value === 'evaluations' ? '评测' : '实验' },
+      { title: '模块', dataIndex: 'module', width: 80, render: value => value === 'evaluations' ? '评测' : value === 'project_analysis' ? '项目分析' : '实验' },
       { title: '提示词预览', dataIndex: 'promptPreview', width: 220, ellipsis: true },
       { title: 'Token', width: 100, render: (_, item) => item.promptTokens === null ? '—' : `${item.promptTokens} / ${item.completionTokens}` },
       { title: '耗时', dataIndex: 'latencyMs', width: 90, render: value => `${value} ms` },

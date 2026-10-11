@@ -164,6 +164,6 @@ export async function completeWithProvider(client,{provider='legacy',connectionI
   } catch(error) { errorCode=statusCode>=400?`HTTP_${statusCode}`:statusCode?'INVALID_RESPONSE':error?.name==='AbortError'?'TIMEOUT':'NETWORK_ERROR'; throw error; }
   finally {
     clearTimeout(timeout);
-    if(audit) enqueueModelCallAudit(client,{...audit,requestId,provider,apiModel:model,messages,promptTokens,completionTokens,latencyMs:Math.max(0,Math.round(performance.now()-started)),statusCode,succeeded,errorCode});
+    if(audit) enqueueModelCallAudit(client,{...audit,requestId,provider,apiModel:model,messages:audit.redactPrompt?[{content:'[仓库代码输入已省略]'}]:messages,promptTokens,completionTokens,latencyMs:Math.max(0,Math.round(performance.now()-started)),statusCode,succeeded,errorCode});
   }
 }

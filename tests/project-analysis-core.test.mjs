@@ -43,3 +43,11 @@ test('unsupported model output is rejected rather than saved as a successful rep
     assert.throws(() => validateProjectReport(raw, selected));
   }
 });
+
+test('documentation claims cannot prove implementation and absence has no positive line evidence', () => {
+  const selected = selectProjectEvidence(files);
+  const base = { summary: '待验证', findings: [{ title: '功能', status: 'implemented', detail: '文档声称存在', evidence: { path: 'README.md', line: 2, excerpt: 'Learning app' } }], suggestions: [] };
+  assert.throws(() => validateProjectReport(JSON.stringify(base), selected), /文档|证据/);
+  base.findings[0] = { title: '未发现', status: 'not_found', detail: '扫描范围内未见实现', evidence: { path: 'src/app.ts', line: 1, excerpt: 'export const app = true;' } };
+  assert.throws(() => validateProjectReport(JSON.stringify(base), selected), /证据/);
+});

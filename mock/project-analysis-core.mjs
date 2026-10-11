@@ -40,11 +40,13 @@ export function validateProjectReport(raw, selectedFiles) {
       if (['implemented', 'partial'].includes(item.status)) throw new Error('已实现或部分实现结论缺少证据');
       return item;
     }
+    if (item.status === 'not_found') throw new Error('未发现实现结论不能使用正向代码证据');
     if (!exactKeys(item.evidence, ['path', 'line', 'excerpt'])) throw new Error('模型证据结构无效');
     const file = byPath.get(item.evidence.path);
     const line = item.evidence.line;
     if (!file || !Number.isInteger(line) || line < 1 || line > file.lines.length || !boundedText(item.evidence.excerpt, 500) || file.lines[line - 1].trim() !== item.evidence.excerpt.trim()) throw new Error('模型证据未匹配本次扫描的文件和行号');
     const type = file.category === 'test' ? 'test' : file.category === 'documentation' ? 'document' : 'code';
+    if (type === 'document' && ['implemented', 'partial'].includes(item.status)) throw new Error('文档声明不能证明功能已实现');
     return { ...item, evidence: { ...item.evidence, type, gitSha: file.gitSha } };
   });
   const suggestions = value.suggestions.map(item => {
