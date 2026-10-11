@@ -8,7 +8,7 @@ import { handleProjectSuggestionAction } from '../mock/project-suggestion-action
 import { handleProjectFindingFeedback } from '../mock/project-finding-feedback.mjs';
 
 const sha = 'a'.repeat(40);
-const report = JSON.stringify({ summary: '发现项目入口，运行状态尚未验证', findings: [{ title: '入口', status: 'implemented', detail: '存在入口函数', evidence: { path: 'src/main.ts', line: 1, excerpt: 'export function main() {}' } }], suggestions: [{ topic: '验证入口', reason: '静态代码不足以证明运行', practice: '添加集成测试', acceptance: '入口测试通过', findingIndex: 0 }] });
+const report = JSON.stringify({ summary: '发现项目入口，运行状态尚未验证', findings: [{ title: '入口', status: 'implemented', detail: '存在入口函数', evidence: { path: 'src/main.ts', line: 1, excerpt: 'export function main() {}' } }], suggestions: [{ topic: '验证入口', reason: '静态代码不足以证明运行', practice: '添加集成测试', acceptance: '入口测试通过', findingIndex: 0, impact: 'high', impactReason: '缺少运行验证会阻碍部署', prerequisites: ['集成测试'] }] });
 
 async function fixture(client) {
   const repositoryId = crypto.randomUUID(), scanId = crypto.randomUUID();
@@ -48,6 +48,8 @@ test('analysis persists validated report and source evidence, isolates owners, a
   assert.equal(detail.data.findings[0].evidence.path, 'src/main.ts');
   assert.equal(detail.data.findings[0].evidence.line, 1);
   assert.equal(detail.data.suggestions[0].findingId, detail.data.findings[0].id);
+  assert.equal(detail.data.suggestions[0].impact,'high');
+  assert.deepEqual(detail.data.suggestions[0].prerequisites,['集成测试']);
   assert.equal(detail.data.commitSha, sha);
   assert.deepEqual(detail.data.modules, [{ moduleKey: 'src', indexedCount: 1, readCount: 1, selectedCount: 1, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 0, summary: '发现项目入口，运行状态尚未验证' }]);
   assert.equal((await handleProjectAnalyses({ pathname: `${path}/${start.data.id}`, method: 'GET', client, me: other })).status, 404);
@@ -72,7 +74,7 @@ test('analysis calls the model per selected module and merges evidence with cumu
     const input = JSON.parse(messages[1].content);
     assert.equal(input.files.length,1);
     const file = input.files[0];
-    return { output: JSON.stringify({ summary: `已查看 ${input.moduleKey}`, findings: [{ title: input.moduleKey, status: 'implemented', detail: '有代码入口', evidence: { path: file.path, line: 1, excerpt: file.lines.split('\n')[0].replace(/^1: /,'') } }], suggestions: [{ topic: '验证入口', reason: '需要测试', practice: '编写测试', acceptance: '测试通过', findingIndex: 0 }] }), promptTokens: 10, completionTokens: 5 };
+    return { output: JSON.stringify({ summary: `已查看 ${input.moduleKey}`, findings: [{ title: input.moduleKey, status: 'implemented', detail: '有代码入口', evidence: { path: file.path, line: 1, excerpt: file.lines.split('\n')[0].replace(/^1: /,'') } }], suggestions: [{ topic: '验证入口', reason: '需要测试', practice: '编写测试', acceptance: '测试通过', findingIndex: 0, impact: 'medium', impactReason: '缺少测试影响维护', prerequisites: ['测试基础'] }] }), promptTokens: 10, completionTokens: 5 };
   };
   const me = { id: 'member', role: 'member' };
   const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel });
@@ -143,6 +145,8 @@ test('accepting a learning suggestion creates one linked task with task history 
   assert.equal(task.title,'验证入口');
   assert.match(task.description,/添加集成测试/);
   assert.match(task.description,/入口测试通过/);
+  assert.match(task.description,/缺少运行验证会阻碍部署/);
+  assert.match(task.description,/集成测试/);
   assert.match(task.description,/github.com\/octocat\/example\/blob\//);
   assert.equal(task.owner_id,'member');
   assert.equal((await client.query("SELECT count(*)::int AS n FROM task_trend_events WHERE task_id=$1 AND type='create'", [task.id])).rows[0].n,1);

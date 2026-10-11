@@ -9,7 +9,8 @@ const fingerprint = suggestion => crypto.createHash('sha256').update([suggestion
 
 function sourceDescription(row) {
   const source = row.evidence_path && row.evidence_line ? `\n- 代码证据：[${row.evidence_path}:${row.evidence_line}](https://github.com/${row.full_name}/blob/${row.commit_sha.trim()}/${row.evidence_path.split('/').map(encodeURIComponent).join('/')}#L${row.evidence_line})` : '';
-  return `## 学习理由\n${row.reason}\n\n## 实践任务\n${row.practice}\n\n## 验收标准\n${row.acceptance}\n\n## 来源\n- 项目报告：${row.analysis_id}\n- 关联结论：${row.finding_title || '未关联'}${source}`;
+  const prerequisites = row.prerequisites?.length ? row.prerequisites.map(item => `- ${item}`).join('\n') : '暂无明确前置知识';
+  return `## 学习理由\n${row.reason}\n\n## 对开发的影响（模型建议）\n${row.impact_reason || '旧报告未记录'}\n\n## 前置知识\n${prerequisites}\n\n## 实践任务\n${row.practice}\n\n## 验收标准\n${row.acceptance}\n\n## 来源\n- 项目报告：${row.analysis_id}\n- 关联结论：${row.finding_title || '未关联'}${source}`;
 }
 
 export async function handleProjectSuggestionAction({ pathname, method, client, me, readBody = async () => ({}) }) {

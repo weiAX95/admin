@@ -6,6 +6,8 @@ import { addProjectFindingFeedback, cancelProjectAnalysis, decideProjectSuggesti
 
 const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败', canceled: '已取消' };
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
+const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' };
+const impactOrder = { high: 0, medium: 1, low: 2 };
 const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败' };
 
 export default function ProjectReportPanel({ repository, scans }: { repository: ProjectRepository; scans: ProjectScan[] }) {
@@ -135,8 +137,10 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
         <Button size="small" onClick={() => { setFeedbackFindingId(finding.id); setFeedbackStatus(finding.feedback[0]?.correctedStatus || finding.status); setFeedbackReason(''); }}>修正判断</Button>
       </Card>) : <Empty description="暂无结论" />}
       <Typography.Title level={5}>学习建议</Typography.Title>
-      {report.suggestions.length ? report.suggestions.map(suggestion => <Card key={suggestion.id} size="small" style={{ marginBottom: 8 }} title={suggestion.topic}>
+      {report.suggestions.length ? report.suggestions.slice().sort((a,b) => (a.impact ? impactOrder[a.impact] : 3) - (b.impact ? impactOrder[b.impact] : 3)).map(suggestion => <Card key={suggestion.id} size="small" style={{ marginBottom: 8 }} title={<Space>{suggestion.topic}{suggestion.impact && <Tag color={suggestion.impact === 'high' ? 'red' : suggestion.impact === 'medium' ? 'orange' : 'blue'}>{impactLabels[suggestion.impact]}（模型估计）</Tag>}</Space>}>
         <Typography.Paragraph>{suggestion.reason}</Typography.Paragraph>
+        {suggestion.impactReason && <Typography.Paragraph><strong>影响下一步开发：</strong>{suggestion.impactReason}</Typography.Paragraph>}
+        <Typography.Paragraph><strong>前置知识：</strong>{suggestion.prerequisites.length ? suggestion.prerequisites.join('、') : '暂无明确前置知识'}</Typography.Paragraph>
         <Typography.Paragraph><strong>实践：</strong>{suggestion.practice}</Typography.Paragraph>
         <Typography.Paragraph><strong>验收：</strong>{suggestion.acceptance}</Typography.Paragraph>
         {suggestion.decision?.status === 'accepted' && <Space><Tag color="success">已加入任务</Tag>{suggestion.decision.taskId && <Link to={`/tasks/${suggestion.decision.taskId}`}>查看任务</Link>}</Space>}

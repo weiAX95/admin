@@ -141,7 +141,7 @@ export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, ma
     return { ...item, evidence: { ...item.evidence, type, gitSha: file.gitSha } };
   });
   const suggestions = value.suggestions.map(item => {
-    if (!exactKeys(item, ['topic', 'reason', 'practice', 'acceptance', 'findingIndex']) || !boundedText(item.topic, 160) || !boundedText(item.reason, 1000) || !boundedText(item.practice, 1000) || !boundedText(item.acceptance, 1000) || item.findingIndex !== null && (!Number.isInteger(item.findingIndex) || item.findingIndex < 0 || item.findingIndex >= findings.length)) throw new Error('模型建议结构或关联结论无效');
+    if (!exactKeys(item, ['topic', 'reason', 'practice', 'acceptance', 'findingIndex', 'impact', 'impactReason', 'prerequisites']) || !boundedText(item.topic, 160) || !boundedText(item.reason, 1000) || !boundedText(item.practice, 1000) || !boundedText(item.acceptance, 1000) || !['high','medium','low'].includes(item.impact) || !boundedText(item.impactReason, 1000) || !Array.isArray(item.prerequisites) || item.prerequisites.length > 5 || item.prerequisites.some(value => !boundedText(value, 120)) || new Set(item.prerequisites.map(value => value.trim().toLocaleLowerCase())).size !== item.prerequisites.length || item.findingIndex !== null && (!Number.isInteger(item.findingIndex) || item.findingIndex < 0 || item.findingIndex >= findings.length)) throw new Error('模型建议结构或关联结论无效');
     return item;
   });
   return { summary: value.summary.trim(), findings, suggestions };

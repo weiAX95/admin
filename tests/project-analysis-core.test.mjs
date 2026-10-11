@@ -40,7 +40,7 @@ test('module plan caps model calls and aggregation keeps each finding and sugges
   assert.equal(groupProjectEvidence(selected).length, 8);
   assert.equal(selected.length, 8);
   const groups = groupProjectEvidence(selected).slice(0,2);
-  const reports = groups.map(({moduleKey,files}) => ({ moduleKey, report: { summary: `已查看 ${moduleKey}`, findings: [{ title: moduleKey, status: 'implemented', detail: '入口存在', evidence: { path: files[0].path, line: 1, excerpt: files[0].lines[0] } }], suggestions: [{ topic: '测试', reason: '需验证', practice: '编写测试', acceptance: '测试通过', findingIndex: 0 }] } }));
+  const reports = groups.map(({moduleKey,files}) => ({ moduleKey, report: { summary: `已查看 ${moduleKey}`, findings: [{ title: moduleKey, status: 'implemented', detail: '入口存在', evidence: { path: files[0].path, line: 1, excerpt: files[0].lines[0] } }], suggestions: [{ topic: '测试', reason: '需验证', practice: '编写测试', acceptance: '测试通过', findingIndex: 0, impact: 'medium', impactReason: '缺少测试影响后续重构', prerequisites: ['测试基础'] }] } }));
   const merged = mergeProjectModuleReports(reports);
   assert.deepEqual(merged.findings.map(finding => finding.moduleKey), groups.map(group => group.moduleKey));
   assert.deepEqual(merged.suggestions.map(suggestion => suggestion.findingIndex), [0,1]);
@@ -65,16 +65,19 @@ test('technology hints only quote declared dependencies from readable manifests'
 
 test('model report requires exact evidence from selected commit lines', () => {
   const selected = selectProjectEvidence(files);
-  const raw = JSON.stringify({ summary: '已发现应用入口', findings: [{ title: '入口模块', status: 'implemented', detail: '包含运行入口', evidence: { path: 'src/app.ts', line: 2, excerpt: 'run(app);' } }], suggestions: [{ topic: '验证运行流程', reason: '需要运行证明', practice: '编写入口测试', acceptance: '测试通过', findingIndex: 0 }] });
+  const raw = JSON.stringify({ summary: '已发现应用入口', findings: [{ title: '入口模块', status: 'implemented', detail: '包含运行入口', evidence: { path: 'src/app.ts', line: 2, excerpt: 'run(app);' } }], suggestions: [{ topic: '验证运行流程', reason: '需要运行证明', practice: '编写入口测试', acceptance: '测试通过', findingIndex: 0, impact: 'high', impactReason: '缺少运行证据会影响后续部署', prerequisites: ['集成测试'] }] });
   const report = validateProjectReport(raw, selected);
   assert.equal(report.findings[0].evidence.type, 'code');
   assert.equal(report.findings[0].evidence.gitSha, 'a'.repeat(40));
   assert.equal(report.suggestions[0].findingIndex, 0);
+  assert.equal(report.suggestions[0].impact,'high');
   for (const invalid of [
     raw.replace('run(app);', 'made up'),
     raw.replace('src/app.ts', '.env'),
     raw.replace('"line":2', '"line":99'),
     raw.replace('"findingIndex":0', '"findingIndex":5'),
+    raw.replace('"impact":"high"', '"impact":"urgent"'),
+    raw.replace('"prerequisites":["集成测试"]', '"prerequisites":["集成测试","集成测试"]'),
   ]) assert.throws(() => validateProjectReport(invalid, selected), /证据|建议/);
 });
 
