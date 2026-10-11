@@ -21,7 +21,7 @@ async function fixture(client) {
 async function waitFor(client, id) {
   for (let i = 0; i < 100; i++) {
     const row = (await client.query('SELECT status FROM project_analyses WHERE id=$1', [id])).rows[0];
-    if (['completed','failed'].includes(row?.status)) return row.status;
+    if (['completed','failed','canceled'].includes(row?.status)) return row.status;
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   throw new Error('analysis did not finish');
@@ -87,6 +87,54 @@ test('invalid model output fails without a false successful report; queued work 
   await client.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,model_id,provider,api_model,input_price,output_price,estimated_max_cost_usd,status) SELECT $1,repository_id,id,'member',full_name,branch,commit_sha,'学习项目','v1','project-model','legacy','fake-model',1,1,0.1,'queued' FROM project_scans WHERE id=$2", [queuedId,scanId]);
   assert.equal(await resumeProjectAnalyses(client, async () => ({ output: report, promptTokens: 2, completionTokens: 3 })), 1);
   assert.equal(await waitFor(client, queuedId), 'completed');
+});
+
+test('active analysis can be canceled without persisting a late model response', async t => {
+  const { client } = await createPgTestServer(t);
+  const { scanId, path } = await fixture(client);
+  const me = { id: 'member', role: 'member' };
+  let entered;
+  const running = new Promise(resolve => { entered = resolve; });
+  const runModel = async (_db, _job, _messages, signal) => {
+    entered();
+    await new Promise(resolve => signal.addEventListener('abort', resolve, { once: true }));
+    return { output: report, promptTokens: 1, completionTokens: 1 };
+  };
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel });
+  await running;
+  const canceled = await handleProjectAnalyses({ pathname: `${path}/${started.data.id}/cancel`, method: 'POST', client, me });
+  assert.equal(canceled.status, 200);
+  assert.equal(await waitFor(client, started.data.id), 'canceled');
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_findings WHERE analysis_id=$1', [started.data.id])).rows[0].n, 0);
+  assert.equal((await handleProjectAnalyses({ pathname: `${path}/${started.data.id}/cancel`, method: 'POST', client, me: { id: 'learner', role: 'member' } })).status, 404);
+});
+
+test('failed analysis retries with fresh reservation and stops at attempt limit', async t => {
+  const { client } = await createPgTestServer(t);
+  const { scanId, path } = await fixture(client);
+  const me = { id: 'member', role: 'member' };
+  const runModel = async () => ({ output: '{"summary":"invalid"}', promptTokens: 1, completionTokens: 1 });
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel });
+  assert.equal(await waitFor(client, started.data.id), 'failed');
+  const first = (await client.query('SELECT estimated_max_cost_usd FROM project_analysis_attempts WHERE analysis_id=$1 AND attempt=1', [started.data.id])).rows[0];
+  await client.query('UPDATE experiment_settings SET daily_budget_usd=$1 WHERE id=1', [first.estimated_max_cost_usd]);
+  assert.equal((await handleProjectAnalyses({ pathname: `${path}/${started.data.id}/retry`, method: 'POST', client, me, connectionAvailable: async () => true, runModel })).status, 429);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_attempts WHERE analysis_id=$1', [started.data.id])).rows[0].n, 1);
+  await client.query("UPDATE project_analysis_attempts SET charged_at=now()-interval '2 days' WHERE analysis_id=$1", [started.data.id]);
+  for (let attempt = 2; attempt <= 3; attempt++) {
+    const retried = await handleProjectAnalyses({ pathname: `${path}/${started.data.id}/retry`, method: 'POST', client, me, connectionAvailable: async () => true, runModel });
+    assert.equal(retried.status, 202);
+    assert.equal(await waitFor(client, started.data.id), 'failed');
+    assert.equal((await client.query('SELECT attempts FROM project_analyses WHERE id=$1', [started.data.id])).rows[0].attempts, attempt);
+    if (attempt === 2) await client.query('UPDATE experiment_settings SET daily_budget_usd=10 WHERE id=1');
+  }
+  assert.equal((await handleProjectAnalyses({ pathname: `${path}/${started.data.id}/retry`, method: 'POST', client, me, connectionAvailable: async () => true, runModel })).status, 409);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM model_token_reservations WHERE run_id LIKE $1', [`${started.data.id}%`])).rows[0].n, 3);
+  const attempts = (await client.query('SELECT attempt,status,cost_usd FROM project_analysis_attempts WHERE analysis_id=$1 ORDER BY attempt', [started.data.id])).rows;
+  assert.deepEqual(attempts.map(row => row.attempt), [1,2,3]);
+  assert.ok(attempts.every(row => row.status === 'failed' && Number(row.cost_usd) > 0));
+  const total = (await client.query('SELECT cost_usd FROM project_analyses WHERE id=$1', [started.data.id])).rows[0].cost_usd;
+  assert.equal(Number(total), attempts.reduce((sum,row) => sum + Number(row.cost_usd),0));
 });
 
 test('HTTP analysis calls the configured server-side model and returns a persisted report', async t => {

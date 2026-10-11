@@ -34,3 +34,12 @@ test('provider adapters use native request formats and retain tool calls without
   assert.equal(requests[2].headers['x-goog-api-key'],'test');
   assert.throws(()=>validateModelCapabilities('openai',{input:['text','video'],output:['text'],tools:false}),/范围/);
 });
+
+test('provider adapter honors an already canceled request signal',async()=>{
+  const controller=new AbortController();
+  controller.abort();
+  process.env.OPENAI_API_BASE_URL='http://127.0.0.1:9';
+  process.env.OPENAI_API_KEY='test';
+  const client={query:async()=>({rows:[]})};
+  await assert.rejects(completeWithProvider(client,{provider:'openai',model:'test',messages:[{role:'user',content:'test'}],signal:controller.signal}),error=>error.name==='AbortError');
+});

@@ -124,7 +124,7 @@ function parsed(provider,result,outputKind='text') {
   return {output,toolCalls,outputParts,promptTokens:result.usageMetadata?.promptTokenCount,completionTokens:result.usageMetadata?.candidatesTokenCount};
 }
 
-export async function completeWithProvider(client,{provider='legacy',connectionId=null,model,messages,parameters={},toolSchema=null,outputKind='text',timeoutMs=120000,audit=null}) {
+export async function completeWithProvider(client,{provider='legacy',connectionId=null,model,messages,parameters={},toolSchema=null,outputKind='text',timeoutMs=120000,audit=null,signal=null}) {
   const policy = audit?.modelId ? await getModelSecurityPolicy(client,audit.modelId) : null;
   if (policy) {
     const inputText = messages.flatMap(message => [message.content,...(message.parts || []).filter(part => part.type === 'text').map(part => part.text)]).filter(value => typeof value === 'string').join('\n');
@@ -142,6 +142,9 @@ export async function completeWithProvider(client,{provider='legacy',connectionI
   if(outputKind!=='text' && !(provider==='gemini'&&['image','audio'].includes(outputKind)) && !(provider==='openai'&&outputKind==='image')) throw new Error('当前供应商适配器不支持所选输出类型');
   const request=build(provider,model,media,parameters,functionSchema(toolSchema),outputKind,trim(baseUrl));
   const controller=new AbortController();
+  const abort=()=>controller.abort();
+  if(signal?.aborted) abort();
+  else signal?.addEventListener('abort',abort,{once:true});
   const timeout=setTimeout(()=>controller.abort(),timeoutMs);
   const started=performance.now(),requestId=crypto.randomUUID();
   let statusCode=0,succeeded=false,promptTokens=null,completionTokens=null,errorCode=null;
@@ -161,9 +164,10 @@ export async function completeWithProvider(client,{provider='legacy',connectionI
     }
     promptTokens=value.promptTokens;completionTokens=value.completionTokens;succeeded=true;
     return value;
-  } catch(error) { errorCode=statusCode>=400?`HTTP_${statusCode}`:statusCode?'INVALID_RESPONSE':error?.name==='AbortError'?'TIMEOUT':'NETWORK_ERROR'; throw error; }
+  } catch(error) { errorCode=statusCode>=400?`HTTP_${statusCode}`:statusCode?'INVALID_RESPONSE':error?.name==='AbortError'?(signal?.aborted?'CANCELED':'TIMEOUT'):'NETWORK_ERROR'; throw error; }
   finally {
     clearTimeout(timeout);
+    signal?.removeEventListener('abort',abort);
     if(audit) enqueueModelCallAudit(client,{...audit,requestId,provider,apiModel:model,messages:audit.redactPrompt?[{content:'[仓库代码输入已省略]'}]:messages,promptTokens,completionTokens,latencyMs:Math.max(0,Math.round(performance.now()-started)),statusCode,succeeded,errorCode});
   }
 }

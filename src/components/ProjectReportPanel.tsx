@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Alert, App, Button, Card, Empty, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Empty, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
-import { getProjectAnalysis, listProjectAnalyses, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
+import { cancelProjectAnalysis, getProjectAnalysis, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
 
-const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败' };
+const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败', canceled: '已取消' };
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
 const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败' };
 
@@ -15,6 +15,7 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
   const [modelId, setModelId] = useState('');
   const [report, setReport] = useState<ProjectAnalysisReport | null>(null);
   const [starting, setStarting] = useState(false);
+  const [actingId, setActingId] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -46,6 +47,15 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
     try { setReport(await getProjectAnalysis(repository.id, id)); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '报告读取失败'); }
   };
+  const act = async (item: ProjectAnalysisJob, action: 'cancel' | 'retry') => {
+    setActingId(item.id);
+    try {
+      const updated = action === 'cancel' ? await cancelProjectAnalysis(repository.id,item.id) : await retryProjectAnalysis(repository.id,item.id);
+      setItems(current => current.map(row => row.id === updated.id ? updated : row));
+      message.success(action === 'cancel' ? '分析已取消' : '已重新排队分析');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '操作失败'); }
+    finally { setActingId(''); }
+  };
   const sourceLink = (path: string, line: number) => `https://github.com/${report?.fullName}/blob/${report?.commitSha}/${path.split('/').map(encodeURIComponent).join('/')}#L${line}`;
 
   return <Card title="项目分析报告">
@@ -61,10 +71,14 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
       { title: '创建时间', dataIndex: 'createdAt', render: value => new Date(value).toLocaleString('zh-CN') },
       { title: 'commit', dataIndex: 'commitSha', render: (value: string) => <code>{value.slice(0, 10)}</code> },
       { title: '模型', dataIndex: 'model' },
-      { title: '状态', render: (_, item: ProjectAnalysisJob) => <Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : 'processing'}>{states[item.status]}</Tag> },
+      { title: '状态', render: (_, item: ProjectAnalysisJob) => <Space><Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'canceled' ? 'default' : 'processing'}>{states[item.status]}</Tag><Typography.Text type="secondary">{item.attempts}/{item.maxAttempts} 次</Typography.Text></Space> },
       { title: '覆盖', render: (_, item: ProjectAnalysisJob) => item.status === 'completed' ? `${item.selectedFileCount}/${item.availableFileCount} 文件` : '—' },
       { title: '说明', render: (_, item: ProjectAnalysisJob) => item.errorCode ? errors[item.errorCode] || item.errorCode : '—' },
-      { title: '操作', render: (_, item: ProjectAnalysisJob) => <Button type="link" disabled={item.status !== 'completed'} onClick={() => void show(item.id)}>查看报告</Button> },
+      { title: '操作', render: (_, item: ProjectAnalysisJob) => <Space size="small">
+        {item.status === 'completed' && <Button type="link" onClick={() => void show(item.id)}>查看报告</Button>}
+        {['queued','analyzing'].includes(item.status) && <Popconfirm title="确定取消这次分析？" onConfirm={() => void act(item,'cancel')}><Button type="link" danger loading={actingId === item.id}>取消</Button></Popconfirm>}
+        {item.status === 'failed' && item.attempts < item.maxAttempts && <Button type="link" loading={actingId === item.id} onClick={() => void act(item,'retry')}>重试</Button>}
+      </Space> },
     ]} />
     {report && <Card size="small" title={`报告 · ${report.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setReport(null)}>关闭</Button>}>
       {!report.analysisCoverageComplete && <Alert type="warning" showIcon message="本次报告只覆盖部分已扫描内容；未发现实现不代表整个仓库没有实现" style={{ marginBottom: 12 }} />}

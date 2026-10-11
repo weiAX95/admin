@@ -45,7 +45,8 @@ export const getProjectScanFile = (repositoryId: string, scanId: string, path: s
 
 export interface ProjectAnalysisJob {
   id: string; repositoryId: string; scanId: string; commitSha: string; branch: string;
-  modelId: string; model: string; status: 'queued' | 'analyzing' | 'completed' | 'failed';
+  modelId: string; model: string; status: 'queued' | 'analyzing' | 'completed' | 'failed' | 'canceled';
+  attempts: number; maxAttempts: number; canceledAt: string | null;
   errorCode: string | null; summary: string | null; selectedFileCount: number;
   availableFileCount: number; analysisCoverageComplete: boolean;
   promptTokens: number | null; completionTokens: number | null; costUsd: number | null;
@@ -59,3 +60,5 @@ export interface ProjectAnalysisReport extends ProjectAnalysisJob {
 export const listProjectAnalyses = (repositoryId: string) => http.get<{ items: ProjectAnalysisJob[] }>(`/project-repositories/${repositoryId}/analyses`);
 export const startProjectAnalysis = (repositoryId: string, scanId: string, modelId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses`, { scanId, modelId });
 export const getProjectAnalysis = (repositoryId: string, analysisId: string) => http.get<ProjectAnalysisReport>(`/project-repositories/${repositoryId}/analyses/${analysisId}`);
+export const cancelProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/cancel`, {});
+export const retryProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/retry`, {});
