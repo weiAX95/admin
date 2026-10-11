@@ -38,6 +38,10 @@ export interface SessionLearningPath {
 export const getSessionLearningPath = (userId: string) =>
   http.get<SessionLearningPath>("/sessions/learning-path", { userId });
 
+export interface RelatedSession { id: string; title: string; createdAt: string; score: number }
+export const getRelatedSessions = (sessionId: string) =>
+  http.get<{ items: RelatedSession[] }>(`/sessions/${encodeURIComponent(sessionId)}/related`);
+
 export const getSession = (id: string) =>
   http.get<SessionDetail>(`/sessions/${id}`);
 

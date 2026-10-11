@@ -9,6 +9,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { listTasks } from "../api/tasks";
 import SessionMessageBubble from "../components/SessionMessageBubble";
 import SessionLearningPath from "../components/SessionLearningPath";
+import RelatedSessions from "../components/RelatedSessions";
 import { NoteFormDrawer } from "./Notes";
 import type { LearningTask, MessageAnnotationTag, NotePayload, SessionDetail, SessionMessage, SessionSummary } from "../types";
 
@@ -147,15 +148,15 @@ export default function Sessions() {
     if (detailLoading === row.id) return <div className="session-detail-state"><Spin /> 正在加载会话…</div>;
     if (detailErrors[row.id]) return <div className="session-detail-state"><Typography.Text type="danger">{detailErrors[row.id]}</Typography.Text><Button size="small" onClick={() => void loadDetail(row.id)}>重试</Button></div>;
     if (!detail) return <div className="session-detail-state"><Spin /></div>;
-    if (!detail.messages.length) return <Empty description="暂无消息" />;
-    return <div className="session-timeline">{detail.messages.map(entry => <SessionMessageBubble key={entry.id} entry={entry}
+    if (!detail.messages.length) return <><Empty description="暂无消息" /><RelatedSessions sessionId={detail.id} onOpen={openSearchHit} /></>;
+    return <><div className="session-timeline">{detail.messages.map(entry => <SessionMessageBubble key={entry.id} entry={entry}
       onSinkNote={() => void sinkNote(detail, entry, null)} onLinkTask={() => { setLinkMsg(entry); setLinkSessionId(detail.id); }}
       onSaveSelection={text => setQuickDraft({ title: Array.from(text.replace(/\s+/g, " ").trim()).slice(0, 50).join("") || "会话摘录", content: text, sourceSessionId: detail.id, taskId: null })}
       onSave={async (rating: number, tags: MessageAnnotationTag[]) => {
         const annotation = await annotateSessionMessage(detail.id, entry.id, rating, tags);
         setDetails(previous => ({ ...previous, [detail.id]: { ...previous[detail.id], messages: previous[detail.id].messages.map(item => item.id === entry.id ? { ...item, annotation } : item) } }));
         return annotation;
-      }} />)}</div>;
+      }} />)}</div><RelatedSessions sessionId={detail.id} onOpen={openSearchHit} /></>;
   };
 
   return <><Card className="collection-card" title={<span className="collection-title">会话列表<span className="collection-count">{items.length} 条</span></span>}>

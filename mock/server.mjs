@@ -12,6 +12,7 @@ import { listActivity } from "./activity.mjs";
 import { searchSessions } from "./session-search.mjs";
 import { exportSessions } from "./session-export.mjs";
 import { getSessionLearningPath } from "./session-learning-path.mjs";
+import { getRelatedSessions } from "./session-related.mjs";
 import { activityHeatmap, activityDay } from "./heatmap.mjs";
 import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
@@ -1690,6 +1691,21 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  const relatedRoute = new URL(req.url, 'http://localhost').pathname.match(/^\/api\/sessions\/([^/]+)\/related$/);
+  if (relatedRoute) {
+    if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
+    void (async () => {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      if (!await lookupSession(token)) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      if (req.method !== 'GET') return sendImmediate(res, 405, { error: 'method not allowed' });
+      const result = await getRelatedSessions(pool, decodeURIComponent(relatedRoute[1]));
+      return sendImmediate(res, result.status, result.data);
+    })().catch(error => {
+      console.error('[session-related] request failed:', error.message);
+      if (!res.headersSent) sendImmediate(res, 500, { error: '相关会话查询暂不可用' });
+    });
+    return;
+  }
   if (new URL(req.url, 'http://localhost').pathname === '/api/sessions/learning-path') {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
