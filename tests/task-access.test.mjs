@@ -12,6 +12,8 @@ test('member cannot read or mutate another account task through task subroutes',
     return { status: response.status, data: await response.json() };
   };
   const own = (await request(member, 'POST', '/tasks', { title: '成员任务' })).data;
+  const linkedNote = (await request(admin, 'POST', '/notes', { title: '共享笔记', taskId: 'seed-task-1' })).data;
+  const linkedExperiment = (await request(admin, 'POST', '/experiments', { title: '共享实验', taskId: 'seed-task-1' })).data;
   assert.equal((await request(admin, 'GET', `/tasks/${own.id}`)).status, 200);
   assert.deepEqual((await request(member, 'GET', '/tasks')).data.items.map(item => item.id), [own.id]);
   const stats = (await request(member, 'GET', '/stats')).data;
@@ -20,6 +22,16 @@ test('member cannot read or mutate another account task through task subroutes',
   assert.equal((await request(member, 'GET', '/dashboard/quick-actions')).data.tasks, 1);
   assert.deepEqual((await request(member, 'GET', '/dashboard/quick-preview?kind=tasks')).data.items.map(item => item.id), [own.id]);
   assert.ok((await request(member, 'GET', '/activity')).data.items.every(item => item.taskId === own.id || item.userId === 'member'));
+  assert.equal((await request(member, 'GET', `/notes/${linkedNote.id}`)).data.taskId, null);
+  assert.equal((await request(member, 'GET', `/experiments/${linkedExperiment.id}`)).data.taskId, null);
+  assert.equal((await request(member, 'GET', '/notes?taskId=seed-task-1')).status, 404);
+  assert.equal((await request(member, 'GET', '/experiments?taskId=seed-task-1')).status, 404);
+  assert.equal((await request(member, 'POST', '/notes', { title: '越权笔记', taskId: 'seed-task-1' })).status, 404);
+  assert.equal((await request(member, 'POST', '/experiments', { title: '越权实验', taskId: 'seed-task-1' })).status, 404);
+  assert.equal((await request(member, 'PATCH', `/notes/${linkedNote.id}`, { taskId: null })).status, 404);
+  assert.equal((await request(member, 'DELETE', `/notes/${linkedNote.id}`)).status, 404);
+  const graph = (await request(member, 'GET', '/knowledge-graph')).data;
+  assert.ok(graph.nodes.every(node => node.id !== 'task:seed-task-1' && node.id !== 'task:seed-task-2'));
   for (const [method,path,body] of [
     ['GET','/tasks/seed-task-1'], ['PATCH','/tasks/seed-task-1',{ title: '越权' }], ['DELETE','/tasks/seed-task-1'],
     ['GET','/tasks/seed-task-1/change-logs'], ['GET','/tasks/seed-task-1/activity'], ['GET','/tasks/seed-task-1/time-entries'],

@@ -542,6 +542,8 @@ async function handleRequest(req, res) {
     if (!me) return send(res, 401, { error: "登录账号不存在，请重新登录" });
     const accountTasks = db.tasks.filter(task => canUseDependency(task, me));
     const accountTaskIds = new Set(accountTasks.map(task => task.id));
+    const linkedTaskVisible = taskId => !taskId || accountTaskIds.has(taskId);
+    const linkedRecordView = record => record && !linkedTaskVisible(record.taskId) ? { ...record, taskId: null } : record;
     const visibleTask = task => canUseDependency(task, me);
     const taskView = task => {
       if (!task || me.role === "admin") return task;
@@ -1462,7 +1464,7 @@ async function handleRequest(req, res) {
     }
 
     // ---- notes ----
-    if (pathname === "/api/knowledge-graph" && method === "GET") return send(res, 200, buildKnowledgeGraph(db));
+    if (pathname === "/api/knowledge-graph" && method === "GET") return send(res, 200, buildKnowledgeGraph({ ...db, tasks: accountTasks, notes: db.notes.map(linkedRecordView) }));
     if (pathname === "/api/notes/graph" && method === "GET") {
       const nodes = db.notes.map(({ id, title }) => ({ id, title }));
       const edges = db.notes.flatMap(note => (note.links || []).map(link => ({ sourceId: note.id, targetId: link.targetId || null, targetRef: link.targetRef, label: link.label, reason: link.targetId ? null : link.reason || "missing" })));
@@ -1493,11 +1495,12 @@ async function handleRequest(req, res) {
       snapshotNote(note, "restore");
       saveDb(db);
       if (contentChanged) afterSave(client => resetNoteReviews(client, note.id));
-      return send(res, 200, note);
+      return send(res, 200, linkedRecordView(note));
     }
     if (pathname === "/api/notes") {
       if (method === "GET") {
         const taskId = url.searchParams.get("taskId");
+        if (taskId && !linkedTaskVisible(taskId)) return send(res, 404, { error: "任务不存在" });
         const keyword = (url.searchParams.get("keyword") || "").trim().toLocaleLowerCase();
         const categoryId = url.searchParams.get("categoryId");
         const categoryIds = categoryId ? categoryBranch(db.noteCategories, categoryId) : null;
@@ -1505,7 +1508,7 @@ async function handleRequest(req, res) {
         const items = db.notes.filter(note => (!taskId || note.taskId === taskId) && (!keyword || `${note.title || ""}\n${note.content || ""}`.toLocaleLowerCase().includes(keyword)) && (!categoryIds || categoryIds.has(note.categoryId)) && tags.every(tag => (note.tags || []).includes(tag))).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
         const tagCounts = new Map();
         for (const note of db.notes) for (const tag of note.tags || []) tagCounts.set(tag, (tagCounts.get(tag) || 0) + 1);
-        return send(res, 200, { items, total: items.length, tags: [...tagCounts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh-CN")) });
+        return send(res, 200, { items: items.map(linkedRecordView), total: items.length, tags: [...tagCounts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh-CN")) });
       }
       if (method === "POST") {
         const body = await readBody(req);
@@ -1520,6 +1523,7 @@ async function handleRequest(req, res) {
           tags: body.tags === undefined ? [] : canonicalNoteTags(db.noteTagDefinitions, body.tags),
           createdAt: t, updatedAt: t,
         };
+        if (!linkedTaskVisible(note.taskId)) return send(res, 404, { error: "任务不存在" });
         if (note.categoryId && !db.noteCategories.some(item => item.id === note.categoryId)) return send(res, 400, { error: "分类不存在" });
         if (note.sourceSessionId && !db.sessions.some(item => item.id === note.sourceSessionId)) return send(res, 400, { error: "来源会话不存在" });
         db.notes.unshift(note);
@@ -1528,7 +1532,7 @@ async function handleRequest(req, res) {
         logAction("note", { taskId: note.taskId, title: note.title, detail: "新增学习笔记" });
         saveDb(db);
         afterSave(client => initializeNoteReviews(client, note.id));
-        return send(res, 201, note);
+        return send(res, 201, linkedRecordView(note));
       }
       return send(res, 405, { error: "method not allowed" });
     }
@@ -1540,14 +1544,18 @@ async function handleRequest(req, res) {
         const note = db.notes[i];
         const links = (note.links || []).map(link => ({ ...link, targetTitle: db.notes.find(candidate => candidate.id === link.targetId)?.title || null, reason: link.targetId ? null : link.reason || "missing" }));
         const backlinks = db.notes.filter(candidate => (candidate.links || []).some(link => link.targetId === note.id)).map(candidate => ({ id: candidate.id, title: candidate.title }));
-        return send(res, 200, { ...note, links, backlinks, sourceSessionMissing: Boolean(note.sourceSessionId && !db.sessions.some(session => session.id === note.sourceSessionId)) });
+        return send(res, 200, { ...linkedRecordView(note), links, backlinks, sourceSessionMissing: Boolean(note.sourceSessionId && !db.sessions.some(session => session.id === note.sourceSessionId)) });
       }
       if (method === "PUT" || method === "PATCH") {
         const body = await readBody(req);
+        if ("taskId" in body && !linkedTaskVisible(db.notes[i].taskId)) return send(res, 404, { error: "任务不存在" });
         const w = {};
         if (typeof body.title === "string") w.title = body.title.trim();
         if (typeof body.content === "string") w.content = body.content;
-        if ("taskId" in body) w.taskId = body.taskId || null;
+        if ("taskId" in body) {
+          w.taskId = body.taskId || null;
+          if (!linkedTaskVisible(w.taskId)) return send(res, 404, { error: "任务不存在" });
+        }
         if ("categoryId" in body) {
           w.categoryId = body.categoryId || null;
           if (w.categoryId && !db.noteCategories.some(item => item.id === w.categoryId)) return send(res, 400, { error: "分类不存在" });
@@ -1560,9 +1568,10 @@ async function handleRequest(req, res) {
         snapshotNote(next, "save");
         saveDb(db);
         if (contentChanged) afterSave(client => resetNoteReviews(client, next.id));
-        return send(res, 200, db.notes[i]);
+        return send(res, 200, linkedRecordView(db.notes[i]));
       }
       if (method === "DELETE") {
+        if (!linkedTaskVisible(db.notes[i].taskId)) return send(res, 404, { error: "任务不存在" });
         const [rm] = db.notes.splice(i, 1);
         reconcileNoteLinks();
         saveDb(db);
@@ -1576,10 +1585,11 @@ async function handleRequest(req, res) {
     if (pathname === "/api/experiments") {
       if (method === "GET") {
         const taskId = url.searchParams.get("taskId");
+        if (taskId && !linkedTaskVisible(taskId)) return send(res, 404, { error: "任务不存在" });
         let items = [...db.experiments];
         if (taskId) items = items.filter((e) => e.taskId === taskId);
         items.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-        return send(res, 200, { items });
+        return send(res, 200, { items: items.map(linkedRecordView) });
       }
       if (method === "POST") {
         const body = await readBody(req);
@@ -1596,10 +1606,11 @@ async function handleRequest(req, res) {
           score: clampProgress(body.score ?? 0) > 5 ? 5 : Math.max(0, Math.round(Number(body.score) || 0)),
           createdAt: t, updatedAt: t,
         };
+        if (!linkedTaskVisible(exp.taskId)) return send(res, 404, { error: "任务不存在" });
         db.experiments.unshift(exp);
         logAction("experiment", { taskId: exp.taskId, title: exp.title, detail: "记录一次实验" });
         saveDb(db);
-        return send(res, 201, exp);
+        return send(res, 201, linkedRecordView(exp));
       }
       return send(res, 405, { error: "method not allowed" });
     }
@@ -1607,14 +1618,17 @@ async function handleRequest(req, res) {
     if (expOne) {
       const i = db.experiments.findIndex((e) => e.id === expOne[1]);
       if (i === -1) return send(res, 404, { error: "experiment not found" });
-      if (method === "GET") return send(res, 200, db.experiments[i]);
+      if (method === "GET") return send(res, 200, linkedRecordView(db.experiments[i]));
       if (method === "PUT" || method === "PATCH") {
         if (me.role !== "admin" && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权修改该实验" });
         if (db.experiments[i].recordKind === "definition") return send(res, 409, { error: "请使用实验定义接口修改" });
         const body = await readBody(req);
         const w = {};
         if (typeof body.title === "string") w.title = body.title.trim();
-        if ("taskId" in body) w.taskId = body.taskId || null;
+        if ("taskId" in body) {
+          w.taskId = body.taskId || null;
+          if (!linkedTaskVisible(w.taskId)) return send(res, 404, { error: "任务不存在" });
+        }
         if (typeof body.prompt === "string") w.prompt = body.prompt;
         if (typeof body.model === "string") w.model = body.model;
         if (typeof body.params === "string") w.params = body.params;
@@ -1622,7 +1636,7 @@ async function handleRequest(req, res) {
         if (body.score !== undefined) w.score = Math.max(0, Math.min(5, Math.round(Number(body.score) || 0)));
         db.experiments[i] = { ...db.experiments[i], ...w, updatedAt: nowIso() };
         saveDb(db);
-        return send(res, 200, db.experiments[i]);
+        return send(res, 200, linkedRecordView(db.experiments[i]));
       }
       if (method === "DELETE") {
         if (me.role !== "admin" && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权删除该实验" });

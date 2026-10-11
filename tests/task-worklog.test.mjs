@@ -57,7 +57,7 @@ test("linked records, time entries, completion cycles, and stats use separate pe
   assert.deepEqual((await call("GET", `/experiments?taskId=${task.id}`)).data.items.map(item => item.id), [experiment.id]);
   assert.equal((await call("GET", `/notes/${note.id}`)).data.title, note.title);
   assert.equal((await call("GET", `/experiments/${experiment.id}`)).data.title, experiment.title);
-  assert.deepEqual((await call("GET", "/notes?taskId=missing")).data.items, []);
+  assert.equal((await call("GET", "/notes?taskId=missing")).status, 404);
 
   assert.equal((await call("POST", `/tasks/${task.id}/time-entries`, { mode: "duration", workDate: "2026-10-05", hours: 0 })).status, 400);
   assert.equal((await call("POST", `/tasks/${task.id}/time-entries`, { mode: "interval", startedAt: "2026-10-05T10:00:00Z", endedAt: "2026-10-05T09:00:00Z" })).status, 400);
