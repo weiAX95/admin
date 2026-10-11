@@ -14,6 +14,11 @@ test('member cannot read or mutate another account task through task subroutes',
   const own = (await request(member, 'POST', '/tasks', { title: '成员任务' })).data;
   const linkedNote = (await request(admin, 'POST', '/notes', { title: '共享笔记', taskId: 'seed-task-1' })).data;
   const linkedExperiment = (await request(admin, 'POST', '/experiments', { title: '共享实验', taskId: 'seed-task-1' })).data;
+  const model = await request(admin, 'POST', '/experiment-platform/models', { name: 'boundary-test', displayName: '权限测试模型', apiModel: 'boundary', inputUsdPerMillion: 1, outputUsdPerMillion: 1, allowedRoles: ['admin', 'member'] });
+  assert.equal(model.status, 201);
+  const definition = taskId => ({ title: '任务关联定义', taskId, systemPrompt: '', userPrompt: '测试', variables: {}, variants: [{ modelId: model.data.id, parameters: {} }] });
+  const linkedDefinition = await request(admin, 'POST', '/experiment-definitions', definition('seed-task-1'));
+  assert.equal(linkedDefinition.status, 201);
   assert.equal((await request(admin, 'GET', `/tasks/${own.id}`)).status, 200);
   assert.deepEqual((await request(member, 'GET', '/tasks')).data.items.map(item => item.id), [own.id]);
   const stats = (await request(member, 'GET', '/stats')).data;
@@ -24,6 +29,9 @@ test('member cannot read or mutate another account task through task subroutes',
   assert.ok((await request(member, 'GET', '/activity')).data.items.every(item => item.taskId === own.id || item.userId === 'member'));
   assert.equal((await request(member, 'GET', `/notes/${linkedNote.id}`)).data.taskId, null);
   assert.equal((await request(member, 'GET', `/experiments/${linkedExperiment.id}`)).data.taskId, null);
+  assert.equal((await request(member, 'GET', `/experiment-definitions/${linkedDefinition.data.id}`)).data.taskId, null);
+  assert.equal((await request(member, 'POST', '/experiment-definitions', definition('seed-task-1'))).status, 404);
+  assert.equal((await request(member, 'POST', '/experiment-definitions', definition(own.id))).status, 201);
   assert.equal((await request(member, 'GET', '/notes?taskId=seed-task-1')).status, 404);
   assert.equal((await request(member, 'GET', '/experiments?taskId=seed-task-1')).status, 404);
   assert.equal((await request(member, 'POST', '/notes', { title: '越权笔记', taskId: 'seed-task-1' })).status, 404);

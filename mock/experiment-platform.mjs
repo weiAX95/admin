@@ -191,6 +191,11 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
 }
 
 export async function handleExperimentPlatform({ pathname, method, client, me, readBody }) {
+  const taskVisible = async taskId => !taskId || Boolean((await client.query("SELECT 1 FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3='admin')", [taskId, me.id, me.role])).rowCount);
+  const visibleDefinition = async definition => {
+    if (!definition || await taskVisible(definition.taskId)) return definition;
+    return { ...definition, taskId: null };
+  };
   if (pathname === '/api/experiment-templates' && method === 'GET') return ok({ items: EXPERIMENT_TEMPLATES });
   if (pathname === '/api/experiment-platform/config') {
     if (method === 'GET') {
@@ -292,7 +297,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     const models = new Set((await client.query("SELECT * FROM experiment_models WHERE active=true AND status='active'")).rows.filter(row=>modelUsable(row,me)).map(row => row.id));
     let definition;
     try { definition = validateDefinition(body, models); } catch (error) { return fail(error.message); }
-    if (definition.taskId && !(await client.query('SELECT 1 FROM tasks WHERE id=$1', [definition.taskId])).rowCount) return fail('关联任务不存在');
+    if (!await taskVisible(definition.taskId)) return fail('关联任务不存在', 404);
     if (definition.promptVersionId) {
       const source=(await client.query('SELECT content FROM prompt_library_versions WHERE id=$1',[definition.promptVersionId])).rows[0];
       if (!source) return fail('提示词版本不存在');
@@ -305,12 +310,12 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
       const run = await createBatch(client, id, me, { variables: definition.variables }, 'single');
       if (run.status !== 202) throw new Error(run.data.error);
     }
-    return ok(await getDefinition(client, id), 201);
+    return ok(await visibleDefinition(await getDefinition(client, id)), 201);
   }
   const definitionRoute = pathname.match(/^\/api\/experiment-definitions\/([^/]+)$/);
   if (definitionRoute) {
     const id = definitionRoute[1];
-    if (method === 'GET') { const value = await getDefinition(client, id); return value ? ok(value) : fail('实验定义不存在', 404); }
+    if (method === 'GET') { const value = await getDefinition(client, id); return value ? ok(await visibleDefinition(value)) : fail('实验定义不存在', 404); }
     if (method === 'PUT') {
       const row = (await client.query('SELECT owner_id FROM experiments WHERE id=$1 AND record_kind=$2', [id, 'definition'])).rows[0];
       if (!row) return fail('实验定义不存在', 404);
@@ -319,7 +324,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
       const models = new Set((await client.query("SELECT * FROM experiment_models WHERE active=true AND status='active'")).rows.filter(row=>modelUsable(row,me)).map(item => item.id));
       let definition;
       try { definition = validateDefinition(body, models); } catch (error) { return fail(error.message); }
-      if (definition.taskId && !(await client.query('SELECT 1 FROM tasks WHERE id=$1', [definition.taskId])).rowCount) return fail('关联任务不存在');
+      if (!await taskVisible(definition.taskId)) return fail('关联任务不存在', 404);
       if (definition.promptVersionId) {
         const source=(await client.query('SELECT content FROM prompt_library_versions WHERE id=$1',[definition.promptVersionId])).rows[0];
         if (!source) return fail('提示词版本不存在');
@@ -328,7 +333,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
       await client.query('UPDATE experiments SET title=$2,task_id=$3,system_prompt=$4,user_prompt=$5,prompt_version_id=$6,variables=$7,updated_at=now() WHERE id=$1', [id, definition.title, definition.taskId, definition.systemPrompt, definition.userPrompt, definition.promptVersionId, JSON.stringify(definition.variables)]);
       await client.query('UPDATE experiment_variants SET active=false WHERE experiment_id=$1', [id]);
       for (const variant of definition.variants) await client.query('INSERT INTO experiment_variants(id,experiment_id,model_id,label,parameters,position) VALUES($1,$2,$3,$4,$5,$6)', [variant.id, id, variant.modelId, variant.label, JSON.stringify(variant.parameters), variant.position]);
-      return ok(await getDefinition(client, id));
+      return ok(await visibleDefinition(await getDefinition(client, id)));
     }
   }
   const runRoute = pathname.match(/^\/api\/experiment-definitions\/([^/]+)\/(run|batches)$/);
