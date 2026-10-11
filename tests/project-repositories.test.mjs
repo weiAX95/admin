@@ -27,9 +27,12 @@ test('repository registration pins a public branch commit and isolates accounts'
   assert.equal(created.status, 201);
   assert.equal(created.data.fullName, 'Octocat/Hello-World');
   assert.equal(created.data.commitSha, 'a'.repeat(40));
+  assert.equal(created.data.lastAnalysisAt, null);
+  assert.equal(created.data.lastAnalyzedCommitSha, null);
   assert.equal(calls.length, 2);
   const mine = await handleProjectRepositories({ pathname: '/api/project-repositories', method: 'GET', client, me });
   assert.equal(mine.data.items.length, 1);
+  assert.equal(mine.data.items[0].lastAnalysisAt, null);
   const hidden = await handleProjectRepositories({ pathname: `/api/project-repositories/${created.data.id}`, method: 'GET', client, me: other });
   assert.equal(hidden.status, 404);
   const hiddenList = await handleProjectRepositories({ pathname: '/api/project-repositories', method: 'GET', client, me: other });
@@ -39,6 +42,7 @@ test('repository registration pins a public branch commit and isolates accounts'
   const refreshed = await handleProjectRepositories({ pathname: `/api/project-repositories/${created.data.id}/refresh`, method: 'POST', client, me, fetchGithub });
   assert.equal(refreshed.status, 200);
   assert.equal(refreshed.data.commitSha, 'a'.repeat(40));
+  assert.equal(refreshed.data.lastAnalysisAt, null);
   const persisted = (await client.query('SELECT owner_id,commit_sha FROM project_repositories WHERE id=$1', [created.data.id])).rows[0];
   assert.deepEqual(persisted, { owner_id: 'member', commit_sha: 'a'.repeat(40) });
   assert.match(created.data.id, /^[0-9a-f-]{36}$/);

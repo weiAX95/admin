@@ -11,7 +11,13 @@ export function parseGitHubRepository(value) {
 }
 
 const validBranch = value => typeof value === 'string' && value.length >= 1 && value.length <= 200 && /^[\w./-]+$/.test(value) && !value.startsWith('/') && !value.endsWith('/') && !value.includes('..') && !value.includes('//');
-const publicRow = row => ({ id: row.id, ownerId: row.owner_id, fullName: row.full_name, url: `https://github.com/${row.full_name}`, branch: row.branch, goal: row.goal, requirementBaseline: row.requirement_baseline, baselineVersionId: row.baseline_version_id || null, commitSha: row.commit_sha.trim(), lastCheckedAt: row.last_checked_at, createdAt: row.created_at, updatedAt: row.updated_at });
+const publicRow = row => ({ id: row.id, ownerId: row.owner_id, fullName: row.full_name, url: `https://github.com/${row.full_name}`, branch: row.branch, goal: row.goal, requirementBaseline: row.requirement_baseline, baselineVersionId: row.baseline_version_id || null, commitSha: row.commit_sha.trim(), lastCheckedAt: row.last_checked_at, lastAnalysisAt: row.last_analysis_at || null, lastAnalyzedCommitSha: row.last_analyzed_commit_sha?.trim() || null, createdAt: row.created_at, updatedAt: row.updated_at });
+const repositoryQuery = `SELECT r.*, latest.finished_at AS last_analysis_at, latest.commit_sha AS last_analyzed_commit_sha
+  FROM project_repositories r LEFT JOIN LATERAL (
+    SELECT finished_at, commit_sha FROM project_analyses
+    WHERE repository_id=r.id AND status='completed' AND finished_at IS NOT NULL
+    ORDER BY finished_at DESC, created_at DESC LIMIT 1
+  ) latest ON true`;
 const fail = (status, error) => ({ status, data: { error } });
 
 async function githubFetch(url) {
@@ -50,7 +56,7 @@ async function resolveRepository(fetchGithub, parsed, requestedBranch) {
 export async function handleProjectRepositories({ pathname, method, client, me, readBody, fetchGithub = githubFetch }) {
   if (pathname !== '/api/project-repositories' && !/^\/api\/project-repositories\/[0-9a-f-]{36}(?:\/refresh)?$/i.test(pathname)) return null;
   if (pathname === '/api/project-repositories' && method === 'GET') {
-    const rows = (await client.query('SELECT * FROM project_repositories WHERE owner_id=$1 ORDER BY updated_at DESC', [me.id])).rows;
+    const rows = (await client.query(`${repositoryQuery} WHERE r.owner_id=$1 ORDER BY r.updated_at DESC`, [me.id])).rows;
     return { status: 200, data: { items: rows.map(publicRow) } };
   }
   if (pathname === '/api/project-repositories' && method === 'POST') {
@@ -70,7 +76,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
   }
   const id = pathname.split('/')[3];
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return fail(404, '项目不存在');
-  const row = (await client.query('SELECT * FROM project_repositories WHERE id=$1 AND owner_id=$2', [id,me.id])).rows[0];
+  const row = (await client.query(`${repositoryQuery} WHERE r.id=$1 AND r.owner_id=$2`, [id,me.id])).rows[0];
   if (!row) return fail(404, '项目不存在');
   if (method === 'GET' && pathname.endsWith(`/${id}`)) return { status: 200, data: publicRow(row) };
   if (method === 'POST' && pathname.endsWith('/refresh')) {
@@ -78,7 +84,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     const resolved = await resolveRepository(fetchGithub, { owner, repo, fullName: row.full_name }, row.branch);
     if (resolved.error) return resolved.error;
     const updated = (await client.query('UPDATE project_repositories SET commit_sha=$1,last_checked_at=now(),updated_at=now() WHERE id=$2 AND owner_id=$3 RETURNING *', [resolved.data.commitSha,id,me.id])).rows[0];
-    return { status: 200, data: publicRow(updated) };
+    return { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) };
   }
   return fail(405, '不支持该操作');
 }

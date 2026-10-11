@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
@@ -10,7 +10,7 @@ const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' 
 const impactOrder = { high: 0, medium: 1, low: 2 };
 const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败' };
 
-export default function ProjectReportPanel({ repository, scans }: { repository: ProjectRepository; scans: ProjectScan[] }) {
+export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void }) {
   const { message } = App.useApp();
   const [items, setItems] = useState<ProjectAnalysisJob[]>([]);
   const [models, setModels] = useState<ModelConfig[]>([]);
@@ -27,6 +27,7 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
   const [requirementContent, setRequirementContent] = useState<string | null>(null);
   const [requirementLoading, setRequirementLoading] = useState(false);
   const [error, setError] = useState('');
+  const latestCompletedId = useRef('');
 
   useEffect(() => {
     setScanId(current => scans.some(scan => scan.id === current && ['completed', 'partial'].includes(scan.status)) ? current : scans.find(scan => ['completed', 'partial'].includes(scan.status))?.id || '');
@@ -35,7 +36,15 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
     let cancelled = false;
     void getPlatformConfig().then(config => { if (!cancelled) setModels(config.models.filter(model => model.active && model.status === 'active' && model.adapterReady && model.configured && model.capabilities.output.includes('text'))); }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : '模型目录读取失败'); });
     const load = async () => {
-      try { const result = await listProjectAnalyses(repository.id); if (!cancelled) { setItems(result.items); setError(''); } }
+      try {
+        const result = await listProjectAnalyses(repository.id);
+        if (!cancelled) {
+          setItems(result.items);
+          setError('');
+          const completed = result.items.filter(item => item.status === 'completed').sort((a, b) => new Date(b.finishedAt || 0).getTime() - new Date(a.finishedAt || 0).getTime())[0]?.id || '';
+          if (completed && completed !== latestCompletedId.current) { latestCompletedId.current = completed; onAnalysisCompleted(); }
+        }
+      }
       catch (cause) { if (!cancelled) setError(cause instanceof Error ? cause.message : '分析记录读取失败'); }
     };
     void load();

@@ -11,6 +11,8 @@ export interface ProjectRepository {
   baselineVersionId: string | null;
   commitSha: string;
   lastCheckedAt: string;
+  lastAnalysisAt: string | null;
+  lastAnalyzedCommitSha: string | null;
   createdAt: string;
   updatedAt: string;
 }

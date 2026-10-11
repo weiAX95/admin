@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { createPgTestServer } from './pg-helper.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from '../mock/project-analyses.mjs';
+import { handleProjectRepositories } from '../mock/project-repositories.mjs';
 import { handleProjectSuggestionAction } from '../mock/project-suggestion-actions.mjs';
 import { handleProjectFindingFeedback } from '../mock/project-finding-feedback.mjs';
 import { handleProjectRequirementBaselines } from '../mock/project-requirement-baselines.mjs';
@@ -52,6 +53,12 @@ test('analysis persists validated report and source evidence, isolates owners, a
   assert.equal(detail.data.suggestions[0].impact,'high');
   assert.deepEqual(detail.data.suggestions[0].prerequisites,['集成测试']);
   assert.equal(detail.data.commitSha, sha);
+  const repository = (await handleProjectRepositories({ pathname: `/api/project-repositories/${repositoryId}`, method: 'GET', client, me })).data;
+  assert.equal(repository.lastAnalyzedCommitSha, sha);
+  assert.equal(new Date(repository.lastAnalysisAt).getTime(), new Date(detail.data.finishedAt).getTime());
+  const list = (await handleProjectRepositories({ pathname: '/api/project-repositories', method: 'GET', client, me })).data.items;
+  assert.equal(list[0].lastAnalyzedCommitSha, sha);
+  assert.equal((await handleProjectRepositories({ pathname: '/api/project-repositories', method: 'GET', client, me: other })).data.items.length, 0);
   assert.deepEqual(detail.data.modules, [{ moduleKey: 'src', indexedCount: 1, readCount: 1, selectedCount: 1, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 0, summary: '发现项目入口，运行状态尚未验证' }]);
   assert.equal((await handleProjectAnalyses({ pathname: `${path}/${start.data.id}`, method: 'GET', client, me: other })).status, 404);
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_findings')).rows[0].n, 1);
@@ -63,6 +70,10 @@ test('analysis persists validated report and source evidence, isolates owners, a
   const http = await fetch(`${base}/project-repositories/${repositoryId}/analyses/${start.data.id}`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(http.status, 200);
   assert.equal((await http.json()).findings[0].evidence.gitSha, 'b'.repeat(40));
+  await client.query('UPDATE project_repositories SET commit_sha=$1,last_checked_at=now() WHERE id=$2', ['f'.repeat(40),repositoryId]);
+  const afterRefresh = (await handleProjectRepositories({ pathname: `/api/project-repositories/${repositoryId}`, method: 'GET', client, me })).data;
+  assert.equal(afterRefresh.commitSha, 'f'.repeat(40));
+  assert.equal(afterRefresh.lastAnalyzedCommitSha, sha);
 });
 
 test('analysis calls the model per selected module and merges evidence with cumulative usage', async t => {

@@ -6,7 +6,7 @@ import ProjectReportPanel from './ProjectReportPanel';
 const statusLabels: Record<ProjectScan['status'], string> = { queued: '排队中', scanning: '扫描中', completed: '覆盖完成', partial: '部分覆盖', failed: '扫描失败' };
 const reasonLabels: Record<string, string> = { dependency_or_build: '依赖或构建产物', sensitive_path: '敏感路径', sensitive_content: '疑似密钥内容', non_regular_file: '非普通文件', binary_type: '二进制类型', file_size: '超出单文件限制', scan_budget: '扫描预算用尽', github_rate_limit: 'GitHub 限流', blob_unavailable_or_invalid: '内容不可读取或格式无效' };
 
-export default function ProjectScanPanel({ repository }: { repository: ProjectRepository }) {
+export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { repository: ProjectRepository; onAnalysisCompleted: () => void }) {
   const { message } = App.useApp();
   const [items, setItems] = useState<ProjectScan[]>([]);
   const [detail, setDetail] = useState<(ProjectScan & { files: ProjectScanFile[] }) | null>(null);
@@ -71,6 +71,6 @@ export default function ProjectScanPanel({ repository }: { repository: ProjectRe
     <Modal title={source?.path || '文件正文'} open={Boolean(source)} onCancel={() => setSource(null)} footer={null} width={900} destroyOnClose>
       <pre style={{ maxHeight: '65vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source?.content}</pre>
     </Modal>
-    <ProjectReportPanel repository={repository} scans={items} />
+    <ProjectReportPanel repository={repository} scans={items} onAnalysisCompleted={onAnalysisCompleted} />
   </Card>;
 }

@@ -78,16 +78,17 @@ export default function ProjectAnalysis() {
     </Card>
     <Card title="已接入项目">
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
-      <Table rowKey="id" loading={loading} dataSource={items} scroll={{ x: 800 }} pagination={{ pageSize: 10 }} columns={[
+      <Table rowKey="id" loading={loading} dataSource={items} scroll={{ x: 1100 }} pagination={{ pageSize: 10 }} columns={[
         { title: '仓库', render: (_, item: ProjectRepository) => <a href={item.url} target="_blank" rel="noopener noreferrer">{item.fullName}</a> },
         { title: '分支', dataIndex: 'branch', render: value => <Tag>{value}</Tag> },
         { title: '当前 commit', dataIndex: 'commitSha', render: (value: string, item: ProjectRepository) => <a href={`${item.url}/commit/${value}`} target="_blank" rel="noopener noreferrer" title={value}><code>{value.slice(0, 10)}</code></a> },
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
+        { title: '最近完成分析', render: (_, item: ProjectRepository) => item.lastAnalysisAt && item.lastAnalyzedCommitSha ? <Space direction="vertical" size={0}><span>{new Date(item.lastAnalysisAt).toLocaleString('zh-CN')}</span><a href={`${item.url}/commit/${item.lastAnalyzedCommitSha}`} target="_blank" rel="noopener noreferrer" title={item.lastAnalyzedCommitSha}><code>{item.lastAnalyzedCommitSha.slice(0, 10)}</code></a>{item.commitSha !== item.lastAnalyzedCommitSha && <Tag color="warning">有新提交待分析</Tag>}</Space> : '尚无完成的分析' },
         { title: '操作', render: (_, item: ProjectRepository) => <Space><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />
     </Card>
-    {items.find(item => item.id === selectedRepositoryId) && <ProjectScanPanel key={selectedRepositoryId} repository={items.find(item => item.id === selectedRepositoryId)!} />}
+    {items.find(item => item.id === selectedRepositoryId) && <ProjectScanPanel key={selectedRepositoryId} repository={items.find(item => item.id === selectedRepositoryId)!} onAnalysisCompleted={() => void load()} />}
     <Modal title="版本化需求文档" open={Boolean(baselineRepositoryId)} width={720} onCancel={() => setBaselineRepositoryId('')} onOk={() => void saveBaseline()} okText="保存为新版本" okButtonProps={{ loading: baselineSaving, disabled: baselineLoading || !baselineContent.trim() || baselineContent.length > 5000 }}>
       <Typography.Paragraph type="secondary">每次保存都会创建不可改写的新版本，分析任务固定所选版本。正文将作为模型分析输入，请勿包含密钥或不愿发给模型的信息。</Typography.Paragraph>
       {baselineVersions.length > 0 && <Space wrap style={{ marginBottom: 12 }}>{baselineVersions.map(version => <Button key={version.id} size="small" onClick={() => { void getProjectRequirementBaseline(baselineRepositoryId,version.id).then(item => setBaselineContent(item.content || '')).catch(cause => setError(cause instanceof Error ? cause.message : '需求版本读取失败')); }}>查看 v{version.version}</Button>)}</Space>}
