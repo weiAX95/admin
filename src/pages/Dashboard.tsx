@@ -12,7 +12,6 @@ import {
   Statistic,
   Typography,
 } from "antd";
-import dayjs from "dayjs";
 import type { Dayjs } from "dayjs";
 import { getStats } from "../api/stats";
 import RadarChart from "../components/RadarChart";
@@ -26,6 +25,7 @@ import { useDashboardAutoRefresh } from "../hooks/useDashboardAutoRefresh";
 import type { RefreshSeconds } from "../hooks/useDashboardAutoRefresh";
 import { STATUS_META } from "../components/TaskMeta";
 import type { Stats, TaskStatus, TimeWindow } from "../types";
+import { resolveDashboardWindow } from "../utils/dashboardWindow";
 
 const { RangePicker } = DatePicker;
 const STATUS_KEYS = Object.keys(STATUS_META) as TaskStatus[];
@@ -47,54 +47,6 @@ const WINDOW_OPTIONS: WindowOption[] = [
   { label: "自定义", value: "custom" },
 ];
 
-/** 根据预设 + 自定义区间生成 API query */
-function buildQuery(
-  preset: TimeWindow,
-  customRange: [Dayjs, Dayjs] | null,
-): { start?: string; end?: string } | undefined {
-  if (preset === "custom" && customRange) {
-    return {
-      start: customRange[0].startOf("day").format("YYYY-MM-DD"),
-      end: customRange[1].endOf("day").format("YYYY-MM-DD"),
-    };
-  }
-
-  switch (preset) {
-    case "today":
-      return {
-        start: dayjs().startOf("day").format("YYYY-MM-DD"),
-        end: dayjs().endOf("day").format("YYYY-MM-DD"),
-      };
-    case "week":
-      return {
-        start: dayjs().startOf("week").format("YYYY-MM-DD"),
-        end: dayjs().endOf("day").format("YYYY-MM-DD"),
-      };
-    case "month":
-      return {
-        start: dayjs().startOf("month").format("YYYY-MM-DD"),
-        end: dayjs().endOf("day").format("YYYY-MM-DD"),
-      };
-    case "30d":
-      return {
-        start: dayjs().endOf("day").subtract(29, "day").format("YYYY-MM-DD"),
-        end: dayjs().endOf("day").format("YYYY-MM-DD"),
-      };
-    case "90d":
-      return {
-        start: dayjs().endOf("day").subtract(89, "day").format("YYYY-MM-DD"),
-        end: dayjs().endOf("day").format("YYYY-MM-DD"),
-      };
-    case "365d":
-      return {
-        start: dayjs().endOf("day").subtract(364, "day").format("YYYY-MM-DD"),
-        end: dayjs().endOf("day").format("YYYY-MM-DD"),
-      };
-    default:
-      return undefined;
-  }
-}
-
 // ── 页面 ─────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -104,6 +56,7 @@ export default function Dashboard() {
 
   const [windowPreset, setWindowPreset] = useState<TimeWindow>("365d");
   const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null);
+  const [appliedRange, setAppliedRange] = useState<{ start: string; end: string } | null>(null);
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState("");
@@ -111,22 +64,25 @@ export default function Dashboard() {
   const latestRequest = useRef(0);
   const hasStats = useRef(false);
 
-  const refresh = useCallback(async (silent = false) => {
+  const refresh = useCallback(async () => {
+    const range = resolveDashboardWindow(windowPreset, customRange ? [customRange[0].format("YYYY-MM-DD"), customRange[1].format("YYYY-MM-DD")] : null);
+    if (!range) { setRefreshing(false); setLoading(false); return; }
     const request = ++latestRequest.current;
-    if (silent && hasStats.current) setRefreshing(true);
+    if (hasStats.current) setRefreshing(true);
     else setLoading(true);
     setError("");
     setRefreshError("");
     try {
-      const data = await getStats(buildQuery(windowPreset, customRange));
+      const data = await getStats(range);
       if (request !== latestRequest.current) return;
       hasStats.current = true;
       setStats(data);
+      setAppliedRange(range);
       setRefreshKey(previous => previous + 1);
     } catch (err: unknown) {
       if (request !== latestRequest.current) return;
       const message = err instanceof Error ? err.message : String(err);
-      if (silent && hasStats.current) setRefreshError(message);
+      if (hasStats.current) setRefreshError(message);
       else setError(message);
     } finally {
       if (request === latestRequest.current) { setLoading(false); setRefreshing(false); }
@@ -137,8 +93,9 @@ export default function Dashboard() {
     void refresh();
     return () => { ++latestRequest.current; };
   }, [refresh]);
-  const backgroundRefresh = useCallback(() => { void refresh(true); }, [refresh]);
+  const backgroundRefresh = useCallback(() => { void refresh(); }, [refresh]);
   const { seconds, changeSeconds, transport } = useDashboardAutoRefresh(backgroundRefresh);
+  const customRangeReady = windowPreset !== "custom" || resolveDashboardWindow("custom", customRange ? [customRange[0].format("YYYY-MM-DD"), customRange[1].format("YYYY-MM-DD")] : null) !== null;
 
   // ── 派生值（所有 hooks 必须在守卫之前） ──────────────────────
 
@@ -199,6 +156,8 @@ export default function Dashboard() {
             />
           )}
         </Space>
+        {!customRangeReady && <Alert type="info" showIcon message={customRange ? "自定义范围不能超过 366 天，且结束日期不能早于开始日期" : "请选择开始和结束日期；下方暂显示上一次统计结果"} style={{ marginTop: 12 }} />}
+        <Typography.Text type="secondary" style={{ display: "block", marginTop: 8 }}>任务卡片、分类与雷达图按创建日期统计当前状态；趋势与活动按发生日期。逾期预警和工时偏差率始终显示当前累计值。</Typography.Text>
         <div className="dashboard-refresh-controls">
           <Typography.Text type="secondary">自动刷新：</Typography.Text>
           <Segmented aria-label="自动刷新间隔" value={seconds} onChange={value => changeSeconds(value as RefreshSeconds)} options={[{ label: "关闭", value: 0 }, { label: "30s", value: 30 }, { label: "60s", value: 60 }, { label: "120s", value: 120 }]} />
@@ -207,7 +166,7 @@ export default function Dashboard() {
             {refreshing && <Spin size="small" />}
           </span>
         </div>
-        {refreshError && <Alert type="warning" showIcon message={`自动刷新失败：${refreshError}`} action={<Button size="small" onClick={backgroundRefresh}>重试</Button>} />}
+        {refreshError && <Alert type="warning" showIcon message={`统计刷新失败：${refreshError}`} action={<Button size="small" onClick={backgroundRefresh}>重试</Button>} />}
       </Card>
 
       {/* ─── 逾期预警 ─── */}
@@ -218,7 +177,7 @@ export default function Dashboard() {
         <Col xs={24} sm={12} lg={6}>
           <Card className="metric-card">
             <Statistic title="学习任务总数" value={stats.total} />
-            <span className="metric-caption">全部学习计划</span>
+            <span className="metric-caption">所选窗口内创建的任务</span>
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
@@ -249,7 +208,7 @@ export default function Dashboard() {
               suffix="%"
               valueStyle={{ color: "#79b8e8" }}
             />
-            <span className="metric-caption">全部任务的平均完成进度</span>
+            <span className="metric-caption">窗口内创建任务的当前平均进度</span>
           </Card>
         </Col>
       </Row>
@@ -270,7 +229,7 @@ export default function Dashboard() {
         </Col>
 
         <Col xs={24} lg={12}>
-          <ActivityHeatmap refreshKey={refreshKey} days={stats.heatmap} anchorDate={buildQuery(windowPreset, customRange)?.end || dayjs().format("YYYY-MM-DD")} />
+          <ActivityHeatmap refreshKey={refreshKey} days={stats.heatmap} anchorDate={appliedRange?.end || resolveDashboardWindow("today", null)!.end} />
         </Col>
       </Row>
 
@@ -308,7 +267,7 @@ export default function Dashboard() {
         </Col>
 
         <Col xs={24} lg={7}>
-          <ActivityTimeline refreshKey={refreshKey} start={buildQuery(windowPreset, customRange)?.start} end={buildQuery(windowPreset, customRange)?.end} />
+          <ActivityTimeline refreshKey={refreshKey} start={appliedRange?.start} end={appliedRange?.end} />
         </Col>
       </Row>
     </Space>

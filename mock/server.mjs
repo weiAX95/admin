@@ -13,7 +13,7 @@ import { searchSessions } from "./session-search.mjs";
 import { exportSessions } from "./session-export.mjs";
 import { getSessionLearningPath } from "./session-learning-path.mjs";
 import { getRelatedSessions } from "./session-related.mjs";
-import { activityHeatmap, activityDay } from "./heatmap.mjs";
+import { activityHeatmap, activityDay, validDateKey } from "./heatmap.mjs";
 import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
 import crypto from "node:crypto";
@@ -417,12 +417,12 @@ function logActivity(type, { taskId = null, title = "", detail = "", actor } = {
   if (db.activity.length > 500) db.activity.length = 500;
 }
 
-function computeStats(tasks, { start, end, source = db } = {}) {
+function computeStats(tasks, { start, end, source = db, allTasks = tasks } = {}) {
   const trends = computeTaskTrends(source, { start, end });
   const byStatus = { todo: 0, in_progress: 0, done: 0, blocked: 0 };
   const catMap = new Map();
   let progressSum = 0;
-  const overdue = computeOverdueTasks(tasks);
+  const overdue = computeOverdueTasks(allTasks);
 
   // 时间窗口过滤 activity：含 start/end 时只统计该区间内的 activity
   const activityInWindow = (!start && !end)
@@ -490,7 +490,7 @@ function computeStats(tasks, { start, end, source = db } = {}) {
 
   return {
     total: tasks.length,
-    workVariance: workVariance(tasks, source.timeEntries),
+    workVariance: workVariance(allTasks, source.timeEntries),
     byStatus,
     avgProgress: tasks.length ? Math.round(progressSum / tasks.length) : 0,
     byCategory: [...catMap.values()].map((e) => ({
@@ -736,7 +736,15 @@ async function handleRequest(req, res) {
     if (method === "GET" && pathname === "/api/stats") {
       const start = url.searchParams.get("start") || "";
       const end = url.searchParams.get("end") || "";
-      return send(res, 200, computeStats(projectTasks(db.tasks).filter(visibleTask).map(task => ({ ...taskView(task), status: task.effectiveStatus })), { start, end, source: accountData }));
+      if (Boolean(start) !== Boolean(end) || (start && (!validDateKey(start) || !validDateKey(end) || start > end || (Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / DAY > 365))) {
+        return send(res, 400, { error: "日期范围无效或超过 366 天" });
+      }
+      const allTasks = projectTasks(db.tasks).filter(visibleTask).map(task => ({ ...taskView(task), status: task.effectiveStatus }));
+      const windowTasks = start ? allTasks.filter(task => {
+        const created = dateKey(task.createdAt);
+        return created >= start && created <= end;
+      }) : allTasks;
+      return send(res, 200, computeStats(windowTasks, { start, end, source: accountData, allTasks }));
     }
 
     // ---- 账号管理（仅管理员）----
