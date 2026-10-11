@@ -91,11 +91,12 @@ export default function ProjectReportPanel({ repository, scans }: { repository: 
         { title: '已索引', dataIndex: 'indexedCount' },
         { title: '已读取', dataIndex: 'readCount' },
         { title: '进入模型', dataIndex: 'selectedCount' },
+        { title: '分析摘要', dataIndex: 'summary', render: (value: string | null) => value || '未分析' },
         { title: '截断', dataIndex: 'truncatedCount' },
         { title: '排除 / 失败 / 未扫描', render: (_, item: ProjectAnalysisReport['modules'][number]) => `${item.excludedCount} / ${item.failedCount} / ${item.unscannedCount}` },
       ]} style={{ marginBottom: 16 }} /> : <Typography.Paragraph type="secondary">此报告创建时尚未记录模块覆盖信息</Typography.Paragraph>}
       <Typography.Title level={5}>进度判断与证据</Typography.Title>
-      {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}<Tag>{findingStates[finding.status]}</Tag></Space>}>
+      {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}{finding.moduleKey && <Tag>{finding.moduleKey}</Tag>}<Tag>{findingStates[finding.status]}</Tag></Space>}>
         <Typography.Paragraph>{finding.detail}</Typography.Paragraph>
         {finding.evidence && <Typography.Paragraph type="secondary">{finding.evidence.type === 'test' ? '测试证据' : finding.evidence.type === 'document' ? '文档线索' : '代码证据'}：<a href={sourceLink(finding.evidence.path, finding.evidence.line)} target="_blank" rel="noopener noreferrer">{finding.evidence.path}:{finding.evidence.line}</a><br /><code>{finding.evidence.excerpt}</code></Typography.Paragraph>}
       </Card>) : <Empty description="暂无结论" />}

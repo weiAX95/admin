@@ -33,7 +33,7 @@ export function buildProjectModuleCoverage(files, selectedFiles) {
   return [...modules.values()].sort((a,b) => a.moduleKey.localeCompare(b.moduleKey));
 }
 
-export function selectProjectEvidence(files, { maxFiles = 30, maxChars = 30000, maxCharsPerFile = 3000 } = {}) {
+export function selectProjectEvidence(files, { maxFiles = 30, maxChars = 30000, maxCharsPerFile = 3000, maxModules = 8 } = {}) {
   const eligible = files.filter(file => file.status === 'read' && typeof file.content === 'string' && !containsKnownSecret(file.content))
     .sort((a, b) => (categoryOrder[a.category] ?? 4) - (categoryOrder[b.category] ?? 4) || a.path.localeCompare(b.path));
   const groups = new Map();
@@ -49,9 +49,12 @@ export function selectProjectEvidence(files, { maxFiles = 30, maxChars = 30000, 
     if (!found) break;
   }
   const selected = [];
+  const selectedModules = new Set();
   let remaining = maxChars;
   for (const file of spread) {
     if (selected.length >= maxFiles || remaining <= 0) break;
+    const moduleKey = projectModuleKey(file.path);
+    if (!selectedModules.has(moduleKey) && selectedModules.size >= maxModules) continue;
     const lines = [];
     let used = 0;
     const sourceLines = file.content.split(/\r?\n/);
@@ -64,15 +67,38 @@ export function selectProjectEvidence(files, { maxFiles = 30, maxChars = 30000, 
     }
     if (!lines.length) continue;
     selected.push({ path: file.path, category: file.category, gitSha: String(file.git_sha || file.gitSha).trim(), lines, numberedContent: lines.map((line, index) => `${index + 1}: ${line}`).join('\n'), truncated: lines.length < sourceLines.length });
+    selectedModules.add(moduleKey);
     remaining -= used;
   }
   return selected;
 }
 
-export function validateProjectReport(raw, selectedFiles) {
+export function groupProjectEvidence(selectedFiles) {
+  const groups = new Map();
+  for (const file of selectedFiles) {
+    const moduleKey = projectModuleKey(file.path);
+    if (!groups.has(moduleKey)) groups.set(moduleKey, []);
+    groups.get(moduleKey).push(file);
+  }
+  return [...groups].map(([moduleKey,files]) => ({ moduleKey, files }));
+}
+
+export function mergeProjectModuleReports(results) {
+  const findings = [], suggestions = [];
+  for (const { moduleKey, report } of results) {
+    const offset = findings.length;
+    findings.push(...report.findings.map(finding => ({ ...finding, moduleKey })));
+    suggestions.push(...report.suggestions.map(suggestion => ({ ...suggestion, findingIndex: suggestion.findingIndex === null ? null : offset + suggestion.findingIndex })));
+  }
+  if (findings.length > 40 || suggestions.length > 30) throw new Error('模块报告条目超出汇总上限');
+  const summary = results.length === 1 ? results[0].report.summary : `已分析 ${results.length} 个目录模块。${results.map(({moduleKey,report}) => `${moduleKey}：${report.summary.slice(0,180)}`).join('；')}`.slice(0,2000);
+  return { summary, findings, suggestions };
+}
+
+export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30 } = {}) {
   let value;
   try { value = JSON.parse(raw); } catch { throw new Error('模型报告不是有效 JSON'); }
-  if (!exactKeys(value, ['summary', 'findings', 'suggestions']) || !boundedText(value.summary, 2000) || !Array.isArray(value.findings) || !value.findings.length || value.findings.length > 40 || !Array.isArray(value.suggestions) || value.suggestions.length > 30) throw new Error('模型报告结构无效');
+  if (!exactKeys(value, ['summary', 'findings', 'suggestions']) || !boundedText(value.summary, 2000) || !Array.isArray(value.findings) || !value.findings.length || value.findings.length > maxFindings || !Array.isArray(value.suggestions) || value.suggestions.length > maxSuggestions) throw new Error('模型报告结构无效');
   const byPath = new Map(selectedFiles.map(file => [file.path, file]));
   const findings = value.findings.map(item => {
     if (!exactKeys(item, ['title', 'status', 'detail', 'evidence']) || !boundedText(item.title, 160) || !boundedText(item.detail, 2000) || !['implemented', 'partial', 'not_found', 'unverified'].includes(item.status)) throw new Error('模型结论结构无效');

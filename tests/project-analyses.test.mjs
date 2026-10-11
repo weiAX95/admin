@@ -47,7 +47,7 @@ test('analysis persists validated report and source evidence, isolates owners, a
   assert.equal(detail.data.findings[0].evidence.line, 1);
   assert.equal(detail.data.suggestions[0].findingId, detail.data.findings[0].id);
   assert.equal(detail.data.commitSha, sha);
-  assert.deepEqual(detail.data.modules, [{ moduleKey: 'src', indexedCount: 1, readCount: 1, selectedCount: 1, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 0 }]);
+  assert.deepEqual(detail.data.modules, [{ moduleKey: 'src', indexedCount: 1, readCount: 1, selectedCount: 1, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 0, summary: '发现项目入口，运行状态尚未验证' }]);
   assert.equal((await handleProjectAnalyses({ pathname: `${path}/${start.data.id}`, method: 'GET', client, me: other })).status, 404);
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_findings')).rows[0].n, 1);
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_suggestions')).rows[0].n, 1);
@@ -58,6 +58,49 @@ test('analysis persists validated report and source evidence, isolates owners, a
   const http = await fetch(`${base}/project-repositories/${repositoryId}/analyses/${start.data.id}`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(http.status, 200);
   assert.equal((await http.json()).findings[0].evidence.gitSha, 'b'.repeat(40));
+});
+
+test('analysis calls the model per selected module and merges evidence with cumulative usage', async t => {
+  const { client } = await createPgTestServer(t);
+  const { scanId, path } = await fixture(client);
+  await client.query("INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,content,content_sha256) VALUES($1,'src/pages/home.ts',$2,24,'source','read','export const home = true;',$3)", [scanId,'d'.repeat(40),'e'.repeat(64)]);
+  let calls = 0;
+  const runModel = async (_db,_job,messages) => {
+    calls++;
+    const input = JSON.parse(messages[1].content);
+    assert.equal(input.files.length,1);
+    const file = input.files[0];
+    return { output: JSON.stringify({ summary: `已查看 ${input.moduleKey}`, findings: [{ title: input.moduleKey, status: 'implemented', detail: '有代码入口', evidence: { path: file.path, line: 1, excerpt: file.lines.split('\n')[0].replace(/^1: /,'') } }], suggestions: [{ topic: '验证入口', reason: '需要测试', practice: '编写测试', acceptance: '测试通过', findingIndex: 0 }] }), promptTokens: 10, completionTokens: 5 };
+  };
+  const me = { id: 'member', role: 'member' };
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel });
+  assert.equal(await waitFor(client, started.data.id), 'completed');
+  const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.equal(calls,2);
+  assert.deepEqual(detail.findings.map(finding => finding.moduleKey), ['src','src/pages']);
+  assert.deepEqual(detail.suggestions.map(suggestion => suggestion.findingId), detail.findings.map(finding => finding.id));
+  assert.deepEqual(detail.modules.map(module => module.summary), ['已查看 src','已查看 src/pages']);
+  assert.equal(detail.promptTokens,20);
+  assert.equal(detail.completionTokens,10);
+  assert.equal((await client.query('SELECT reserved_requests::int AS calls FROM model_rate_reservations WHERE run_id=$1', [`${started.data.id}:1`])).rows[0].calls,2);
+});
+
+test('a later module failure retains earlier call cost without publishing a partial report', async t => {
+  const { client } = await createPgTestServer(t);
+  const { scanId, path } = await fixture(client);
+  await client.query("INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,content,content_sha256) VALUES($1,'src/pages/home.ts',$2,24,'source','read','export const home = true;',$3)", [scanId,'d'.repeat(40),'e'.repeat(64)]);
+  let calls = 0;
+  const runModel = async () => ({ output: ++calls === 1 ? report : '{"summary":"invalid"}', promptTokens: 10, completionTokens: 5 });
+  const me = { id: 'member', role: 'member' };
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel });
+  assert.equal(await waitFor(client, started.data.id), 'failed');
+  const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.equal(detail.errorCode,'INVALID_REPORT');
+  assert.equal(detail.summary,null);
+  assert.deepEqual(detail.findings,[]);
+  assert.deepEqual(detail.modules,[]);
+  assert.equal(detail.promptTokens,20);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_model_charges WHERE analysis_id=$1', [started.data.id])).rows[0].n,2);
 });
 
 test('analysis submission rejects unavailable models and exhausted daily budget before charging', async t => {
@@ -121,7 +164,7 @@ test('failed analysis retries with fresh reservation and stops at attempt limit'
   await client.query('UPDATE experiment_settings SET daily_budget_usd=$1 WHERE id=1', [first.estimated_max_cost_usd]);
   assert.equal((await handleProjectAnalyses({ pathname: `${path}/${started.data.id}/retry`, method: 'POST', client, me, connectionAvailable: async () => true, runModel })).status, 429);
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_attempts WHERE analysis_id=$1', [started.data.id])).rows[0].n, 1);
-  await client.query("UPDATE project_analysis_attempts SET charged_at=now()-interval '2 days' WHERE analysis_id=$1", [started.data.id]);
+  await client.query("UPDATE project_analysis_model_charges SET charged_at=now()-interval '2 days' WHERE analysis_id=$1", [started.data.id]);
   for (let attempt = 2; attempt <= 3; attempt++) {
     const retried = await handleProjectAnalyses({ pathname: `${path}/${started.data.id}/retry`, method: 'POST', client, me, connectionAvailable: async () => true, runModel });
     assert.equal(retried.status, 202);
@@ -139,6 +182,7 @@ test('failed analysis retries with fresh reservation and stops at attempt limit'
 });
 
 test('HTTP analysis calls the configured server-side model and returns a persisted report', async t => {
+  const providerCalls = [];
   const provider = http.createServer(async (req, res) => {
     assert.equal(req.url, '/v1/chat/completions');
     assert.equal(req.headers.authorization, 'Bearer fake-key');
@@ -146,14 +190,18 @@ test('HTTP analysis calls the configured server-side model and returns a persist
     for await (const chunk of req) chunks.push(chunk);
     const body = JSON.parse(Buffer.concat(chunks).toString());
     assert.equal(body.model, 'fake-model');
-    assert.ok(body.messages[1].content.includes('export function main() {}'));
+    const input = JSON.parse(body.messages[1].content);
+    providerCalls.push(input.moduleKey);
+    const file = input.files[0];
+    const output = JSON.stringify({ summary: `已查看 ${input.moduleKey}`, findings: [{ title: '入口', status: 'implemented', detail: '存在入口', evidence: { path: file.path, line: 1, excerpt: file.lines.split('\n')[0].replace(/^1: /,'') } }], suggestions: [] });
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ choices: [{ message: { content: report } }], usage: { prompt_tokens: 200, completion_tokens: 100 } }));
+    res.end(JSON.stringify({ choices: [{ message: { content: output } }], usage: { prompt_tokens: 200, completion_tokens: 100 } }));
   });
   await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => provider.close(resolve)));
   const { client, base } = await createPgTestServer(t, undefined, { MODEL_API_KEY: 'fake-key', MODEL_API_BASE_URL: `http://127.0.0.1:${provider.address().port}/v1` });
   const { repositoryId, scanId } = await fixture(client);
+  await client.query("INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,content,content_sha256) VALUES($1,'src/pages/home.ts',$2,24,'source','read','export const home = true;',$3)", [scanId,'d'.repeat(40),'e'.repeat(64)]);
   const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
   const { token } = await login.json();
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
@@ -163,7 +211,9 @@ test('HTTP analysis calls the configured server-side model and returns a persist
   assert.equal(await waitFor(client, id), 'completed');
   const detail = await fetch(`${base}/project-repositories/${repositoryId}/analyses/${id}`, { headers });
   assert.equal(detail.status, 200);
-  assert.equal((await detail.json()).findings[0].evidence.path, 'src/main.ts');
+  const saved = await detail.json();
+  assert.deepEqual(saved.findings.map(finding => finding.evidence.path), ['src/main.ts','src/pages/home.ts']);
+  assert.deepEqual(providerCalls,['src','src/pages']);
   let auditRow;
   for (let attempt = 0; attempt < 30; attempt++) {
     auditRow = (await client.query("SELECT prompt_preview FROM model_call_audit WHERE run_id=$1 AND module='project_analysis'", [id])).rows[0];
@@ -172,4 +222,10 @@ test('HTTP analysis calls the configured server-side model and returns a persist
   }
   assert.ok(auditRow);
   assert.equal(auditRow.prompt_preview, '[仓库代码输入已省略]');
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const count = (await client.query("SELECT count(*)::int AS n FROM model_call_audit WHERE run_id=$1 AND module='project_analysis'", [id])).rows[0].n;
+    if (count === 2) break;
+    await new Promise(resolve => setTimeout(resolve,20));
+  }
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM model_call_audit WHERE run_id=$1 AND module='project_analysis'", [id])).rows[0].n,2);
 });

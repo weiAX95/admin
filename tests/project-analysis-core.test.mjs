@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildProjectModuleCoverage, selectProjectEvidence, validateProjectReport } from '../mock/project-analysis-core.mjs';
+import { buildProjectModuleCoverage, groupProjectEvidence, mergeProjectModuleReports, selectProjectEvidence, validateProjectReport } from '../mock/project-analysis-core.mjs';
 
 const files = [
   { path: 'src/app.ts', category: 'source', status: 'read', content: 'export const app = true;\nrun(app);\n', git_sha: 'a'.repeat(40) },
@@ -32,6 +32,19 @@ test('evidence selection spreads a small budget across modules and reports omitt
     { moduleKey: 'src/pages', indexedCount: 2, readCount: 2, selectedCount: 1, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 0 },
     { moduleKey: 'tests', indexedCount: 1, readCount: 0, selectedCount: 0, truncatedCount: 0, excludedCount: 0, failedCount: 0, unscannedCount: 1 },
   ]);
+});
+
+test('module plan caps model calls and aggregation keeps each finding and suggestion aligned', () => {
+  const many = Array.from({length: 9}, (_,index) => ({ path: `src/module${index}/entry.ts`, category: 'source', status: 'read', content: `export const value${index} = true;`, git_sha: 'a'.repeat(40) }));
+  const selected = selectProjectEvidence(many);
+  assert.equal(groupProjectEvidence(selected).length, 8);
+  assert.equal(selected.length, 8);
+  const groups = groupProjectEvidence(selected).slice(0,2);
+  const reports = groups.map(({moduleKey,files}) => ({ moduleKey, report: { summary: `已查看 ${moduleKey}`, findings: [{ title: moduleKey, status: 'implemented', detail: '入口存在', evidence: { path: files[0].path, line: 1, excerpt: files[0].lines[0] } }], suggestions: [{ topic: '测试', reason: '需验证', practice: '编写测试', acceptance: '测试通过', findingIndex: 0 }] } }));
+  const merged = mergeProjectModuleReports(reports);
+  assert.deepEqual(merged.findings.map(finding => finding.moduleKey), groups.map(group => group.moduleKey));
+  assert.deepEqual(merged.suggestions.map(suggestion => suggestion.findingIndex), [0,1]);
+  assert.match(merged.summary, /2 个目录模块/);
 });
 
 test('legacy scan content containing a known credential is never selected for a model', () => {
