@@ -61,6 +61,33 @@ test('HTTP project routes require a live login before reading account projects',
   assert.equal((await fetch(`${base}/project-repositories`, { method: 'POST', headers, body: JSON.stringify({ url: 'x'.repeat(17000) }) })).status, 413);
 });
 
+test('repository task links require project ownership and an eligible task, then follow task deletion', async t => {
+  const { client } = await createPgTestServer(t);
+  const id = '11111111-1111-4111-8111-111111111111';
+  await client.query("INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,commit_sha) VALUES($1,'member','octocat/example','main','学习项目',$2)", [id,'a'.repeat(40)]);
+  await client.query("INSERT INTO tasks(id,title,status,owner_id) VALUES('member-task','成员任务','todo','member')");
+  const path = `/api/project-repositories/${id}/tasks`;
+  const member = { id: 'member', role: 'member' };
+  const other = { id: 'learner', role: 'member' };
+  const add = body => handleProjectRepositories({ pathname: path, method: 'POST', client, me: member, readBody: async () => body });
+  assert.equal((await add({ taskId: 'seed-task-1' })).status, 404);
+  assert.equal((await add({ taskId: 'missing' })).status, 404);
+  assert.equal((await add({ taskId: 'member-task' })).status, 200);
+  assert.equal((await add({ taskId: 'member-task' })).status, 200);
+  assert.equal((await handleProjectRepositories({ pathname: path, method: 'GET', client, me: other })).status, 404);
+  assert.equal((await handleProjectRepositories({ pathname: path, method: 'GET', client, me: member })).data.items.length, 1);
+  assert.equal((await handleProjectRepositories({ pathname: `${path}/member-task`, method: 'DELETE', client, me: other })).status, 404);
+  await client.query("UPDATE tasks SET deleted_at=now() WHERE id='member-task'");
+  assert.equal((await handleProjectRepositories({ pathname: path, method: 'GET', client, me: member })).data.items.length, 0);
+  await client.query("UPDATE tasks SET deleted_at=NULL WHERE id='member-task'");
+  assert.equal((await handleProjectRepositories({ pathname: path, method: 'GET', client, me: member })).data.items.length, 1);
+  assert.equal((await handleProjectRepositories({ pathname: `${path}/member-task`, method: 'DELETE', client, me: member })).status, 200);
+  assert.equal((await handleProjectRepositories({ pathname: path, method: 'GET', client, me: member })).data.items.length, 0);
+  assert.equal((await add({ taskId: 'member-task' })).status, 200);
+  await client.query("DELETE FROM tasks WHERE id='member-task'");
+  assert.equal((await handleProjectRepositories({ pathname: path, method: 'GET', client, me: member })).data.items.length, 0);
+});
+
 test('repository registration reports private, empty, missing and network failures without saving', async t => {
   const { client } = await createPgTestServer(t);
   const base = { pathname: '/api/project-repositories', method: 'POST', client, me: { id: 'member', role: 'member' }, readBody: async () => ({ url: 'https://github.com/a/b', goal: '学习' }) };

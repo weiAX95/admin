@@ -54,7 +54,7 @@ async function resolveRepository(fetchGithub, parsed, requestedBranch) {
 }
 
 export async function handleProjectRepositories({ pathname, method, client, me, readBody, fetchGithub = githubFetch }) {
-  if (pathname !== '/api/project-repositories' && !/^\/api\/project-repositories\/[0-9a-f-]{36}(?:\/refresh)?$/i.test(pathname)) return null;
+  if (pathname !== '/api/project-repositories' && !/^\/api\/project-repositories\/[0-9a-f-]{36}(?:\/refresh|\/tasks(?:\/[^/]+)?)?$/i.test(pathname)) return null;
   if (pathname === '/api/project-repositories' && method === 'GET') {
     const rows = (await client.query(`${repositoryQuery} WHERE r.owner_id=$1 ORDER BY r.updated_at DESC`, [me.id])).rows;
     return { status: 200, data: { items: rows.map(publicRow) } };
@@ -78,6 +78,27 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return fail(404, '项目不存在');
   const row = (await client.query(`${repositoryQuery} WHERE r.id=$1 AND r.owner_id=$2`, [id,me.id])).rows[0];
   if (!row) return fail(404, '项目不存在');
+  if (pathname.endsWith('/tasks') && method === 'GET') {
+    const items = (await client.query(`SELECT t.id,t.title,t.status,t.owner_id AS "ownerId" FROM project_repository_tasks l
+      JOIN tasks t ON t.id=l.task_id WHERE l.repository_id=$1 AND t.deleted_at IS NULL ORDER BY l.created_at DESC,t.id`, [id])).rows;
+    return { status: 200, data: { items } };
+  }
+  if (pathname.endsWith('/tasks') && method === 'POST') {
+    const body = await readBody();
+    const taskId = body?.taskId;
+    if (typeof taskId !== 'string' || !taskId || taskId.length > 200) return fail(400, '任务 ID 无效');
+    const task = (await client.query("SELECT id,title,status FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3='admin')", [taskId,me.id,me.role])).rows[0];
+    if (!task) return fail(404, '任务不存在或无权关联');
+    await client.query('INSERT INTO project_repository_tasks(repository_id,task_id,linked_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [id,taskId,me.id]);
+    return { status: 200, data: { id: task.id, title: task.title, status: task.status } };
+  }
+  const unlink = pathname.match(/\/tasks\/([^/]+)$/);
+  if (unlink && method === 'DELETE') {
+    let taskId;
+    try { taskId = decodeURIComponent(unlink[1]); } catch { return fail(400, '任务 ID 无效'); }
+    const deleted = await client.query('DELETE FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [id,taskId]);
+    return deleted.rowCount ? { status: 200, data: { deleted: true, taskId } } : fail(404, '关联不存在');
+  }
   if (method === 'GET' && pathname.endsWith(`/${id}`)) return { status: 200, data: publicRow(row) };
   if (method === 'POST' && pathname.endsWith('/refresh')) {
     const [owner, repo] = row.full_name.split('/');

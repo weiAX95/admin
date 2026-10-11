@@ -20,6 +20,10 @@ export interface ProjectRepository {
 export const listProjectRepositories = () => http.get<{ items: ProjectRepository[] }>('/project-repositories');
 export const createProjectRepository = (body: { url: string; branch?: string; goal: string; requirementBaseline?: string }) => http.post<ProjectRepository>('/project-repositories', body);
 export const refreshProjectRepository = (id: string) => http.post<ProjectRepository>(`/project-repositories/${id}/refresh`, {});
+export interface ProjectLinkedTask { id: string; title: string; status: string; ownerId?: string }
+export const listProjectLinkedTasks = (repositoryId: string) => http.get<{ items: ProjectLinkedTask[] }>(`/project-repositories/${repositoryId}/tasks`);
+export const linkProjectTask = (repositoryId: string, taskId: string) => http.post<ProjectLinkedTask>(`/project-repositories/${repositoryId}/tasks`, { taskId });
+export const unlinkProjectTask = (repositoryId: string, taskId: string) => http.del<{ deleted: boolean; taskId: string }>(`/project-repositories/${repositoryId}/tasks/${encodeURIComponent(taskId)}`);
 export interface ProjectRequirementBaseline { id: string; repositoryId: string; version: number; contentSha256: string; createdAt: string; content?: string }
 export const listProjectRequirementBaselines = (repositoryId: string) => http.get<{ items: ProjectRequirementBaseline[] }>(`/project-repositories/${repositoryId}/baselines`);
 export const getProjectRequirementBaseline = (repositoryId: string, baselineId: string) => http.get<ProjectRequirementBaseline>(`/project-repositories/${repositoryId}/baselines/${baselineId}`);
