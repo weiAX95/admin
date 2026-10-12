@@ -32,6 +32,36 @@ async function waitFor(client, id) {
   throw new Error('analysis did not finish');
 }
 
+test('legacy project goal with a credential is refused before model execution', async t => {
+  const { client } = await createPgTestServer(t);
+  const { repositoryId, scanId, path } = await fixture(client);
+  await client.query('UPDATE project_repositories SET goal=$2 WHERE id=$1', [repositoryId, 'inspect github_pat_' + 'A'.repeat(48)]);
+  let calls = 0;
+  const response = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me: { id: 'member', role: 'member' }, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => { calls++; throw new Error('must not call model'); } });
+  assert.equal(response.status, 422);
+  assert.equal(calls, 0);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analyses')).rows[0].n, 0);
+});
+
+test('secret-like branch names are refused before creating an analysis', async t => {
+  const { client } = await createPgTestServer(t);
+  const { scanId, path } = await fixture(client);
+  await client.query('UPDATE project_scans SET branch=$2 WHERE id=$1', [scanId, 'github_pat_' + 'A'.repeat(48)]);
+  const response = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me: { id: 'member', role: 'member' }, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true });
+  assert.equal(response.status, 422);
+});
+
+test('queued legacy analysis with a credential fails safely during worker recovery', async t => {
+  const { client } = await createPgTestServer(t);
+  const { scanId, repositoryId } = await fixture(client);
+  const id = crypto.randomUUID();
+  await client.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,model_id,provider,api_model,input_price,output_price,estimated_max_cost_usd,status,attempts) VALUES($1,$2,$3,'member','octocat/example','main',$4,$5,'v1','project-model','legacy','fake-model',1,1,0.1,'queued',0)", [id,repositoryId,scanId,sha,'token github_pat_' + 'A'.repeat(48)]);
+  let calls = 0;
+  await runProjectAnalysis(client, id, async () => { calls++; throw new Error('must not invoke model'); });
+  assert.equal(calls, 0);
+  assert.deepEqual((await client.query('SELECT status,error_code FROM project_analyses WHERE id=$1', [id])).rows[0], { status: 'failed', error_code: 'SENSITIVE_INPUT' });
+});
+
 test('analysis persists validated report and source evidence, isolates owners, and deduplicates active work', async t => {
   const { client, base } = await createPgTestServer(t);
   const { repositoryId, scanId, path } = await fixture(client);

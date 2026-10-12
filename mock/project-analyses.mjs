@@ -6,6 +6,7 @@ import { modelUsable, supportedProvider } from './model-governance.mjs';
 import { checkTokenReservations, reserveRunTokens } from './model-quotas.mjs';
 import { checkModelRate, reserveModelRate } from './model-rate-limits.mjs';
 import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvidence, mergeProjectModuleReports, parseProjectRequirements, selectProjectEvidence, validateProjectReport } from './project-analysis-core.mjs';
+import { containsKnownSecret } from './project-scan.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -15,6 +16,7 @@ const view = row => ({ id: row.id, repositoryId: row.repository_id, scanId: row.
 let runTail = Promise.resolve();
 const running = new Map();
 const defaultRunModel = (client, job, messages, signal) => completeWithProvider(client, { provider: job.provider, connectionId: job.connection_id, model: job.api_model, messages, signal, parameters: { temperature: 0, max_tokens: MAX_OUTPUT_TOKENS }, timeoutMs: 90000, audit: { runId: job.id, attempt: job.attempts, userId: job.owner_id, module: 'project_analysis', phase: 'main', modelId: job.model_id, redactPrompt: true } });
+const hasSensitiveMetadata = job => [job.full_name, job.branch, job.goal, job.requirement_baseline, job.requirement_document].some(value => value && containsKnownSecret(value));
 function enqueue(db, id, runModel) {
   const current = runTail.then(() => runProjectAnalysis(db, id, runModel));
   runTail = current.catch(() => undefined);
@@ -102,6 +104,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     if (!scan) throw Object.assign(new Error('扫描记录不存在'), { code: 'SCAN_MISSING' });
     const files = (await db.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1', [job.scan_id])).rows;
     if (job.baseline_version_id) job.requirement_document = (await db.query('SELECT content FROM project_requirement_baselines WHERE id=$1',[job.baseline_version_id])).rows[0]?.content || null;
+    if (hasSensitiveMetadata(job)) throw Object.assign(new Error('分析输入包含凭据'), { code: 'SENSITIVE_INPUT' });
     const selected = selectProjectEvidence(files);
     const modules = buildProjectModuleCoverage(files,selected);
     const technologies = detectProjectTechnologies(files);
@@ -133,7 +136,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     }
     await saveReport(db, job, mergeProjectModuleReports(results), { selectedCount: selected.length, availableCount, coverageComplete, modules, technologies, results });
   } catch (error) {
-    const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE','CALL_OUTCOME_UNKNOWN'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
+    const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE','CALL_OUTCOME_UNKNOWN','SENSITIVE_INPUT'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
     await db.query("UPDATE project_analyses SET status='failed',error_code=$2,summary=NULL,finished_at=now() WHERE id=$1 AND status='analyzing'", [id,errorCode]);
     await db.query("UPDATE project_analysis_attempts SET status=(SELECT status FROM project_analyses WHERE id=$1) WHERE analysis_id=$1 AND attempt=$2", [id,job.attempts]);
   } finally { if (running.get(id) === controller) running.delete(id); }
@@ -245,6 +248,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (!await connectionAvailable(client,model)) return fail(409,'模型连接尚未配置');
   const files = (await client.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1', [scan.id])).rows;
   if (repository.baseline_version_id) repository.requirement_document = (await client.query('SELECT content FROM project_requirement_baselines WHERE id=$1',[repository.baseline_version_id])).rows[0]?.content || null;
+  if (hasSensitiveMetadata({ ...repository, full_name: scan.full_name, branch: scan.branch })) return fail(422,'分析输入包含凭据，请移除后重试');
   const selected = selectProjectEvidence(files);
   if (!selected.length) return fail(422,'扫描没有可分析的文本，请重新扫描');
   const plan = modelPlan({ full_name: scan.full_name, branch: scan.branch, commit_sha: scan.commit_sha, goal: repository.goal, requirement_baseline: repository.requirement_baseline, requirement_document: repository.requirement_document },selected);

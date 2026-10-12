@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { containsKnownSecret } from './project-scan.mjs';
 
 export function parseGitHubRepository(value) {
   let url;
@@ -65,7 +66,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     try { parsed = parseGitHubRepository(body?.url); } catch (error) { return fail(400, error.message); }
     const goal = typeof body.goal === 'string' ? body.goal.trim() : '';
     const baseline = typeof body.requirementBaseline === 'string' ? body.requirementBaseline.trim() : '';
-    if (!goal || goal.length > 2000 || baseline.length > 200 || (body.branch && !validBranch(body.branch))) return fail(400, '项目目标、需求基线或分支格式无效');
+    if (!goal || goal.length > 2000 || baseline.length > 200 || containsKnownSecret(goal) || containsKnownSecret(baseline) || (body.branch && !validBranch(body.branch))) return fail(400, '项目目标、需求基线或分支格式无效，且不得包含凭据');
     const resolved = await resolveRepository(fetchGithub, parsed, body.branch);
     if (resolved.error) return resolved.error;
     const { fullName, branch, commitSha } = resolved.data;

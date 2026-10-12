@@ -50,6 +50,8 @@ test('module plan caps model calls and aggregation keeps each finding and sugges
 test('legacy scan content containing a known credential is never selected for a model', () => {
   const legacy = { path: 'src/old.ts', category: 'source', status: 'read', content: 'const key = "sk-' + 'x'.repeat(24) + '";', git_sha: 'd'.repeat(40) };
   assert.deepEqual(selectProjectEvidence([...files, legacy]).map(file => file.path), ['README.md', 'src/app.ts']);
+  const legacyPath = { path: '.aws/credentials', category: 'config', status: 'read', content: '[default]\nregion=cn-shanghai', git_sha: 'e'.repeat(40) };
+  assert.deepEqual(selectProjectEvidence([...files, legacyPath]).map(file => file.path), ['README.md', 'src/app.ts']);
 });
 
 test('technology hints only quote declared dependencies from readable manifests', () => {

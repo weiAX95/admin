@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { scanPublicRepository } from '../mock/project-scan.mjs';
+import { containsKnownSecret, scanPublicRepository } from '../mock/project-scan.mjs';
 
 const SHA = 'a'.repeat(40), TREE = 'b'.repeat(40);
 const json = value => ({ ok: true, status: 200, json: async () => value });
@@ -87,4 +87,21 @@ test('scanner excludes known secret patterns inside otherwise allowed source fil
   assert.equal(result.files[0].reason, 'sensitive_content');
   assert.equal(JSON.stringify(result).includes('sk-' + 'q'.repeat(24)), false);
   assert.equal(result.totalBytes, Buffer.byteLength(secret));
+});
+
+test('scanner excludes common credential formats and sensitive configuration paths', async () => {
+  for (const secret of ['github_pat_' + 'A'.repeat(48), 'AIza' + 'B'.repeat(35), 'xoxb-123456789012-123456789012-' + 'C'.repeat(24), 'https://hooks.slack.com/services/T123/B456/' + 'D'.repeat(24)]) {
+    assert.equal(containsKnownSecret(`const value = "${secret}";`), true);
+  }
+  const entries = ['.npmrc', '.pypirc', '.aws/credentials', '.kube/config', 'infra/terraform.tfstate', 'infra/prod.tfvars', 'src/github_pat_' + 'A'.repeat(48) + '/entry.ts'];
+  let blobCalls = 0;
+  const get = async url => {
+    if (url.endsWith(`/git/commits/${SHA}`)) return json({ tree: { sha: TREE } });
+    if (url.includes('/git/trees/')) return json({ truncated: false, tree: entries.map((path, index) => ({ path, type: 'blob', sha: String(index + 1).repeat(40), size: 10 })) });
+    blobCalls++;
+    throw new Error('sensitive paths must not be fetched');
+  };
+  const result = await scanPublicRepository({ fullName: 'octocat/example', commitSha: SHA, fetchGithub: get });
+  assert.equal(blobCalls, 0);
+  assert.ok(result.files.every(file => file.status === 'excluded' && file.reason === 'sensitive_path'));
 });

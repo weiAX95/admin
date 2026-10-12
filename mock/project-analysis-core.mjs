@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { containsKnownSecret } from './project-scan.mjs';
+import { containsKnownSecret, isSensitiveProjectPath } from './project-scan.mjs';
 
 const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const exactKeys = (value, keys) => isObject(value) && Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
@@ -37,7 +37,7 @@ export function parseProjectRequirements(content) {
 export function detectProjectTechnologies(files) {
   const found = new Map();
   for (const file of [...files].sort((a,b) => a.path.localeCompare(b.path))) {
-    if (file.status !== 'read' || typeof file.content !== 'string' || !/(^|\/)(?:package\.json|requirements\.txt|pyproject\.toml|go\.mod|Cargo\.toml)$/.test(file.path) || containsKnownSecret(file.content)) continue;
+    if (file.status !== 'read' || typeof file.content !== 'string' || isSensitiveProjectPath(file.path) || !/(^|\/)(?:package\.json|requirements\.txt|pyproject\.toml|go\.mod|Cargo\.toml)$/.test(file.path) || containsKnownSecret(file.content)) continue;
     const lines = file.content.split(/\r?\n/);
     const add = (dependency, name, index) => {
       if (!name || found.has(name) || lines[index].length > 300) return;
@@ -127,7 +127,7 @@ export function buildProjectModuleCoverage(files, selectedFiles) {
 }
 
 export function selectProjectEvidence(files, { maxFiles = 30, maxChars = 30000, maxCharsPerFile = 3000, maxModules = 8 } = {}) {
-  const eligible = files.filter(file => file.status === 'read' && typeof file.content === 'string' && !containsKnownSecret(file.content))
+  const eligible = files.filter(file => file.status === 'read' && typeof file.content === 'string' && !isSensitiveProjectPath(file.path) && !containsKnownSecret(file.content))
     .sort((a, b) => (categoryOrder[a.category] ?? 4) - (categoryOrder[b.category] ?? 4) || a.path.localeCompare(b.path));
   const groups = new Map();
   for (const file of eligible) {

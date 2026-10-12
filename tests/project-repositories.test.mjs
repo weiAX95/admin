@@ -12,6 +12,14 @@ test('public GitHub repository URL validation rejects hosts, credentials and ext
   }
 });
 
+test('repository goals containing credentials are rejected before contacting GitHub', async t => {
+  const { client } = await createPgTestServer(t);
+  let calls = 0;
+  const result = await handleProjectRepositories({ pathname: '/api/project-repositories', method: 'POST', client, me: { id: 'member', role: 'member' }, readBody: async () => ({ url: 'https://github.com/octocat/example', goal: 'token github_pat_' + 'A'.repeat(48) }), fetchGithub: async () => { calls++; throw new Error('should not fetch'); } });
+  assert.equal(result.status, 400);
+  assert.equal(calls, 0);
+});
+
 test('repository registration pins a public branch commit and isolates accounts', async t => {
   const { client } = await createPgTestServer(t);
   const calls = [];

@@ -3,9 +3,10 @@ import crypto from 'node:crypto';
 const SHA = /^[a-f\d]{40}$/i;
 const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'vendor', 'target', '.venv', '__pycache__']);
 const BINARY_EXTENSIONS = /\.(?:png|jpe?g|gif|webp|svg|ico|pdf|zip|gz|tar|7z|exe|dll|so|dylib|class|jar|pyc|woff2?|ttf|eot|mp[34]|mov|wav|ogg|avif|bin|db|sqlite)$/i;
-const SENSITIVE_NAMES = /(?:^|\/)(?:\.env(?:\.[^/]*)?|id_rsa|id_ed25519|credentials(?:\.[^/]*)?|secrets?(?:\.[^/]*)?|service[-_]?account(?:\.[^/]*)?|[^/]+\.(?:pem|key|p12|pfx))$/i;
-const SENSITIVE_CONTENT = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16})\b|\b(?:api[_-]?key|client[_-]?secret|password|access[_-]?token)\s*[:=]\s*['"]?[^'"\s]{16,}/i;
+const SENSITIVE_NAMES = /(?:^|\/)(?:\.env(?:\.[^/]*)?|\.npmrc|\.pypirc|\.netrc|id_rsa|id_ed25519|credentials(?:\.[^/]*)?|secrets?(?:\.[^/]*)?|service[-_]?account(?:\.[^/]*)?|terraform\.tfstate(?:\.[^/]*)?|[^/]+\.tfvars(?:\.json)?|[^/]+\.(?:pem|key|p12|pfx))$/i;
+const SENSITIVE_CONTENT = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|xox[baprs]-[A-Za-z0-9-]{20,})\b|https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/_-]{15,}|\b(?:api[_-]?key|client[_-]?secret|password|access[_-]?token)\s*[:=]\s*['"]?[^'"\s]{16,}/i;
 export const containsKnownSecret = content => SENSITIVE_CONTENT.test(content);
+export const isSensitiveProjectPath = path => SENSITIVE_NAMES.test(path) || containsKnownSecret(path) || path.split('/').some(part => /^(?:secret|secrets|private|credentials|\.aws|\.kube|\.ssh)$/i.test(part));
 
 function classification(path) {
   if (/(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|\.)|\.(?:test|spec)\./i.test(path)) return 'test';
@@ -17,7 +18,7 @@ function classification(path) {
 function excludedReason(path, entry, maxFileBytes) {
   const parts = path.split('/');
   if (parts.some(part => SKIP_DIRS.has(part))) return 'dependency_or_build';
-  if (SENSITIVE_NAMES.test(path) || parts.some(part => /^(?:secret|secrets|private|credentials)$/i.test(part))) return 'sensitive_path';
+  if (isSensitiveProjectPath(path)) return 'sensitive_path';
   if (entry.mode === '120000' || entry.type !== 'blob') return 'non_regular_file';
   if (BINARY_EXTENSIONS.test(path)) return 'binary_type';
   if (!Number.isSafeInteger(entry.size) || entry.size < 0 || entry.size > maxFileBytes) return 'file_size';
