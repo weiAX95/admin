@@ -19,7 +19,7 @@
 ### 0. 基础能力与数据契约（M0）
 
 - [ ] **0.1 持久化数据与迁移**
-  - [x] 为现有管理端的账号、任务、笔记、实验、会话、活动、历史、公开仓库连接、扫描索引与分析报告等数据建立 PostgreSQL 表；当前共 119 张表，包含已实现的外键、唯一约束和删除行为
+  - [x] 为现有管理端的账号、任务、笔记、实验、会话、活动、历史、公开仓库连接、扫描索引与分析报告等数据建立 PostgreSQL 表；当前共 123 张表，包含已实现的外键、唯一约束和删除行为
   - [x] 将当前关系表、外键、应用层逻辑关联及页面取数路径整理到 [数据库关系图](docs/database-relationships.md)；图中补全 `change_logs`／`activity` 的逻辑关联，并注明 `time_entries` 外键来源与 `annotation_tags` CHECK 约束
   - [x] 将现有 `mock/db.json` 的管理端数据迁移到 PostgreSQL；导入前备份、导入时核对数量和关联，失败则事务回滚
   - [x] 本地 API 运行时只读写 PostgreSQL；验证登录、任务和会话接口，重启后令牌与评分保留，重复导入被拒绝；现有管理端相关测试通过
@@ -215,7 +215,7 @@
   - [x] 已评分消息显示平均分、评分人数及标签人数
   - [x] AC：评分后即时更新；同一管理端账号对同一消息重复评分覆盖旧值
 
-本轮同时完成本地 API 的 PostgreSQL 迁移、一次性旧 JSON 导入、数据库令牌和会话消息增量上报。启动与备份步骤见 [README](README.md)，当前 119 张表与界面取数关系见 [数据库关系图](docs/database-relationships.md)，领域术语见 [CONTEXT](CONTEXT.md)，迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
+本轮同时完成本地 API 的 PostgreSQL 迁移、一次性旧 JSON 导入、数据库令牌和会话消息增量上报。启动与备份步骤见 [README](README.md)，当前 123 张表与界面取数关系见 [数据库关系图](docs/database-relationships.md)，领域术语见 [CONTEXT](CONTEXT.md)，迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
 
 - [ ] **3.3 自动质量检测**
   - [ ] 后端定时扫描（每 10 分钟或事件驱动）：
@@ -819,11 +819,11 @@
   - [ ] 恢复后自动校验数据完整性（checksum 对比）
   - [ ] AC：备份/恢复过程不中断正常服务
 - [ ] **12.5 Webhook 集成**
-  - [ ] 配置向外发送的 webhook：{ event, url, secret, headers }；本系统对请求体生成 HMAC-SHA256 签名，供接收方验证
-  - [ ] 支持事件类型：task.completed、experiment.finished、evaluation.completed、alert.firing、note.updated
-  - [ ] Webhook 日志页面：每次调用的时间、状态码、响应体、重试次数
-  - [ ] 失败重试：指数退避（1min、2min、4min），最多 3 次
-  - [ ] AC：接收方可用共享密钥验证本系统发出的签名；发送失败按约定重试且记录每次尝试。接收 GitHub Webhook 的签名验证由 14.11 独立验收
+  - [x] 管理员配置向外发送的 webhook：{ event, url, secret, headers }；共享密钥与请求头加密保存，公网 HTTPS、解析后地址校验和固定连接地址防止内部网络请求；发送前预览外发字段
+  - [x] 事务内入队五类事件：task.completed、experiment.finished、evaluation.completed、alert.firing（当前为评测退化告警）、note.updated；实验／评测事件带运行与用量汇总
+  - [x] Settings 投递日志展示逐次时间、状态码、脱敏截断响应、错误和重试次数；完成事件按审计保留期清理，待投递事件保留
+  - [x] HMAC-SHA256 签名覆盖时间戳与原始请求体；失败按 1、2、4 分钟重试，最多四次尝试，接收方可按事件 ID 去重；本地接收端集成测试通过
+  - [ ] 仍需页面正式显示验收、真实公网接收端联调；模型健康与成本等更多 `alert.firing` 来源尚未接入。GitHub 入站 Webhook 由 14.11 独立验收
 - [ ] **12.6 主题 & 个性化**
   - [x] 已落地账号独立偏好、主题／主色／密度设置与基础外观切换；全站文案和图表主题适配仍待完成
   - [ ] 亮/暗主题切换（toggle，即时生效，保存到用户偏好）

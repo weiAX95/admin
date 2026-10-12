@@ -3,10 +3,22 @@
  * 避免手动开两个终端：npm run dev
  */
 import { spawn } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const localEnv = path.join(root, ".env.local");
+if (fs.existsSync(localEnv)) process.loadEnvFile(localEnv);
+if (!process.env.WEBHOOK_MASTER_KEY) {
+  const existing = fs.existsSync(localEnv) ? fs.readFileSync(localEnv, "utf8") : "";
+  if (/^WEBHOOK_MASTER_KEY\s*=/m.test(existing)) throw new Error(".env.local 中的 WEBHOOK_MASTER_KEY 无效，请检查后重试");
+  fs.appendFileSync(localEnv, `${existing && !existing.endsWith("\n") ? "\n" : ""}WEBHOOK_MASTER_KEY=${crypto.randomBytes(32).toString("hex")}\n`, { mode: 0o600 });
+  fs.chmodSync(localEnv, 0o600);
+  process.loadEnvFile(localEnv);
+}
+if (!/^[a-f\d]{64}$/i.test(process.env.WEBHOOK_MASTER_KEY || "")) throw new Error("WEBHOOK_MASTER_KEY 必须是 32 字节随机密钥的十六进制值");
 
 const children = [];
 

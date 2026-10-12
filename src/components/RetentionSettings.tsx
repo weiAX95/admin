@@ -53,6 +53,7 @@ export default function RetentionSettings() {
       <Table rowKey="local_date" size="small" dataSource={runs} pagination={{ pageSize: 5 }} columns={[
         { title: '日期', dataIndex: 'local_date' },
         { title: '安全审计', dataIndex: 'audit_deleted' },
+        { title: 'Webhook 事件', dataIndex: 'webhook_events_deleted' },
         { title: '会话', dataIndex: 'sessions_deleted' },
         { title: '未审核候选', dataIndex: 'candidates_deleted' },
         { title: '回收站清理', render: (_, row) => (row.tasks_deleted || 0) + (row.notes_deleted || 0) + (row.experiments_deleted || 0) + (row.prompts_deleted || 0) },

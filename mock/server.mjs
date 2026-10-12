@@ -60,6 +60,7 @@ import { handleModelCallAudit, flushModelCallAudits } from './model-call-audit.m
 import { handleModelHealth, processModelHealthAlerts } from './model-health.mjs';
 import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
+import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
@@ -585,6 +586,8 @@ async function handleRequest(req, res) {
     if (connectionResponse) return send(res, connectionResponse.status, connectionResponse.data);
     const retentionResponse = await handleRetentionSettings({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (retentionResponse) return send(res, retentionResponse.status, retentionResponse.data);
+    const webhookResponse = await handleOutboundWebhooks({ pathname, method, client: activeClient, me, url, readBody: () => readProjectBody(req) });
+    if (webhookResponse) return send(res, webhookResponse.status, webhookResponse.data);
     const recycleResponse = await handleRecycleBin({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (recycleResponse) return send(res, recycleResponse.status, recycleResponse.data);
     const quotaResponse = await handleModelQuotas({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
@@ -2041,6 +2044,16 @@ try {
     const cleanupExpired = () => { void runRetentionCleanup(pool).catch(error => console.error('[retention] cleanup failed:', error)); };
     cleanupExpired();
     setInterval(cleanupExpired, 60_000).unref();
+    let webhookRunning = false;
+    const runWebhooks = async () => {
+      if (webhookRunning) return;
+      webhookRunning = true;
+      try { for (let i = 0; i < 10; i++) if (!await processOutboundWebhooks(pool)) break; }
+      catch (error) { console.error('[webhooks] delivery failed:', error.message); }
+      finally { webhookRunning = false; }
+    };
+    void runWebhooks();
+    setInterval(() => { void runWebhooks(); }, 1000).unref();
     const checkModelHealth = () => { void processModelHealthAlerts(pool).catch(error => console.error('[model-health] alert check failed:', error)); };
     checkModelHealth();
     setInterval(checkModelHealth, 5000).unref();
