@@ -418,16 +418,19 @@ flowchart LR
 ```mermaid
 flowchart LR
   ChatUser["聊天端用户 ID<br/>外部标识，不是本库表"] -. "sessions.external_user_id" .-> Sessions["sessions"]
+  Users["users"] -->|"FK ingested_by；删除账号时置空"| Sessions
   Sessions -->|"FK session_id"| Messages["session_messages"]
   Messages -->|"复合 FK session_id + message_id · ON DELETE CASCADE"| SessionPrices["session_usage_prices"]
   Models["experiment_models"] -->|"FK model_id · ON DELETE SET NULL"| SessionPrices
   Messages -->|"复合 FK (session_id, message_id)"| Annotations["message_annotations"]
-  Users["users"] -->|"FK user_id"| Tokens["auth_sessions"]
+  Users -->|"FK user_id"| Tokens["auth_sessions"]
   Users -->|"FK reviewer_id；删除账号时置空"| Annotations
   Annotations -->|"FK annotation_id"| AnnotationTags["annotation_tags"]
 ```
 
 消息 ID 只要求在**同一会话内**唯一；`session_messages` 的主键为 `(session_id, id)`。[062 迁移](../db/migrations/062_session_token_usage.sql) 在该表增加可空的 assistant 消息输入／输出 token 与模型名，并由数据库检查两个 token 字段同时存在且非负；旧消息保持缺失值。会话用量按明确上报的消息合计，口径见 [会话用量说明](session-token-usage.md)。评分表用 `(session_id, message_id)` 复合外键引用这两个字段。同一管理端账号对同一消息的有效评分由唯一索引限制为一条；删除评分账号时 `reviewer_id` 置空，原评分仍参与汇总。`annotation_tags.tag` 另有 [CHECK 约束](../db/migrations/002_constraints.sql)，只允许“准确、不准确、偏题、幻觉、过于冗长、过于简略、格式错误”七种标签。删除会话会级联删除消息、评分及其标签。`sessions.external_user_id` 不引用 `users.id`，不能把聊天端用户当成管理端评分账号。
+
+[064 迁移](../db/migrations/064_session_ingest_ownership.sql) 新增 `sessions.ingested_by`，指向首次上报所用的管理端账号；只有该账号与管理员能继续通过 `/api/sessions/ingest` 追加消息或补报用量。导入的旧会话没有可信上报账号，保持 `NULL`，只允许管理员续传；删除上报账号后该字段置空，原会话仍可由管理员维护。当前会话的读取与人工评分沿用共享规则，跨账号读取边界仍属于 0.2 的后续工作。
 
 会话成本估算通过 [063 迁移](../db/migrations/063_session_cost_snapshots.sql) 的 `session_usage_prices` 保留首次上报时的价格；现价模式读取 `experiment_models` 当前价格，缺价消息单列而不当作零。两种口径及上海日历聚合见 [成本说明](session-costs.md)。会话全文搜索读取 `sessions` 与 `session_messages`，以数据库令牌验证管理端账号后使用独立的只读查询，不经过加载全部业务表的事务。普通关键词与正则模式、片段边界、查询时限及本机测量见 [会话搜索说明](session-search.md)。
 
@@ -435,7 +438,7 @@ flowchart LR
 | --- | --- | --- |
 | `users` | 管理端账号、密码哈希、角色、启用状态及个人复习邮件设置。 | `/login`、`/accounts`、`/notes/reviews` |
 | `auth_sessions` | 登录令牌哈希、到期与撤销时间；`user_id` 外键，删除账号时级联删除。 | 登录、退出、HTTP／WebSocket 鉴权 |
-| `sessions` | 聊天端上报的会话；`external_user_id` 是外部用户标识。 | `/sessions` |
+| `sessions` | 聊天端上报的会话；`external_user_id` 是外部用户标识，`ingested_by` 是管理端上报账号的可空外键。 | `/sessions` |
 | `session_messages` | 会话中的 user／assistant 消息，保留顺序和首次确定的 ID；`session_id` 外键；assistant 消息可存明确上报的输入／输出 token 与模型名。 | 会话行内预览、全文搜索、Token 用量 |
 | `session_usage_prices` | 每条已上报消息首次匹配的模型与价格快照；消息复合外键级联删除，模型外键删除时置空。旧消息无快照不伪造历史价。 | 会话成本的「上报时价格」模式 |
 | `message_annotations` | assistant 消息的 1–5 星评分；复合消息外键及可置空的评分账号外键。 | 会话消息下的评分和汇总 |

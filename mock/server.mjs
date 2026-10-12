@@ -1373,6 +1373,10 @@ async function handleRequest(req, res) {
       const body = await readBody(req);
       if (!Array.isArray(body.messages)) return send(res, 422, { error: "messages 必须是数组" });
       const existing = body.id ? db.sessions.find(item => item.id === body.id) : null;
+      if (existing && me.role !== "admin") {
+        const owner = (await activeClient.query("SELECT ingested_by FROM sessions WHERE id=$1", [existing.id])).rows[0]?.ingested_by;
+        if (owner !== me.id) return send(res, 403, { error: "仅会话上报账号或管理员可追加消息" });
+      }
       const seen = new Set();
       const incoming = [];
       for (const item of body.messages) {
@@ -1412,6 +1416,7 @@ async function handleRequest(req, res) {
       }
       const s = { id: body.id || newId(), userId: body.userId || "unknown", createdAt: nowIso(), updatedAt: nowIso(), messages: incoming };
       db.sessions.unshift(s);
+      afterSave(client => client.query("UPDATE sessions SET ingested_by=$1 WHERE id=$2", [me.id, s.id]));
       if (incoming.some(item => item.usage)) afterSave(async client => { for (const item of incoming) await saveSessionPriceSnapshot(client, s.id, item); });
       saveDb(db);
       return send(res, 201, s);

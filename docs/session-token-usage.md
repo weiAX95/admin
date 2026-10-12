@@ -1,6 +1,6 @@
 # 会话 Token 用量
 
-聊天端通过现有 `POST /api/sessions/ingest` 上报会话消息。assistant 消息可增加 `usage: { promptTokens, completionTokens, model? }`；两个 token 字段必须为非负整数，`model` 可选。首次上报后，也可携带服务端返回的会话 ID、消息 ID、原始 role／content／at 补报用量。重复上报同一用量幂等；已有用量与新值不一致时返回 409，不允许悄悄改写。user 消息不能带用量。输入中没有 `usage` 的旧客户端仍可正常上报。
+聊天端通过现有 `POST /api/sessions/ingest` 上报会话消息。首次上报需要管理端登录凭证；服务端记录这次上报所用账号，只有该账号或管理员能继续上报同一会话。迁移前的旧会话没有可信上报账号，只允许管理员续传。assistant 消息可增加 `usage: { promptTokens, completionTokens, model? }`；两个 token 字段必须为非负整数，`model` 可选。首次上报后，也可携带服务端返回的会话 ID、消息 ID、原始 role／content／at 补报用量。重复上报同一用量幂等；已有用量与新值不一致时返回 409，不允许悄悄改写。user 消息不能带用量。输入中没有 `usage` 的旧客户端仍可正常上报。
 
 ```json
 {
