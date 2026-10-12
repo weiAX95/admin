@@ -41,6 +41,7 @@ flowchart LR
   Notes[(notes)] -. "updated_at 改变" .-> Events
   Batches[(experiment_batches)] -. "结束状态" .-> Events
   Alerts[(evaluation_alerts)] -. "新增退化告警" .-> Events
+  Notices[(app_notifications)] -. "告警通知按来源去重" .-> Events
   Users[(users)] -->|"FK created_by · ON DELETE SET NULL"| Hooks[(outbound_webhooks)]
   Hooks -->|"FK webhook_id · RESTRICT"| Deliveries[(outbound_webhook_deliveries)]
   Events -->|"FK event_id · ON DELETE CASCADE"| Deliveries
@@ -52,6 +53,8 @@ flowchart LR
 [076_outbound_webhooks.sql](../db/migrations/076_outbound_webhooks.sql) 建立四张表。业务表的触发器在同一事务中写事件；事件 `payload` 中的任务、笔记、批次及告警 ID 是历史快照字段，**没有指向业务实体的 SQL 外键**，因此源记录后来删除不会抹去待投递事件。[077_outbound_note_update_event.sql](../db/migrations/077_outbound_note_update_event.sql) 将笔记标题、正文、分类或标签保存导致的更新时间变化统一视为更新事件；[078_outbound_webhook_payloads.sql](../db/migrations/078_outbound_webhook_payloads.sql) 在入队时补入任务和笔记正文、批次运行汇总、告警明细。运行器按事件与当时启用的配置扇出投递；配置停用或软删除后取消尚未开始的投递，已发出的请求仍可能完成。投递表对配置使用默认限制删除的外键，删除配置只写 `deleted_at`，既有日志仍可由管理员查看；事件与逐次尝试分别级联清理下游记录。
 
 配置的共享密钥和自定义 X- 请求头分别加密，数据库只存密文、nonce、认证标签、密钥版本及末四位掩码。投递前重新解析地址并固定实际连接 IP，拒绝内网目标和跳转；签名覆盖时间戳与请求原始字节。队列状态与尝试次数持久化，进程重启后可恢复；网络断开后投递可能重复，接收方须按事件 ID 去重。[079_outbound_webhook_retention.sql](../db/migrations/079_outbound_webhook_retention.sql) 给每日清理结果增加 Webhook 事件清理数；审计保留期到达后只清理已扇出且没有待完成投递的事件，并级联其投递与尝试日志。
+
+[080_outbound_notification_alerts.sql](../db/migrations/080_outbound_notification_alerts.sql) 把模型健康、预算阈值、日成本异常、速率与 token 配额、模型退役、实验／评测调度失败和评测仲裁通知接入 `alert.firing`。`app_notifications` 与 Webhook 事件之间没有 SQL 外键：通知正文、来源类型、业务 ID 在事务中复制到事件快照。`source_key` 对同一来源告警唯一，避免多个管理员的站内通知产生重复外发；个人 token 配额告警额外包含账号 ID，使不同账号的告警仍各自独立。评测退化已由 `evaluation_alerts` 触发器入队，故 `evaluation_regression` 站内通知不再重复入队。
 
 ## 任务 API 的账号边界
 
@@ -108,7 +111,7 @@ flowchart LR
 
 `retention_settings` 是单行版本化保留配置，保存独立安全审计保留天数、会话保留天数、核心内容回收天数以及系统时区下的清理时间。`retention_cleanup_runs` 以本地日历日为主键，记录每日清理结果和逐项永久删除失败原因，避免重启后重复执行。清理器删除过期 `security_audit_logs` 与 `sessions`；会话删除级联消息和评分，未审核候选同时删除，已审核候选和摘录笔记保留并显示“原会话已清理”。[035_core_recycle_bin.sql](../db/migrations/035_core_recycle_bin.sql) 给 `tasks`、`notes`、`experiments` 增加 `deleted_at`；`prompt_library` 已在旧迁移中有该字段。删除后正常读取过滤已删除行，管理员可恢复或永久删除；到期清理按行设置保存点，关联约束阻止删除时保留条目并记录失败。恢复实验不会恢复已撤销的分享或暂停的调度；恢复任务会根据 `task_dependency_restore_edges` 尝试接回被解除的依赖，冲突时只恢复任务并报告未接回的依赖，迁移前删除的任务没有可追溯边记录。这两张保留策略表无外键。
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [079_outbound_webhook_retention.sql](../db/migrations/079_outbound_webhook_retention.sql)。当前共 **123 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [080_outbound_notification_alerts.sql](../db/migrations/080_outbound_notification_alerts.sql)。当前共 **123 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -552,7 +555,7 @@ flowchart LR
 | `media_assets` | 图片 MIME、大小、上传时间；文件存本地附件目录，内容字段通过 URL 逻辑引用。 | Markdown 编辑器及详情预览 |
 | `experiments` | 手工记录或可执行实验定义；`task_id` 为逻辑关联，`owner_id` 与提示词版本为外键。 | `/experiments`、`/experiments/:id`、任务详情“关联” |
 | `outbound_webhooks` | 管理员配置的事件、目标 URL、加密密钥与请求头、启用状态；`created_by` 外键，删除账号后置空。 | `/settings` 出站 Webhook 配置 |
-| `outbound_webhook_events` | 事务内持久化的事件类型、时间和业务正文；业务实体 ID 是快照值，无实体外键。 | 后台投递队列 |
+| `outbound_webhook_events` | 事务内持久化的事件类型、时间和业务正文；业务实体 ID 是快照值，无实体外键。告警通知使用唯一 `source_key` 防止多账号重复外发。 | 后台投递队列 |
 | `outbound_webhook_deliveries` | 每配置每事件唯一的投递状态、次数及下次时间；配置为限制删除外键，事件为级联删除外键。 | `/settings` 投递日志 |
 | `outbound_webhook_attempts` | 每次 HTTP 请求的时间、状态码、脱敏响应及错误；投递为级联删除外键。 | `/settings` 投递日志展开行 |
 | `activity` | 创建、修改、完成等活动摘要；任务和操作者 ID 为逻辑关联。 | 仪表盘最近活动、任务早期活动 |

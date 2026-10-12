@@ -5,6 +5,8 @@ import http from 'node:http';
 import { createPgTestServer } from './pg-helper.mjs';
 import { processOutboundWebhooks, resolveWebhookTarget, signedWebhookHeaders } from '../mock/outbound-webhooks.mjs';
 import { runRetentionCleanup } from '../mock/retention.mjs';
+import { processModelHealthAlerts } from '../mock/model-health.mjs';
+import { notifyModelCostAlerts } from '../mock/model-costs.mjs';
 
 const key = 'ab'.repeat(32);
 async function login(base, username, password) {
@@ -187,4 +189,51 @@ test('receiver echo cannot reveal the shared secret or custom header in delivery
   assert.equal(body.includes('test-shared-secret-123'),false);
   assert.equal(body.includes('private-header-value'),false);
   assert.equal(receiver.requests[0].headers['x-private'],'private-header-value');
+});
+
+test('notification alerts deduplicate shared incidents while preserving per-user quota alerts', async t => {
+  const env = { WEBHOOK_MASTER_KEY: key, ALLOW_LOCAL_WEBHOOKS: '1', WEBHOOK_WORKER_MODE: 'external' };
+  const { base, client } = await createPgTestServer(t, undefined, env);
+  const admin = await login(base,'admin','admin123');
+  assert.equal((await call(base,admin,'POST','/settings/webhooks',{ event:'alert.firing',url:'http://127.0.0.1:9999/hook',secret:'test-shared-secret-123',enabled:true,confirmExternalFields:true })).status,201);
+  const add = (id,user,kind,entity) => client.query('INSERT INTO app_notifications(id,user_id,kind,entity_id,title,body,target_url) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,user,kind,entity,'告警标题','告警正文','/model-health']);
+  await add('health-admin','admin','model-health','model-a:1');
+  await add('health-member','member','model-health','model-a:1');
+  await add('quota-admin','admin','model_token_quota','model-a:2026-10-13:80');
+  await add('quota-member','member','model_token_quota','model-a:2026-10-13:80');
+  await add('regression-admin','admin','evaluation_regression','batch-a');
+  const rows = (await client.query("SELECT source_key,payload FROM outbound_webhook_events WHERE event_type='alert.firing' ORDER BY source_key")).rows;
+  assert.equal(rows.length,3);
+  assert.deepEqual(rows.map(row=>row.source_key),['model-health:model-a:1','model_token_quota:admin:model-a:2026-10-13:80','model_token_quota:member:model-a:2026-10-13:80']);
+  assert.equal(rows[0].payload.alertKind,'model-health');
+  assert.equal(rows[0].payload.body,'告警正文');
+  assert.equal(rows[0].payload.userId,undefined);
+  assert.equal(rows[1].payload.userId,'admin');
+});
+
+test('model health transitions and cost thresholds generate one outbound alert per incident', async t => {
+  const env = { WEBHOOK_MASTER_KEY: key, ALLOW_LOCAL_WEBHOOKS: '1', WEBHOOK_WORKER_MODE: 'external' };
+  const { base, client } = await createPgTestServer(t, undefined, env);
+  const admin = await login(base,'admin','admin123');
+  assert.equal((await call(base,admin,'POST','/settings/webhooks',{ event:'alert.firing',url:'http://127.0.0.1:9999/hook',secret:'test-shared-secret-123',enabled:true,confirmExternalFields:true })).status,201);
+  await client.query("INSERT INTO experiment_models(id,display_name,api_model,input_usd_per_million,output_usd_per_million,name) VALUES('webhook-model','Webhook model','webhook-api',0,0,'webhook-model')");
+  await client.query("INSERT INTO model_call_audit(request_id,run_id,phase,attempt,model_id,api_model,module,provider,prompt_preview,latency_ms,status_code,succeeded) VALUES($1,'health-run','main',1,'webhook-model','webhook-api','experiments','legacy','',100,500,false)",[crypto.randomUUID()]);
+  await processModelHealthAlerts(clientPool(client));
+  await processModelHealthAlerts(clientPool(client));
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM outbound_webhook_events WHERE source_key LIKE 'model-health:%'")).rows[0].n,1);
+  await client.query("UPDATE model_call_audit SET status_code=200,succeeded=true WHERE model_id='webhook-model'");
+  await processModelHealthAlerts(clientPool(client));
+  await client.query("UPDATE model_call_audit SET status_code=500,succeeded=false WHERE model_id='webhook-model'");
+  await processModelHealthAlerts(clientPool(client));
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM outbound_webhook_events WHERE source_key LIKE 'model-health:%'")).rows[0].n,2);
+
+  await client.query("UPDATE model_cost_settings SET monthly_budget_usd=1 WHERE id=1");
+  await client.query("INSERT INTO model_cost_ledger(run_id,part,model_id,module,amount_usd,charged_at) VALUES('webhook-cost-today','main','webhook-model','experiments',1.2,now())");
+  await notifyModelCostAlerts(client);
+  await notifyModelCostAlerts(client);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM outbound_webhook_events WHERE source_key LIKE 'model_cost_budget:%'")).rows[0].n,3);
+  await client.query("INSERT INTO model_cost_ledger(run_id,part,model_id,module,amount_usd,charged_at) VALUES('webhook-cost-prior','main','webhook-model','experiments',0.01,now()-interval '1 day')");
+  await notifyModelCostAlerts(client);
+  await notifyModelCostAlerts(client);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM outbound_webhook_events WHERE source_key LIKE 'model_cost_anomaly:%'")).rows[0].n,1);
 });

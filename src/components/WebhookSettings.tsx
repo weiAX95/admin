@@ -6,14 +6,14 @@ const eventOptions: { value: WebhookEvent; label: string }[] = [
   { value: 'task.completed', label: '任务完成' },
   { value: 'experiment.finished', label: '实验结束' },
   { value: 'evaluation.completed', label: '评测结束' },
-  { value: 'alert.firing', label: '评测退化告警' },
+  { value: 'alert.firing', label: '告警（评测／模型／调度）' },
   { value: 'note.updated', label: '笔记更新' },
 ];
 const sample: Record<WebhookEvent, Record<string, string | number>> = {
   'task.completed': { taskId: '任务 ID', title: '任务标题', status: 'done', completedAt: 'ISO 时间', description: '任务描述', category: '分类', phase: '阶段', priority: '优先级', dueDate: '截止时间', plannedStartDate: '计划开始', progress: 100, notes: '任务备注', ownerId: '归属账号 ID' },
   'experiment.finished': { batchId: '批次 ID', experimentId: '实验 ID', status: 'completed / partial / failed', kind: '批次类型', completedAt: 'ISO 时间', runCount: 3, completedRuns: 2, failedRuns: 1, promptTokens: 100, completionTokens: 200, costUsd: 0.001 },
   'evaluation.completed': { batchId: '批次 ID', experimentId: '实验 ID', status: 'completed / partial / failed', kind: 'dataset / regression', completedAt: 'ISO 时间', runCount: 10, completedRuns: 9, failedRuns: 1, promptTokens: 100, completionTokens: 200, costUsd: 0.001 },
-  'alert.firing': { alertId: '告警 ID', batchId: '评测批次 ID', affectedCount: 3, createdAt: 'ISO 时间', details: '退化明细', baselineBatchId: '基线 ID', metricVersionId: '指标版本 ID' },
+  'alert.firing': { alertId: '评测告警 ID（评测退化时）', batchId: '评测批次 ID（评测退化时）', affectedCount: 3, details: '退化明细（评测退化时）', alertKind: '模型／成本／调度等通知类型', sourceEntityId: '告警来源业务 ID', title: '告警标题', body: '告警正文', targetUrl: '站内详情路径', userId: '配额告警账号 ID', createdAt: 'ISO 时间' },
   'note.updated': { noteId: '笔记 ID', title: '笔记标题', updatedAt: 'ISO 时间', content: '笔记正文', taskId: '任务 ID', categoryId: '分类 ID', sourceSessionId: '来源会话 ID' },
 };
 type EditorFields = { event: WebhookEvent; url: string; secret: string; headersText: string; enabled: boolean };

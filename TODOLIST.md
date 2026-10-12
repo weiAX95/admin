@@ -820,10 +820,10 @@
   - [ ] AC：备份/恢复过程不中断正常服务
 - [ ] **12.5 Webhook 集成**
   - [x] 管理员配置向外发送的 webhook：{ event, url, secret, headers }；共享密钥与请求头加密保存，公网 HTTPS、解析后地址校验和固定连接地址防止内部网络请求；发送前预览外发字段
-  - [x] 事务内入队五类事件：task.completed、experiment.finished、evaluation.completed、alert.firing（当前为评测退化告警）、note.updated；实验／评测事件带运行与用量汇总
+  - [x] 事务内入队五类事件：task.completed、experiment.finished、evaluation.completed、alert.firing、note.updated；实验／评测事件带运行与用量汇总。告警覆盖评测退化及站内模型健康、成本、配额、调度等来源，按业务来源去重
   - [x] Settings 投递日志展示逐次时间、状态码、脱敏截断响应、错误和重试次数；完成事件按审计保留期清理，待投递事件保留
   - [x] HMAC-SHA256 签名覆盖时间戳与原始请求体；失败按 1、2、4 分钟重试，最多四次尝试，接收方可按事件 ID 去重；本地接收端集成测试通过
-  - [ ] 仍需页面正式显示验收、真实公网接收端联调；模型健康与成本等更多 `alert.firing` 来源尚未接入。GitHub 入站 Webhook 由 14.11 独立验收
+  - [ ] 仍需页面正式显示验收、真实公网接收端联调；GitHub 入站 Webhook 由 14.11 独立验收
 - [ ] **12.6 主题 & 个性化**
   - [x] 已落地账号独立偏好、主题／主色／密度设置与基础外观切换；全站文案和图表主题适配仍待完成
   - [ ] 亮/暗主题切换（toggle，即时生效，保存到用户偏好）
