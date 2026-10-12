@@ -145,6 +145,7 @@ test('report history pages beyond 30 and compares only traceable requirement cha
   assert.equal(result.data.changes[0].after.evidence.gitSha,'f'.repeat(40));
   assert.deepEqual(result.data.suggestions.added.map(item => item.topic),['运行验证']);
   assert.deepEqual(result.data.suggestions.removed.map(item => item.topic),['补测试']);
+  assert.equal((await handleProjectAnalyses({ pathname: `${path}/compare/${newerId}/${olderId}`, method: 'GET', client, me })).status,400);
   assert.equal((await handleProjectAnalyses({ pathname: comparePath, method: 'GET', client, me: { id: 'learner', role: 'member' } })).status,404);
   const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
   const { token } = await login.json();

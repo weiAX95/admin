@@ -174,6 +174,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
     <Table rowKey="id" size="small" dataSource={items} pagination={{ pageSize: 5 }} scroll={{ x: 720 }} columns={[
       { title: '创建时间', dataIndex: 'createdAt', render: value => new Date(value).toLocaleString('zh-CN') },
+      { title: '完成时间', dataIndex: 'finishedAt', render: (value: string | null) => value ? new Date(value).toLocaleString('zh-CN') : '—' },
+      { title: '分支', dataIndex: 'branch' },
       { title: 'commit', dataIndex: 'commitSha', render: (value: string) => <code>{value.slice(0, 10)}</code> },
       { title: '模型', dataIndex: 'model' },
       { title: '状态', render: (_, item: ProjectAnalysisJob) => <Space><Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'canceled' ? 'default' : 'processing'}>{states[item.status]}</Tag><Typography.Text type="secondary">{item.attempts}/{item.maxAttempts} 次</Typography.Text></Space> },

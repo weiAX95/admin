@@ -172,6 +172,8 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     if (!repository) return fail(404,'项目不存在');
     const rows = (await client.query("SELECT * FROM project_analyses WHERE repository_id=$1 AND id=ANY($2::uuid[]) AND status='completed'", [repositoryId,[olderId,newerId]])).rows;
     if (rows.length !== 2) return fail(404,'已完成报告不存在');
+    const olderRow = rows.find(item => item.id === olderId), newerRow = rows.find(item => item.id === newerId);
+    if (new Date(olderRow.finished_at).getTime() >= new Date(newerRow.finished_at).getTime()) return fail(400,'请按完成时间选择较早和较新的报告');
     const findings = (await client.query('SELECT analysis_id,requirement_id,title,status,detail,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha FROM project_analysis_findings WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
     const suggestions = (await client.query('SELECT analysis_id,topic,practice FROM project_analysis_suggestions WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
     const report = id => {
