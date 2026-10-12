@@ -8,6 +8,7 @@ const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队�
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
 const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' };
 const impactOrder = { high: 0, medium: 1, low: 2 };
+const taskStates: Record<string, string> = { todo: '待办', in_progress: '进行中', done: '已完成', blocked: '阻塞' };
 const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用' };
 
 export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void }) {
@@ -119,6 +120,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   };
   const reviewScan = report && scans.find(scan => scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status));
   const reviewModelAvailable = report && models.some(model => model.id === report.modelId);
+  const renderSnapshotTask = (task: ProjectAnalysisReport['linkedTasks'][number]) => <Space key={task.id} size="small" wrap><Tag>{taskStates[task.status] || task.status} · {task.progress === null ? '进度未知' : `${Math.round(task.progress)}%`}</Tag>{task.currentlyAvailable ? <Link to={`/tasks/${task.id}`}>{task.title}</Link> : <Typography.Text type="secondary">{task.title}（当前不可访问）</Typography.Text>}</Space>;
 
   return <Card title="项目分析报告">
     <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
@@ -152,11 +154,14 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       {report.baselineVersionId && <Button size="small" loading={requirementLoading} onClick={() => void showRequirement()}>查看本报告固定的需求正文</Button>}
       <Typography.Paragraph>{report.summary}</Typography.Paragraph>
       <Typography.Title level={5}>需求逐项对照</Typography.Title>
+      <Typography.Paragraph type="secondary">关联任务展示报告完成时的状态快照；任务完成不代表代码已实现，代码判断仍以结论和证据为准。</Typography.Paragraph>
       {report.requirements.length ? <Table rowKey="id" size="small" pagination={false} dataSource={report.requirements} columns={[
         { title: '需求 ID', dataIndex: 'id', width: 150 },
         { title: '需求', dataIndex: 'text' },
         { title: '本报告结论', render: (_, item: ProjectAnalysisReport['requirements'][number]) => { const related = report.findings.filter(finding => finding.requirementId === item.id); return related.length ? <Space wrap>{related.map(finding => <Tag key={finding.id}>{findingStates[finding.status]} · {finding.title}</Tag>)}</Space> : <Tag>待验证（未关联结论）</Tag>; } },
+        { title: '关联学习任务（快照）', render: (_, item: ProjectAnalysisReport['requirements'][number]) => { const related = (report.linkedTasks || []).filter(task => task.requirementId === item.id); return related.length ? <Space wrap>{related.map(renderSnapshotTask)}</Space> : '无对应任务'; } },
       ]} style={{ marginBottom: 16 }} /> : <Typography.Paragraph type="secondary">未提供可逐项识别的需求正文；本报告只显示功能线索，不计算总体完成率。</Typography.Paragraph>}
+      {(report.linkedTasks || []).some(task => !task.requirementId || !report.requirements.some(item => item.id === task.requirementId)) && <Typography.Paragraph><strong>未对应本报告需求的任务：</strong><Space wrap>{(report.linkedTasks || []).filter(task => !task.requirementId || !report.requirements.some(item => item.id === task.requirementId)).map(renderSnapshotTask)}</Space></Typography.Paragraph>}
       <Typography.Title level={5}>技术栈线索</Typography.Title>
       <Typography.Paragraph type="secondary">以下内容来自该 commit 的依赖清单，不代表运行环境已通过验证。</Typography.Paragraph>
       {report.technologies.length ? <Space wrap style={{ marginBottom: 16 }}>{report.technologies.map(item => <Tag key={item.name}><a href={sourceLink(item.evidence.path,item.evidence.line)} target="_blank" rel="noopener noreferrer">{item.name}</a> <Typography.Text type="secondary">({item.packageName})</Typography.Text></Tag>)}</Space> : <Typography.Paragraph type="secondary">扫描范围内未发现可确认的依赖清单线索</Typography.Paragraph>}

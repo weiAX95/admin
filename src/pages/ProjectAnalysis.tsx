@@ -3,7 +3,7 @@ import { Alert, App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag
 import { Link } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
-import { createProjectRepository, createProjectRequirementBaseline, getProjectRequirementBaseline, linkProjectTask, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, unlinkProjectTask, updateProjectRepository, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
+import { createProjectRepository, createProjectRequirementBaseline, getProjectRequirementBaseline, linkProjectTask, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
@@ -30,8 +30,11 @@ export default function ProjectAnalysis() {
   const [error, setError] = useState('');
   const [taskRepositoryId, setTaskRepositoryId] = useState('');
   const [linkedTasks, setLinkedTasks] = useState<ProjectLinkedTask[]>([]);
+  const [taskRequirements, setTaskRequirements] = useState<{ id: string; text: string }[]>([]);
+  const [taskBaselineVersionId, setTaskBaselineVersionId] = useState<string | null>(null);
   const [taskCandidates, setTaskCandidates] = useState<LearningTask[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
+  const [selectedRequirementId, setSelectedRequirementId] = useState('');
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskSaving, setTaskSaving] = useState(false);
   const [taskError, setTaskError] = useState('');
@@ -104,13 +107,17 @@ export default function ProjectAnalysis() {
     setTaskRepositoryId(repositoryId);
     setTaskLoading(true);
     setSelectedTaskId(undefined);
+    setSelectedRequirementId('');
     setLinkedTasks([]);
+    setTaskRequirements([]);
     setTaskCandidates([]);
     setTaskError('');
     try {
       const [linked, tasks] = await Promise.all([listProjectLinkedTasks(repositoryId), listTasks()]);
       const user = getStoredUser<AuthUser>();
       setLinkedTasks(linked.items);
+      setTaskRequirements(linked.requirements);
+      setTaskBaselineVersionId(linked.baselineVersionId);
       setTaskCandidates(tasks.items.filter(task => user?.role === 'admin' || task.ownerId === user?.id));
     } catch (cause) { setTaskError(cause instanceof Error ? cause.message : '关联任务读取失败'); }
     finally { setTaskLoading(false); }
@@ -119,9 +126,10 @@ export default function ProjectAnalysis() {
     if (!selectedTaskId) return;
     setTaskSaving(true);
     try {
-      const task = await linkProjectTask(taskRepositoryId, selectedTaskId);
+      const task = await linkProjectTask(taskRepositoryId, selectedTaskId, selectedRequirementId || null, taskBaselineVersionId);
       setLinkedTasks(current => current.some(item => item.id === task.id) ? current : [task, ...current]);
       setSelectedTaskId(undefined);
+      setSelectedRequirementId('');
       message.success('任务已关联');
     } catch (cause) { setTaskError(cause instanceof Error ? cause.message : '关联任务失败'); }
     finally { setTaskSaving(false); }
@@ -130,6 +138,16 @@ export default function ProjectAnalysis() {
     setTaskSaving(true);
     try { await unlinkProjectTask(taskRepositoryId, taskId); setLinkedTasks(current => current.filter(item => item.id !== taskId)); message.success('关联已移除'); }
     catch (cause) { setTaskError(cause instanceof Error ? cause.message : '移除关联失败'); }
+    finally { setTaskSaving(false); }
+  };
+  const changeTaskRequirement = async (taskId: string, requirementId: string) => {
+    setTaskSaving(true);
+    setTaskError('');
+    try {
+      const updated = await updateProjectLinkedTaskRequirement(taskRepositoryId,taskId,requirementId || null,taskBaselineVersionId);
+      setLinkedTasks(current => current.map(item => item.id === taskId ? updated : item));
+      message.success('任务对应需求已更新');
+    } catch (cause) { setTaskError(cause instanceof Error ? cause.message : '更新对应需求失败'); }
     finally { setTaskSaving(false); }
   };
 
@@ -170,9 +188,10 @@ export default function ProjectAnalysis() {
       {taskError && <Alert type="error" showIcon message={taskError} style={{ marginBottom: 12 }} />}
       <Space wrap style={{ marginBottom: 16 }}>
         <Select aria-label="选择已有任务" showSearch optionFilterProp="label" placeholder="选择可关联的任务" style={{ minWidth: 280 }} loading={taskLoading} value={selectedTaskId} onChange={setSelectedTaskId} options={taskCandidates.filter(task => !linkedTasks.some(link => link.id === task.id)).map(task => ({ value: task.id, label: task.title }))} />
+        <Select aria-label="对应需求" value={selectedRequirementId} onChange={setSelectedRequirementId} style={{ minWidth: 200 }} options={[{ value: '', label: '暂不对应具体需求' }, ...taskRequirements.map(item => ({ value: item.id, label: `${item.id} · ${item.text.slice(0, 60)}` }))]} />
         <Button type="primary" disabled={!selectedTaskId || taskLoading} loading={taskSaving} onClick={() => void addTaskLink()}>关联</Button>
       </Space>
-      {linkedTasks.length ? linkedTasks.map(task => <Space key={task.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><Link to={`/tasks/${task.id}`}>{task.title}</Link><Space><Tag>{task.status}</Tag><Button type="link" danger disabled={taskSaving} onClick={() => void removeTaskLink(task.id)}>移除</Button></Space></Space>) : <Typography.Paragraph type="secondary">暂无关联任务</Typography.Paragraph>}
+      {linkedTasks.length ? linkedTasks.map(task => <Space key={task.id} wrap style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><Link to={`/tasks/${task.id}`}>{task.title}</Link><Space wrap><Tag>{task.status}</Tag><Select aria-label={`${task.title} 对应需求`} value={task.requirementId || ''} disabled={taskSaving} onChange={value => void changeTaskRequirement(task.id,value)} style={{ minWidth: 190 }} options={[{ value: '', label: '未指定需求' }, ...taskRequirements.map(item => ({ value: item.id, label: `${item.id} · ${item.text.slice(0, 50)}` })), ...(task.requirementId && !taskRequirements.some(item => item.id === task.requirementId) ? [{ value: task.requirementId, label: `${task.requirementId}（旧版本）` }] : [])]} /><Button type="link" danger disabled={taskSaving} onClick={() => void removeTaskLink(task.id)}>移除</Button></Space></Space>) : <Typography.Paragraph type="secondary">暂无关联任务</Typography.Paragraph>}
     </Modal>
     <Modal title="版本化需求文档" open={Boolean(baselineRepositoryId)} width={720} onCancel={() => setBaselineRepositoryId('')} onOk={() => void saveBaseline()} okText="保存为新版本" okButtonProps={{ loading: baselineSaving, disabled: baselineLoading || !baselineContent.trim() || baselineContent.length > 5000 }}>
       <Typography.Paragraph type="secondary">每次保存都会创建不可改写的新版本，分析任务固定所选版本。正文将作为模型分析输入，请勿包含密钥或不愿发给模型的信息。</Typography.Paragraph>

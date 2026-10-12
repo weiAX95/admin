@@ -27,7 +27,7 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
     await connection.query('SELECT pg_advisory_xact_lock(748201)');
     const row = (await connection.query(`SELECT s.*,a.id AS analysis_id,a.status AS analysis_status,a.goal AS report_goal,a.requirement_baseline AS report_baseline,a.commit_sha,a.full_name,
       a.baseline_version_id AS report_baseline_version_id,r.goal AS current_goal,r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,r.commit_sha AS current_commit,r.branch AS current_branch,
-      f.title AS finding_title,f.evidence_path,f.evidence_line
+      f.title AS finding_title,f.requirement_id AS finding_requirement_id,f.evidence_path,f.evidence_line
       FROM project_analysis_suggestions s JOIN project_analyses a ON a.id=s.analysis_id
       JOIN project_repositories r ON r.id=a.repository_id
       LEFT JOIN project_analysis_findings f ON f.id=s.finding_id
@@ -55,6 +55,7 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
       data.activity.unshift({ id: crypto.randomUUID(), type: 'create', taskId, title: row.topic, detail: '由项目分析建议创建任务', at, userId: me.id, username: me.username || me.id, userName: me.username || me.id });
       if (data.activity.length > 500) data.activity.length = 500;
       await saveData(connection,before,data);
+      await connection.query('INSERT INTO project_repository_tasks(repository_id,task_id,linked_by,requirement_id) VALUES($1,$2,$3,$4)', [repositoryId,taskId,me.id,row.finding_requirement_id]);
     }
     const decision = (await connection.query('INSERT INTO project_suggestion_decisions(suggestion_id,analysis_id,repository_id,owner_id,state,task_id,fingerprint) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING decided_at', [suggestionId,analysisId,repositoryId,me.id,action === 'accept' ? 'accepted' : 'ignored',taskId,key])).rows[0];
     await connection.query('COMMIT');

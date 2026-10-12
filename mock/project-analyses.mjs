@@ -72,6 +72,10 @@ async function saveReport(db, job, report, metadata) {
     const moduleSummaries = new Map(metadata.results.map(result => [result.moduleKey,result.report.summary]));
     for (const module of metadata.modules) await client.query('INSERT INTO project_analysis_modules(analysis_id,module_key,indexed_count,read_count,selected_count,truncated_count,excluded_count,failed_count,unscanned_count,summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [job.id,module.moduleKey,module.indexedCount,module.readCount,module.selectedCount,module.truncatedCount,module.excludedCount,module.failedCount,module.unscannedCount,moduleSummaries.get(module.moduleKey) || null]);
     for (const item of metadata.technologies) await client.query('INSERT INTO project_analysis_technologies(analysis_id,name,package_name,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha) VALUES($1,$2,$3,$4,$5,$6,$7)', [job.id,item.name,item.packageName,item.path,item.line,item.excerpt,item.gitSha]);
+    await client.query(`INSERT INTO project_analysis_task_snapshots(analysis_id,task_id,requirement_id,title,status,progress,owner_id,task_version)
+      SELECT $1,l.task_id,l.requirement_id,t.title,t.status,t.progress,t.owner_id,t.version
+      FROM project_repository_tasks l JOIN tasks t ON t.id=l.task_id
+      WHERE l.repository_id=$2 AND t.deleted_at IS NULL`, [job.id,job.repository_id]);
     for (const [position, flow] of (report.flows || []).entries()) {
       const flowId = crypto.randomUUID();
       await client.query('INSERT INTO project_analysis_flows(id,analysis_id,module_key,position,title) VALUES($1,$2,$3,$4,$5)', [flowId,job.id,flow.moduleKey,position,flow.title]);
@@ -196,9 +200,13 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       flowsById.get(row.id).steps.push({ description: row.description, evidence: { type: row.evidence_type, path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha.trim() } });
     }
     const technologies = (await client.query('SELECT * FROM project_analysis_technologies WHERE analysis_id=$1 ORDER BY name', [analysisId])).rows.map(row => ({ name: row.name, packageName: row.package_name, evidence: { path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha.trim() } }));
+    const linkedTasks = (await client.query(`SELECT s.task_id,s.requirement_id,s.title,s.status,s.progress,s.owner_id,s.task_version,s.captured_at,
+      (t.id IS NOT NULL AND t.deleted_at IS NULL AND (t.owner_id=$2 OR $3='admin')) AS currently_available
+      FROM project_analysis_task_snapshots s LEFT JOIN tasks t ON t.id=s.task_id
+      WHERE s.analysis_id=$1 ORDER BY s.requirement_id NULLS LAST,s.title,s.task_id`, [analysisId,me.id,me.role])).rows.map(row => ({ id: row.task_id, requirementId: row.requirement_id, title: row.title, status: row.status, progress: row.progress === null ? null : Number(row.progress), ownerId: row.owner_id, taskVersion: row.task_version, capturedAt: row.captured_at, currentlyAvailable: row.currently_available }));
     const baselineDocument = job.baseline_version_id ? (await client.query('SELECT content FROM project_requirement_baselines WHERE id=$1',[job.baseline_version_id])).rows[0]?.content : null;
     const requirements = parseProjectRequirements(baselineDocument);
-    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, requirements, staleReasons, findings, suggestions, modules, flows: [...flowsById.values()], technologies } };
+    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, requirements, staleReasons, findings, suggestions, modules, flows: [...flowsById.values()], technologies, linkedTasks } };
   }
   if (method === 'POST' && analysisId && action === 'cancel') {
     const pooled = client instanceof pg.Pool;

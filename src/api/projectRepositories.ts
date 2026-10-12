@@ -23,9 +23,10 @@ export const updateProjectRepository = (item: ProjectRepository, body: { goal: s
   ...body, expectedGoal: item.goal, expectedRequirementBaseline: item.requirementBaseline, expectedBaselineVersionId: item.baselineVersionId,
 });
 export const refreshProjectRepository = (id: string) => http.post<ProjectRepository>(`/project-repositories/${id}/refresh`, {});
-export interface ProjectLinkedTask { id: string; title: string; status: string; ownerId?: string }
-export const listProjectLinkedTasks = (repositoryId: string) => http.get<{ items: ProjectLinkedTask[] }>(`/project-repositories/${repositoryId}/tasks`);
-export const linkProjectTask = (repositoryId: string, taskId: string) => http.post<ProjectLinkedTask>(`/project-repositories/${repositoryId}/tasks`, { taskId });
+export interface ProjectLinkedTask { id: string; title: string; status: string; progress: number | null; ownerId?: string; requirementId: string | null }
+export const listProjectLinkedTasks = (repositoryId: string) => http.get<{ items: ProjectLinkedTask[]; requirements: { id: string; text: string }[]; baselineVersionId: string | null }>(`/project-repositories/${repositoryId}/tasks`);
+export const linkProjectTask = (repositoryId: string, taskId: string, requirementId: string | null, expectedBaselineVersionId: string | null) => http.post<ProjectLinkedTask>(`/project-repositories/${repositoryId}/tasks`, { taskId, requirementId, expectedBaselineVersionId });
+export const updateProjectLinkedTaskRequirement = (repositoryId: string, taskId: string, requirementId: string | null, expectedBaselineVersionId: string | null) => http.patch<ProjectLinkedTask>(`/project-repositories/${repositoryId}/tasks/${encodeURIComponent(taskId)}`, { requirementId, expectedBaselineVersionId });
 export const unlinkProjectTask = (repositoryId: string, taskId: string) => http.del<{ deleted: boolean; taskId: string }>(`/project-repositories/${repositoryId}/tasks/${encodeURIComponent(taskId)}`);
 export interface ProjectRequirementBaseline { id: string; repositoryId: string; version: number; contentSha256: string; createdAt: string; content?: string }
 export const listProjectRequirementBaselines = (repositoryId: string) => http.get<{ items: ProjectRequirementBaseline[] }>(`/project-repositories/${repositoryId}/baselines`);
@@ -73,6 +74,7 @@ export interface ProjectAnalysisReport extends ProjectAnalysisJob {
   modules: { moduleKey: string; indexedCount: number; readCount: number; selectedCount: number; truncatedCount: number; excludedCount: number; failedCount: number; unscannedCount: number; summary: string | null }[];
   flows: { id: string; moduleKey: string; title: string; steps: { description: string; evidence: { type: 'code' | 'test'; path: string; line: number; excerpt: string; gitSha: string } }[] }[];
   technologies: { name: string; packageName: string; evidence: { path: string; line: number; excerpt: string; gitSha: string } }[];
+  linkedTasks: { id: string; requirementId: string | null; title: string; status: string; progress: number | null; ownerId: string | null; taskVersion: number | null; capturedAt: string; currentlyAvailable: boolean }[];
   findings: { id: string; requirementId: string | null; moduleKey: string | null; title: string; status: 'implemented' | 'partial' | 'not_found' | 'unverified'; detail: string; evidence: null | { type: 'code' | 'test' | 'document'; path: string; line: number; excerpt: string; gitSha: string }; feedback: { id: string; correctedStatus: 'implemented' | 'partial' | 'not_found' | 'unverified'; reason: string; author: string; createdAt: string }[] }[];
   suggestions: { id: string; findingId: string | null; topic: string; reason: string; practice: string; acceptance: string; impact: 'high' | 'medium' | 'low' | null; impactReason: string | null; prerequisites: string[]; status: 'pending' | 'accepted' | 'ignored' | 'stale'; decision: null | { status: 'accepted' | 'ignored'; taskId: string | null; decidedAt: string }; possibleDuplicates: { taskId: string; title: string; exact: boolean; similarity: number }[] }[];
 }

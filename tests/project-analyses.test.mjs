@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import http from 'node:http';
 import pg from 'pg';
 import { createPgTestServer } from './pg-helper.mjs';
@@ -114,7 +115,13 @@ test('analysis persists validated report and source evidence, isolates owners, a
 
 test('completed report persists ordered core flow steps with fixed commit evidence', async t => {
   const { client } = await createPgTestServer(t);
-  const { scanId, path } = await fixture(client);
+  const { repositoryId, scanId, path } = await fixture(client);
+  const baselineId = crypto.randomUUID();
+  const baseline = 'REQ-001: 验证入口流程';
+  await client.query('INSERT INTO project_requirement_baselines(id,repository_id,version,content,content_sha256) VALUES($1,$2,1,$3,$4)', [baselineId,repositoryId,baseline,crypto.createHash('sha256').update(baseline).digest('hex')]);
+  await client.query('UPDATE project_repositories SET baseline_version_id=$2 WHERE id=$1', [repositoryId,baselineId]);
+  await client.query("INSERT INTO tasks(id,title,status,progress,owner_id,version) VALUES('snapshot-task','分析时的任务','in_progress',35,'member',2)");
+  await client.query('INSERT INTO project_repository_tasks(repository_id,task_id,linked_by,requirement_id) VALUES($1,$2,$3,$4)', [repositoryId,'snapshot-task','member','REQ-001']);
   const content = 'export function main() {}\nmain();';
   await client.query('UPDATE project_scan_files SET content=$3,content_sha256=$4,byte_size=$5 WHERE scan_id=$1 AND path=$2', [scanId,'src/main.ts',content,crypto.createHash('sha256').update(content).digest('hex'),Buffer.byteLength(content)]);
   const output = JSON.parse(report);
@@ -127,10 +134,18 @@ test('completed report persists ordered core flow steps with fixed commit eviden
   assert.equal(await waitFor(client,started.data.id),'completed');
   const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
   assert.equal(detail.flows.length,1);
+  assert.equal(detail.linkedTasks.length,1);
+  assert.equal(detail.linkedTasks[0].requirementId,'REQ-001');
+  assert.deepEqual({ title: detail.linkedTasks[0].title, status: detail.linkedTasks[0].status, progress: detail.linkedTasks[0].progress, taskVersion: detail.linkedTasks[0].taskVersion }, { title: '分析时的任务', status: 'in_progress', progress: 35, taskVersion: 2 });
   assert.equal(detail.flows[0].moduleKey,'src');
   assert.deepEqual(detail.flows[0].steps.map(step => step.evidence.line),[1,2]);
   assert.ok(detail.flows[0].steps.every(step => step.evidence.gitSha === 'b'.repeat(40)));
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_flow_steps')).rows[0].n,2);
+  await client.query("UPDATE tasks SET title='后续已修改',status='done',progress=100,version=3,deleted_at=now() WHERE id='snapshot-task'");
+  const historical = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.equal(historical.linkedTasks[0].title,'分析时的任务');
+  assert.equal(historical.linkedTasks[0].status,'in_progress');
+  assert.equal(historical.linkedTasks[0].currentlyAvailable,false);
   output.flows[0].steps[1].evidence.excerpt = 'invented();';
   const invalid = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: JSON.stringify(output), promptTokens: 2, completionTokens: 3 }) });
   assert.equal(await waitFor(client,invalid.data.id),'failed');
@@ -232,9 +247,16 @@ test('a later module failure retains earlier call cost without publishing a part
 
 test('accepting a learning suggestion creates one linked task with task history side effects', async t => {
   const { client, base } = await createPgTestServer(t);
-  const { scanId, path } = await fixture(client);
+  const { repositoryId, scanId, path } = await fixture(client);
   const me = { id: 'member', username: 'member', role: 'member' };
-  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: report, promptTokens: 2, completionTokens: 3 }) });
+  const baselineId = crypto.randomUUID();
+  const baseline = 'REQ-001: 验证入口';
+  await client.query('INSERT INTO project_requirement_baselines(id,repository_id,version,content,content_sha256) VALUES($1,$2,1,$3,$4)', [baselineId,repositoryId,baseline,crypto.createHash('sha256').update(baseline).digest('hex')]);
+  await client.query('UPDATE project_repositories SET baseline_version_id=$2 WHERE id=$1', [repositoryId,baselineId]);
+  const linkedReport = JSON.parse(report);
+  linkedReport.findings[0].requirementId = 'REQ-001';
+  const output = JSON.stringify(linkedReport);
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output, promptTokens: 2, completionTokens: 3 }) });
   assert.equal(await waitFor(client,started.data.id),'completed');
   const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
   const actionPath = `${path}/${started.data.id}/suggestions/${detail.suggestions[0].id}/accept`;
@@ -259,12 +281,18 @@ test('accepting a learning suggestion creates one linked task with task history 
   assert.equal(task.owner_id,'member');
   assert.equal((await client.query("SELECT count(*)::int AS n FROM task_trend_events WHERE task_id=$1 AND type='create'", [task.id])).rows[0].n,1);
   assert.equal((await client.query("SELECT count(*)::int AS n FROM activity WHERE task_id=$1 AND type='create'", [task.id])).rows[0].n,1);
+  assert.equal((await client.query('SELECT requirement_id FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [repositoryId,task.id])).rows[0].requirement_id,'REQ-001');
+  await client.query('DELETE FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [repositoryId,task.id]);
+  const backfill = await readFile(new URL('../db/migrations/073_project_suggestion_task_links.sql', import.meta.url),'utf8');
+  await client.query(backfill);
+  await client.query(backfill);
+  assert.equal((await client.query('SELECT requirement_id FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [repositoryId,task.id])).rows[0].requirement_id,'REQ-001');
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_suggestion_decisions WHERE suggestion_id=$1', [detail.suggestions[0].id])).rows[0].n,1);
   const refreshed = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
   assert.deepEqual(refreshed.suggestions[0].decision.status,'accepted');
   assert.equal(refreshed.suggestions[0].status,'accepted');
   assert.equal(refreshed.suggestions[0].decision.taskId,task.id);
-  const second = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: report, promptTokens: 2, completionTokens: 3 }) });
+  const second = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output, promptTokens: 2, completionTokens: 3 }) });
   assert.equal(await waitFor(client,second.data.id),'completed');
   const secondDetail = (await handleProjectAnalyses({ pathname: `${path}/${second.data.id}`, method: 'GET', client, me })).data;
   assert.deepEqual(secondDetail.suggestions[0].possibleDuplicates, [{ taskId: task.id, title: task.title, exact: true, similarity: 1 }]);

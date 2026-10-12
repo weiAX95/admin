@@ -129,6 +129,31 @@ test('repository task links require project ownership and an eligible task, then
   assert.equal((await handleProjectRepositories({ pathname: path, method: 'GET', client, me: member })).data.items.length, 0);
 });
 
+test('task links map only to current requirement IDs and reject stale baseline edits', async t => {
+  const { client } = await createPgTestServer(t);
+  const repositoryId = '22222222-2222-4222-8222-222222222222';
+  const first = '33333333-3333-4333-8333-333333333333';
+  const second = '44444444-4444-4444-8444-444444444444';
+  await client.query("INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,commit_sha) VALUES($1,'member','octocat/mapping','main','学习项目',$2)", [repositoryId,'a'.repeat(40)]);
+  await client.query("INSERT INTO project_requirement_baselines(id,repository_id,version,content,content_sha256) VALUES($1,$2,1,'REQ-001: 登录流程',$3)", [first,repositoryId,'a'.repeat(64)]);
+  await client.query('UPDATE project_repositories SET baseline_version_id=$2 WHERE id=$1', [repositoryId,first]);
+  await client.query("INSERT INTO tasks(id,title,status,owner_id) VALUES('mapped-task','验证登录','todo','member')");
+  const pathname = `/api/project-repositories/${repositoryId}/tasks`;
+  const me = { id: 'member', role: 'member' };
+  const call = (path,method,body) => handleProjectRepositories({ pathname: path,method,client,me,readBody: async () => body });
+  const listed = await call(pathname,'GET');
+  assert.deepEqual(listed.data.requirements.map(item => item.id),['REQ-001']);
+  assert.equal((await call(pathname,'POST',{ taskId:'mapped-task',requirementId:'REQ-999',expectedBaselineVersionId:first })).status,400);
+  assert.equal((await call(pathname,'POST',{ taskId:'mapped-task',requirementId:'REQ-001',expectedBaselineVersionId:first })).data.requirementId,'REQ-001');
+  assert.equal((await call(`${pathname}/mapped-task`,'PATCH',{ requirementId:'REQ-999',expectedBaselineVersionId:first })).status,400);
+  await client.query("INSERT INTO project_requirement_baselines(id,repository_id,version,content,content_sha256) VALUES($1,$2,2,'REQ-002: 设置流程',$3)", [second,repositoryId,'b'.repeat(64)]);
+  await client.query('UPDATE project_repositories SET baseline_version_id=$2 WHERE id=$1', [repositoryId,second]);
+  assert.equal((await call(`${pathname}/mapped-task`,'PATCH',{ requirementId:'REQ-002',expectedBaselineVersionId:first })).status,409);
+  assert.equal((await call(`${pathname}/mapped-task`,'PATCH',{ requirementId:'REQ-002',expectedBaselineVersionId:second })).data.requirementId,'REQ-002');
+  assert.equal((await call(pathname,'GET')).data.items[0].requirementId,'REQ-002');
+  assert.equal((await call(`${pathname}/mapped-task`,'PATCH',{ requirementId:null,expectedBaselineVersionId:second })).data.requirementId,null);
+});
+
 test('repository registration reports private, empty, missing and network failures without saving', async t => {
   const { client } = await createPgTestServer(t);
   const base = { pathname: '/api/project-repositories', method: 'POST', client, me: { id: 'member', role: 'member' }, readBody: async () => ({ url: 'https://github.com/a/b', goal: '学习' }) };

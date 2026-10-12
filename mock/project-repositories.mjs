@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import pg from 'pg';
+import { parseProjectRequirements } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
 
 export function parseGitHubRepository(value) {
@@ -21,6 +23,28 @@ const repositoryQuery = `SELECT r.*, latest.finished_at AS last_analysis_at, lat
     ORDER BY finished_at DESC, created_at DESC LIMIT 1
   ) latest ON true`;
 const fail = (status, error) => ({ status, data: { error } });
+
+async function currentRequirements(client, baselineVersionId) {
+  if (!baselineVersionId) return [];
+  const baseline = (await client.query('SELECT content FROM project_requirement_baselines WHERE id=$1', [baselineVersionId])).rows[0];
+  return parseProjectRequirements(baseline?.content);
+}
+
+async function writeTaskLink(client, repositoryId, me, expectedBaselineVersionId, work) {
+  const pooled = client instanceof pg.Pool;
+  const connection = pooled ? await client.connect() : client;
+  try {
+    await connection.query('BEGIN');
+    const repository = (await connection.query('SELECT baseline_version_id FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR SHARE', [repositoryId, me.id])).rows[0];
+    if (!repository) { await connection.query('ROLLBACK'); return fail(404, '项目不存在'); }
+    if (expectedBaselineVersionId !== undefined && expectedBaselineVersionId !== repository.baseline_version_id) { await connection.query('ROLLBACK'); return fail(409, '需求版本已变化，请刷新任务关联后重试'); }
+    const requirements = await currentRequirements(connection, repository.baseline_version_id);
+    const result = await work(connection, requirements);
+    await connection.query(result.status >= 400 ? 'ROLLBACK' : 'COMMIT');
+    return result;
+  } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
+  finally { if (pooled) connection.release(); }
+}
 
 async function githubFetch(url) {
   return fetch(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(10000) });
@@ -81,20 +105,41 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
   const row = (await client.query(`${repositoryQuery} WHERE r.id=$1 AND r.owner_id=$2`, [id,me.id])).rows[0];
   if (!row) return fail(404, '项目不存在');
   if (pathname.endsWith('/tasks') && method === 'GET') {
-    const items = (await client.query(`SELECT t.id,t.title,t.status,t.owner_id AS "ownerId" FROM project_repository_tasks l
+    const items = (await client.query(`SELECT t.id,t.title,t.status,t.progress,t.owner_id AS "ownerId",l.requirement_id AS "requirementId" FROM project_repository_tasks l
       JOIN tasks t ON t.id=l.task_id WHERE l.repository_id=$1 AND t.deleted_at IS NULL ORDER BY l.created_at DESC,t.id`, [id])).rows;
-    return { status: 200, data: { items } };
+    return { status: 200, data: { items, baselineVersionId: row.baseline_version_id || null, requirements: await currentRequirements(client, row.baseline_version_id) } };
   }
   if (pathname.endsWith('/tasks') && method === 'POST') {
     const body = await readBody();
     const taskId = body?.taskId;
     if (typeof taskId !== 'string' || !taskId || taskId.length > 200) return fail(400, '任务 ID 无效');
-    const task = (await client.query("SELECT id,title,status FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3='admin')", [taskId,me.id,me.role])).rows[0];
-    if (!task) return fail(404, '任务不存在或无权关联');
-    await client.query('INSERT INTO project_repository_tasks(repository_id,task_id,linked_by) VALUES($1,$2,$3) ON CONFLICT DO NOTHING', [id,taskId,me.id]);
-    return { status: 200, data: { id: task.id, title: task.title, status: task.status } };
+    const requirementId = body.requirementId === undefined || body.requirementId === null ? null : body.requirementId;
+    if (requirementId !== null && (typeof requirementId !== 'string' || requirementId.length > 64)) return fail(400, '需求 ID 无效');
+    return writeTaskLink(client,id,me,body.expectedBaselineVersionId,async (connection, requirements) => {
+      if (requirementId && !requirements.some(item => item.id === requirementId)) return fail(400, '需求 ID 不属于当前版本');
+      const task = (await connection.query("SELECT id,title,status,progress,owner_id AS \"ownerId\" FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3='admin')", [taskId,me.id,me.role])).rows[0];
+      if (!task) return fail(404, '任务不存在或无权关联');
+      await connection.query('INSERT INTO project_repository_tasks(repository_id,task_id,linked_by,requirement_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [id,taskId,me.id,requirementId]);
+      const link = (await connection.query('SELECT requirement_id FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [id,taskId])).rows[0];
+      return { status: 200, data: { ...task, requirementId: link.requirement_id } };
+    });
   }
   const unlink = pathname.match(/\/tasks\/([^/]+)$/);
+  if (unlink && method === 'PATCH') {
+    let taskId;
+    try { taskId = decodeURIComponent(unlink[1]); } catch { return fail(400, '任务 ID 无效'); }
+    const body = await readBody();
+    if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.hasOwn(body,'requirementId') || Object.keys(body).some(key => !['requirementId','expectedBaselineVersionId'].includes(key))) return fail(400, '需求对应关系无效');
+    const requirementId = body.requirementId;
+    if (requirementId !== null && (typeof requirementId !== 'string' || !requirementId || requirementId.length > 64)) return fail(400, '需求 ID 无效');
+    return writeTaskLink(client,id,me,body.expectedBaselineVersionId,async (connection, requirements) => {
+      if (requirementId && !requirements.some(item => item.id === requirementId)) return fail(400, '需求 ID 不属于当前版本');
+      const task = (await connection.query('SELECT t.id,t.title,t.status,t.progress,t.owner_id AS "ownerId" FROM project_repository_tasks l JOIN tasks t ON t.id=l.task_id WHERE l.repository_id=$1 AND l.task_id=$2 AND t.deleted_at IS NULL', [id,taskId])).rows[0];
+      if (!task) return fail(404, '关联任务不存在');
+      await connection.query('UPDATE project_repository_tasks SET requirement_id=$3 WHERE repository_id=$1 AND task_id=$2', [id,taskId,requirementId]);
+      return { status: 200, data: { ...task, requirementId } };
+    });
+  }
   if (unlink && method === 'DELETE') {
     let taskId;
     try { taskId = decodeURIComponent(unlink[1]); } catch { return fail(400, '任务 ID 无效'); }
