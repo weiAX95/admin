@@ -13,6 +13,7 @@ import { searchSessions } from "./session-search.mjs";
 import { exportSessions } from "./session-export.mjs";
 import { handleSessionCosts, saveSessionPriceSnapshot } from './session-costs.mjs';
 import { saveSessionQuality } from './session-quality.mjs';
+import { assignSessionCluster, ensureSessionClusters, rebuildSessionClusters } from './session-clusters.mjs';
 import { getSessionLearningPath } from "./session-learning-path.mjs";
 import { getRelatedSessions } from "./session-related.mjs";
 import { activityHeatmap, activityDay, validDateKey } from "./heatmap.mjs";
@@ -1331,6 +1332,10 @@ async function handleRequest(req, res) {
     if (pathname === "/api/sessions" && method === "GET") {
       const quality = url.searchParams.get('quality');
       if (quality && !['rejection', 'excessive_length'].includes(quality)) return send(res, 400, { error: '质量标记类型无效' });
+      const clusterId = url.searchParams.get('clusterId');
+      const clusterRows = (await activeClient.query('SELECT s.id,s.cluster_id,c.label AS cluster_label FROM sessions s LEFT JOIN session_clusters c ON c.id=s.cluster_id')).rows;
+      const clustersBySession = new Map(clusterRows.map(row => [row.id, row]));
+      if (clusterId && !(await activeClient.query('SELECT 1 FROM session_clusters WHERE id=$1', [clusterId])).rowCount) return send(res, 400, { error: '主题聚类不存在' });
       const flagRows = (await activeClient.query("SELECT session_id,flag_type FROM session_quality_flags ORDER BY session_id, CASE flag_type WHEN 'rejection' THEN 0 ELSE 1 END")).rows;
       const qualityBySession = new Map();
       for (const row of flagRows) {
@@ -1341,10 +1346,38 @@ async function handleRequest(req, res) {
         const usage = sessionUsage(s);
         return { id: s.id, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt,
           messageCount: s.messages.length, title: sessionTitle(s), totalTokens: usage?.totalTokens ?? null,
-          qualityFlags: [...(qualityBySession.get(s.id) || [])] };
-      }).filter(item => !quality || item.qualityFlags.includes(quality));
+          qualityFlags: [...(qualityBySession.get(s.id) || [])], clusterId: clustersBySession.get(s.id)?.cluster_id || null,
+          clusterLabel: clustersBySession.get(s.id)?.cluster_label || null };
+      }).filter(item => (!quality || item.qualityFlags.includes(quality)) && (!clusterId || item.clusterId === clusterId));
       items.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
       return send(res, 200, { items });
+    }
+    if (pathname === '/api/sessions/clusters' && method === 'GET') {
+      const settings = (await activeClient.query('SELECT requested_k,last_built_at FROM session_cluster_settings WHERE id=1')).rows[0];
+      const items = (await activeClient.query('SELECT id,label,auto_label,manually_labeled,member_count FROM session_clusters ORDER BY member_count DESC,label,id')).rows.map(row => ({ id: row.id, label: row.label, autoLabel: row.auto_label, manuallyLabeled: row.manually_labeled, memberCount: row.member_count }));
+      return send(res, 200, { requestedK: settings.requested_k || 'auto', lastBuiltAt: settings.last_built_at, items });
+    }
+    if (pathname === '/api/sessions/clusters/config' && method === 'PUT') {
+      if (me.role !== 'admin') return send(res, 403, { error: '仅管理员可配置主题聚类' });
+      const body = await readBody(req);
+      if (body.k !== 'auto' && (!Number.isInteger(body.k) || body.k < 1 || body.k > 20)) return send(res, 422, { error: 'K 必须为 auto 或 1–20 的整数' });
+      await activeClient.query('UPDATE session_cluster_settings SET requested_k=$1 WHERE id=1', [body.k === 'auto' ? null : body.k]);
+      const items = await rebuildSessionClusters(activeClient);
+      return send(res, 200, { requestedK: body.k, count: items.length });
+    }
+    if (pathname === '/api/sessions/clusters/rebuild' && method === 'POST') {
+      if (me.role !== 'admin') return send(res, 403, { error: '仅管理员可重算主题聚类' });
+      const items = await rebuildSessionClusters(activeClient);
+      return send(res, 200, { count: items.length });
+    }
+    const clusterRoute = pathname.match(/^\/api\/sessions\/clusters\/([^/]+)$/);
+    if (clusterRoute && method === 'PATCH') {
+      if (me.role !== 'admin') return send(res, 403, { error: '仅管理员可修改主题标签' });
+      const body = await readBody(req);
+      const label = typeof body.label === 'string' ? body.label.trim() : '';
+      if (!label || label.length > 60) return send(res, 422, { error: '标签须为 1–60 字' });
+      const updated = await activeClient.query('UPDATE session_clusters SET label=$1,manually_labeled=true WHERE id=$2 RETURNING id,label', [label, clusterRoute[1]]);
+      return updated.rowCount ? send(res, 200, updated.rows[0]) : send(res, 404, { error: '主题聚类不存在' });
     }
     if (pathname === '/api/sessions/token-stats' && method === 'GET') {
       const reported = db.sessions.map(session => ({ session, usage: sessionUsage(session) })).filter(item => item.usage);
@@ -1377,7 +1410,8 @@ async function handleRequest(req, res) {
       const annotated = [];
       for (const item of s.messages) annotated.push(item.role === "assistant" ? { ...item, annotation: await annotationView(activeClient, s.id, item.id, me.id) } : item);
       const qualityFlags = (await activeClient.query("SELECT DISTINCT flag_type FROM session_quality_flags WHERE session_id=$1 ORDER BY flag_type DESC", [s.id])).rows.map(row => row.flag_type);
-      return send(res, 200, { ...s, messages: annotated, title, messageCount: s.messages.length, totalTokens: sessionUsage(s)?.totalTokens ?? null, qualityFlags });
+      const cluster = (await activeClient.query('SELECT s.cluster_id,c.label FROM sessions s LEFT JOIN session_clusters c ON c.id=s.cluster_id WHERE s.id=$1', [s.id])).rows[0];
+      return send(res, 200, { ...s, messages: annotated, title, messageCount: s.messages.length, totalTokens: sessionUsage(s)?.totalTokens ?? null, qualityFlags, clusterId: cluster?.cluster_id || null, clusterLabel: cluster?.label || null });
     }
     // web 端上报会话（预留联动入口）
     if (pathname === "/api/sessions/ingest" && method === "POST") {
@@ -1422,6 +1456,7 @@ async function handleRequest(req, res) {
         existing.messages.push(...incoming.filter(item => !existing.messages.some(message => message.id === item.id)));
         if (newlyReported.length) afterSave(async client => { for (const item of newlyReported) await saveSessionPriceSnapshot(client, existing.id, item); });
         afterSave(client => saveSessionQuality(client, existing));
+        afterSave(client => assignSessionCluster(client, existing));
         existing.updatedAt = nowIso();
         saveDb(db);
         return send(res, 200, existing);
@@ -1431,6 +1466,7 @@ async function handleRequest(req, res) {
       afterSave(client => client.query("UPDATE sessions SET ingested_by=$1 WHERE id=$2", [me.id, s.id]));
       if (incoming.some(item => item.usage)) afterSave(async client => { for (const item of incoming) await saveSessionPriceSnapshot(client, s.id, item); });
       afterSave(client => saveSessionQuality(client, s));
+      afterSave(client => assignSessionCluster(client, s));
       saveDb(db);
       return send(res, 201, s);
     }
@@ -1971,6 +2007,7 @@ try {
   if (process.env.EXPERIMENT_WORKER_MODE !== 'external') await recoverExperimentJobs(pool);
   const users = await pool.query("SELECT 1 FROM users LIMIT 1");
   if (!users.rowCount) throw new Error("数据库尚无账号；请先运行 npm run db:import");
+  await ensureSessionClusters(pool);
   await withData(() => {
     if (reconcileNoteLinks()) saveDb(db);
   });

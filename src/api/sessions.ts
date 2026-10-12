@@ -1,8 +1,14 @@
 import type { MessageAnnotationTag, MessageAnnotationView, SessionDetail, SessionSummary } from "../types";
 import { ApiError, clearAuth, getToken, http } from "./client";
 
-export const listSessions = (quality?: "rejection" | "excessive_length") =>
-  http.get<{ items: SessionSummary[] }>("/sessions", quality ? { quality } : undefined);
+export const listSessions = (filters: { quality?: "rejection" | "excessive_length"; clusterId?: string } = {}) =>
+  http.get<{ items: SessionSummary[] }>("/sessions", filters);
+
+export interface SessionCluster { id: string; label: string; autoLabel: string; manuallyLabeled: boolean; memberCount: number }
+export interface SessionClusters { requestedK: number | 'auto'; lastBuiltAt: string | null; items: SessionCluster[] }
+export const listSessionClusters = () => http.get<SessionClusters>('/sessions/clusters');
+export const configureSessionClusters = (k: number | 'auto') => http.put<{ requestedK: number | 'auto'; count: number }>('/sessions/clusters/config', { k });
+export const renameSessionCluster = (id: string, label: string) => http.patch<{ id: string; label: string }>(`/sessions/clusters/${encodeURIComponent(id)}`, { label });
 
 export interface SessionTokenStats {
   hasData: boolean;

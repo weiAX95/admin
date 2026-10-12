@@ -170,6 +170,8 @@ export interface SessionSummary {
   updatedAt: string;
   totalTokens: number | null;
   qualityFlags: ("rejection" | "excessive_length")[];
+  clusterId: string | null;
+  clusterLabel: string | null;
 }
 
 export interface SessionDetail extends SessionSummary {

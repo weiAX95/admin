@@ -1,3 +1,5 @@
+import { rebuildSessionClusters } from './session-clusters.mjs';
+
 const view = row => ({ version: row.version, auditDays: row.audit_days, sessionDays: row.session_days, recycleDays: row.recycle_days, cleanupLocalTime: String(row.cleanup_local_time).slice(0,5) });
 function valid(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body) || !Number.isInteger(body.version)) throw new Error('缺少有效版本号');
@@ -48,6 +50,7 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
     if (oldSessions.length) {
       candidates = (await client.query("DELETE FROM evaluation_candidates WHERE source_type='session' AND status='pending' AND source_entity_id=ANY($1)", [oldSessions])).rowCount;
       sessions = (await client.query('DELETE FROM sessions WHERE id=ANY($1)', [oldSessions])).rowCount;
+      if (sessions) await rebuildSessionClusters(client);
     }
     const purged = { tasks: 0, notes: 0, experiments: 0, prompt_library: 0 };
     const failures = [];

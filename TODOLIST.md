@@ -19,7 +19,7 @@
 ### 0. 基础能力与数据契约（M0）
 
 - [ ] **0.1 持久化数据与迁移**
-  - [x] 为现有管理端的账号、任务、笔记、实验、会话、活动、历史、公开仓库连接、扫描索引与分析报告等数据建立 PostgreSQL 表；当前共 112 张表，包含已实现的外键、唯一约束和删除行为
+  - [x] 为现有管理端的账号、任务、笔记、实验、会话、活动、历史、公开仓库连接、扫描索引与分析报告等数据建立 PostgreSQL 表；当前共 114 张表，包含已实现的外键、唯一约束和删除行为
   - [x] 将当前关系表、外键、应用层逻辑关联及页面取数路径整理到 [数据库关系图](docs/database-relationships.md)；图中补全 `change_logs`／`activity` 的逻辑关联，并注明 `time_entries` 外键来源与 `annotation_tags` CHECK 约束
   - [x] 将现有 `mock/db.json` 的管理端数据迁移到 PostgreSQL；导入前备份、导入时核对数量和关联，失败则事务回滚
   - [x] 本地 API 运行时只读写 PostgreSQL；验证登录、任务和会话接口，重启后令牌与评分保留，重复导入被拒绝；现有管理端相关测试通过
@@ -210,7 +210,7 @@
   - [x] 已评分消息显示平均分、评分人数及标签人数
   - [x] AC：评分后即时更新；同一管理端账号对同一消息重复评分覆盖旧值
 
-本轮同时完成本地 API 的 PostgreSQL 迁移、一次性旧 JSON 导入、数据库令牌和会话消息增量上报。启动与备份步骤见 [README](README.md)，当前 112 张表与界面取数关系见 [数据库关系图](docs/database-relationships.md)，领域术语见 [CONTEXT](CONTEXT.md)，迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
+本轮同时完成本地 API 的 PostgreSQL 迁移、一次性旧 JSON 导入、数据库令牌和会话消息增量上报。启动与备份步骤见 [README](README.md)，当前 114 张表与界面取数关系见 [数据库关系图](docs/database-relationships.md)，领域术语见 [CONTEXT](CONTEXT.md)，迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
 
 - [ ] **3.3 自动质量检测**
   - [ ] 后端定时扫描（每 10 分钟或事件驱动）：
@@ -221,10 +221,11 @@
   - [ ] AC：flag 检测准确率 > 90%（正则部分）；重复提问用 embedding cosine similarity
   - [ ] 页面正式显示由用户验收
 - [ ] **3.4 主题聚类**
-  - [ ] 对首条用户消息做中文分词 → TF-IDF 向量化 → K-Means 聚类（K=可配置，默认 auto）
-  - [ ] 每个 cluster 自动生成标签（提取 TF-IDF top-3 关键词）
-  - [ ] 会话列表支持按 cluster 筛选
-  - [ ] AC：聚类结果可手动调整标签；新增会话自动归入最近 cluster
+  - [x] 对首条用户消息做中文分词 → TF-IDF 向量化 → K-Means 聚类（K=可配置，默认 auto）；规则见 [会话主题聚类](docs/session-clusters.md)
+  - [x] 每个 cluster 自动生成标签（提取 TF-IDF top-3 关键词）
+  - [x] 会话列表支持按 cluster 筛选
+  - [x] 聚类结果可手动调整标签；新增会话自动归入最近 cluster，旧数据启动时补建；专项测试通过
+  - [ ] AC：页面正式显示及真实语料聚类质量由用户验收
 - [ ] **3.5 Token 用量统计（接口和构建已验证，页面显示待用户验收）**
   - [x] 聊天端可对 assistant 消息首次上报或补报 token 用量；会话列表展示已上报总量，未上报显示缺失而非零
   - [x] 会话页独立指标区展示本月／总计、上海日历每日趋势、每次已上报会话平均量及 Top 10 会话；口径与上报契约见 [会话用量说明](docs/session-token-usage.md)

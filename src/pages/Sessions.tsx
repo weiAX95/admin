@@ -2,8 +2,9 @@ import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Card, Empty, Input, Modal, Select, Space, Spin, Switch, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { annotateSessionMessage, exportSelectedSessions, getSession, listSessions, searchSessionMessages } from "../api/sessions";
-import type { SessionSearchHit } from "../api/sessions";
+import { annotateSessionMessage, configureSessionClusters, exportSelectedSessions, getSession, listSessionClusters, listSessions, renameSessionCluster, searchSessionMessages } from "../api/sessions";
+import type { SessionCluster, SessionSearchHit } from "../api/sessions";
+import { getStoredUser } from "../api/client";
 import { createNote } from "../api/notes";
 import { Link, useSearchParams } from "react-router-dom";
 import { listTasks } from "../api/tasks";
@@ -14,7 +15,7 @@ import type { SessionCostRow } from "../api/sessions";
 import SessionLearningPath from "../components/SessionLearningPath";
 import RelatedSessions from "../components/RelatedSessions";
 import { NoteFormDrawer } from "./Notes";
-import type { LearningTask, MessageAnnotationTag, NotePayload, SessionDetail, SessionMessage, SessionSummary } from "../types";
+import type { AuthUser, LearningTask, MessageAnnotationTag, NotePayload, SessionDetail, SessionMessage, SessionSummary } from "../types";
 
 export default function Sessions() {
   const { pageSize } = useSettings();
@@ -44,19 +45,36 @@ export default function Sessions() {
   const [exporting, setExporting] = useState<"json" | "markdown" | null>(null);
   const [costsBySession, setCostsBySession] = useState<Record<string, SessionCostRow>>({});
   const [qualityFilter, setQualityFilter] = useState<"rejection" | "excessive_length" | "">("");
+  const [clusterFilter, setClusterFilter] = useState("");
+  const [clusters, setClusters] = useState<SessionCluster[]>([]);
+  const [clusterK, setClusterK] = useState<number | "auto">("auto");
+  const [clusterSettingsOpen, setClusterSettingsOpen] = useState(false);
+  const [clusterSaving, setClusterSaving] = useState(false);
+  const [editingCluster, setEditingCluster] = useState<SessionCluster | null>(null);
+  const [labelDraft, setLabelDraft] = useState("");
+  const isAdmin = getStoredUser<AuthUser>()?.role === "admin";
   const acceptSessionCosts = useCallback((rows: SessionCostRow[]) => setCostsBySession(Object.fromEntries(rows.map(row => [row.id, row]))), []);
   const searchRequest = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setItems((await listSessions(qualityFilter || undefined)).items); }
+    try { setItems((await listSessions({ quality: qualityFilter || undefined, clusterId: clusterFilter || undefined })).items); }
     catch (error) { message.error(error instanceof Error ? error.message : "加载会话失败"); }
     finally { setLoading(false); }
-  }, [message, qualityFilter]);
+  }, [message, qualityFilter, clusterFilter]);
+
+  const loadClusters = useCallback(async () => {
+    try {
+      const result = await listSessionClusters();
+      setClusters(result.items);
+      setClusterK(result.requestedK);
+    } catch (error) { message.error(error instanceof Error ? error.message : "加载主题聚类失败"); }
+  }, [message]);
 
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => { void loadClusters(); }, [loadClusters]);
   useEffect(() => {
     void listTasks({}).then(result => setTasks(result.items)).catch(() => setTasks([]));
   }, []);
@@ -147,6 +165,7 @@ export default function Sessions() {
     { title: "会话主题", dataIndex: "title", key: "title", render: (value: string) => <Typography.Text strong>{value}</Typography.Text> },
     { title: "用户", dataIndex: "userId", key: "userId", width: 140 },
     { title: "消息数", dataIndex: "messageCount", key: "messageCount", width: 90, render: (value: number) => <Tag>{value}</Tag> },
+    { title: "主题聚类", key: "cluster", width: 150, render: (_, row) => row.clusterLabel ? <Tag color="blue">{row.clusterLabel}</Tag> : <Typography.Text type="secondary">未归类</Typography.Text> },
     { title: "质量标记", key: "quality", width: 120, render: (_, row) => row.qualityFlags.length ? <Tooltip title={row.qualityFlags.map(flag => flag === "rejection" ? "检测到拒答" : "输出超过 2000 token").join("；")}><Tag color="warning">⚠️ {row.qualityFlags.length}</Tag></Tooltip> : <Typography.Text type="secondary">—</Typography.Text> },
     { title: 'Token 用量', dataIndex: 'totalTokens', key: 'totalTokens', width: 120, render: (value: number | null) => value === null ? <Typography.Text type="secondary">未上报</Typography.Text> : value.toLocaleString() },
     { title: '估算成本 USD', key: 'costUsd', width: 140, render: (_, row) => { const cost = costsBySession[row.id]; if (!cost) return '—'; if (cost.unpricedMessages) return <Tooltip title={`${cost.unpricedMessages} 条消息未定价，当前已知部分 $${cost.knownCostUsd?.toFixed(6) ?? '0'}`}><Typography.Text type="warning">{cost.pricedMessages ? '部分未定价' : '未定价'}</Typography.Text></Tooltip>; return cost.costUsd === null ? <Typography.Text type="secondary">无用量</Typography.Text> : `$${cost.costUsd.toFixed(6)}`; } },
@@ -181,6 +200,8 @@ export default function Sessions() {
       <Input.Search value={query} onChange={event => { setQuery(event.target.value); setSearchPage(1); }} allowClear placeholder="搜索所有会话消息" aria-label="搜索会话消息" />
       <Space size={8}><Switch checked={regex} onChange={value => { setRegex(value); setSearchPage(1); }} aria-label="正则表达式搜索" /><Typography.Text>正则表达式</Typography.Text></Space>
       <Select aria-label="按质量标记筛选会话" value={qualityFilter} style={{ minWidth: 170 }} onChange={value => { setQualityFilter(value); setPage(1); setSelectedIds([]); }} options={[{ value: "", label: "全部质量标记" }, { value: "rejection", label: "检测到拒答" }, { value: "excessive_length", label: "输出过长" }]} />
+      <Select aria-label="按主题聚类筛选会话" value={clusterFilter} style={{ minWidth: 180 }} onChange={value => { setClusterFilter(value); setPage(1); setSelectedIds([]); }} options={[{ value: "", label: "全部主题" }, ...clusters.map(cluster => ({ value: cluster.id, label: `${cluster.label} (${cluster.memberCount})` }))]} />
+      {isAdmin && <Button onClick={() => setClusterSettingsOpen(true)}>聚类设置</Button>}
     </div>
     {query.trim() && <div className="session-search-results" aria-live="polite">
       {searchError && <Alert type="warning" showIcon message={searchError} />}
@@ -203,5 +224,24 @@ export default function Sessions() {
       </Space>
     </Modal>
     <NoteFormDrawer open={quickDraft !== null} initial={null} tasks={tasks} prefill={quickDraft || undefined} suppressSuccess onClose={() => setQuickDraft(null)} onSaved={note => { setQuickDraft(null); message.success({ content: <>笔记已保存 · <Link to={`/notes/${note.id}`}>查看笔记</Link></> }); }} />
+    <Modal title="主题聚类设置" open={clusterSettingsOpen} confirmLoading={clusterSaving} okText="保存并重新聚类" onCancel={() => setClusterSettingsOpen(false)} onOk={async () => {
+      setClusterSaving(true);
+      try { await configureSessionClusters(clusterK); setClusterSettingsOpen(false); setClusterFilter(""); await loadClusters(); await load(); message.success("主题聚类已更新"); }
+      catch (error) { message.error(error instanceof Error ? error.message : "聚类失败"); }
+      finally { setClusterSaving(false); }
+    }}>
+      <Space direction="vertical" style={{ width: "100%" }}>
+        <Typography.Text>聚类数量 K</Typography.Text>
+        <Select value={clusterK} onChange={setClusterK} options={[{ value: "auto", label: "自动" }, ...Array.from({ length: 20 }, (_, index) => ({ value: index + 1, label: String(index + 1) }))]} />
+        <Typography.Text type="secondary">按每段会话的首条用户问题分词，使用 TF-IDF 和 K-Means；重算会保留可匹配聚类的人工标签。</Typography.Text>
+        {clusters.map(cluster => <Space key={cluster.id} wrap><Tag>{cluster.label}</Tag><Typography.Text type="secondary">{cluster.memberCount} 条</Typography.Text><Button size="small" onClick={() => { setEditingCluster(cluster); setLabelDraft(cluster.label); }}>修改标签</Button></Space>)}
+        {!clusters.length && <Typography.Text type="secondary">暂无可归类会话</Typography.Text>}
+      </Space>
+    </Modal>
+    <Modal title="修改聚类标签" open={editingCluster !== null} okText="保存" onCancel={() => setEditingCluster(null)} onOk={async () => {
+      if (!editingCluster) return;
+      try { await renameSessionCluster(editingCluster.id, labelDraft); setEditingCluster(null); await loadClusters(); await load(); message.success("标签已更新"); }
+      catch (error) { message.error(error instanceof Error ? error.message : "修改失败"); }
+    }}><Input value={labelDraft} maxLength={60} onChange={event => setLabelDraft(event.target.value)} aria-label="聚类标签" /></Modal>
   </Card><SessionTokenStats onOpen={openSearchHit} /><SessionCostStats onSessionCosts={acceptSessionCosts} /><SessionLearningPath userIds={[...new Set(items.map(item => item.userId))].sort()} onOpen={openSearchHit} /></>;
 }
