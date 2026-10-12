@@ -1,6 +1,6 @@
 import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, App, Button, Card, Empty, Input, Modal, Select, Space, Spin, Switch, Table, Tag, Typography } from "antd";
+import { Alert, App, Button, Card, Empty, Input, Modal, Select, Space, Spin, Switch, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { annotateSessionMessage, exportSelectedSessions, getSession, listSessions, searchSessionMessages } from "../api/sessions";
 import type { SessionSearchHit } from "../api/sessions";
@@ -9,6 +9,8 @@ import { Link, useSearchParams } from "react-router-dom";
 import { listTasks } from "../api/tasks";
 import SessionMessageBubble from "../components/SessionMessageBubble";
 import SessionTokenStats from "../components/SessionTokenStats";
+import SessionCostStats from "../components/SessionCostStats";
+import type { SessionCostRow } from "../api/sessions";
 import SessionLearningPath from "../components/SessionLearningPath";
 import RelatedSessions from "../components/RelatedSessions";
 import { NoteFormDrawer } from "./Notes";
@@ -40,6 +42,8 @@ export default function Sessions() {
   const [searchError, setSearchError] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [exporting, setExporting] = useState<"json" | "markdown" | null>(null);
+  const [costsBySession, setCostsBySession] = useState<Record<string, SessionCostRow>>({});
+  const acceptSessionCosts = useCallback((rows: SessionCostRow[]) => setCostsBySession(Object.fromEntries(rows.map(row => [row.id, row]))), []);
   const searchRequest = useRef(0);
 
   const load = useCallback(async () => {
@@ -141,6 +145,7 @@ export default function Sessions() {
     { title: "用户", dataIndex: "userId", key: "userId", width: 140 },
     { title: "消息数", dataIndex: "messageCount", key: "messageCount", width: 90, render: (value: number) => <Tag>{value}</Tag> },
     { title: 'Token 用量', dataIndex: 'totalTokens', key: 'totalTokens', width: 120, render: (value: number | null) => value === null ? <Typography.Text type="secondary">未上报</Typography.Text> : value.toLocaleString() },
+    { title: '估算成本 USD', key: 'costUsd', width: 140, render: (_, row) => { const cost = costsBySession[row.id]; if (!cost) return '—'; if (cost.unpricedMessages) return <Tooltip title={`${cost.unpricedMessages} 条消息未定价，当前已知部分 $${cost.knownCostUsd?.toFixed(6) ?? '0'}`}><Typography.Text type="warning">{cost.pricedMessages ? '部分未定价' : '未定价'}</Typography.Text></Tooltip>; return cost.costUsd === null ? <Typography.Text type="secondary">无用量</Typography.Text> : `$${cost.costUsd.toFixed(6)}`; } },
     { title: "更新时间", dataIndex: "updatedAt", key: "updatedAt", width: 180, render: (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false }) },
     { title: "操作", key: "actions", width: 100, render: (_, row) => <Button type="link" size="small" onClick={event => { event.stopPropagation(); toggle(row.id); }}>{expandedId === row.id ? "收起" : "查看"}</Button> },
   ];
@@ -182,7 +187,7 @@ export default function Sessions() {
         <Space style={{ marginTop: 12 }}><Button disabled={searchPage === 1} onClick={() => setSearchPage(value => value - 1)}>上一页</Button><Typography.Text type="secondary">第 {searchPage} 页</Typography.Text><Button disabled={!searchHasMore} onClick={() => setSearchPage(value => value + 1)}>下一页</Button></Space>
       </> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未找到匹配消息" />)}
     </div>}
-    <div id="session-table"><Table rowKey="id" loading={loading} columns={columns} dataSource={items} scroll={{ x: 860 }} pagination={{ pageSize, showSizeChanger: false, current: page, onChange: setPage }}
+    <div id="session-table"><Table rowKey="id" loading={loading} columns={columns} dataSource={items} scroll={{ x: 1000 }} pagination={{ pageSize, showSizeChanger: false, current: page, onChange: setPage }}
       rowSelection={{ selectedRowKeys: selectedIds, preserveSelectedRowKeys: true, onChange: keys => setSelectedIds(keys.map(String)), getCheckboxProps: () => ({ disabled: exporting !== null }) }}
       onRow={row => ({ onClick: () => toggle(row.id), className: "session-clickable-row" })}
       expandable={{ expandedRowRender: expandedRow, expandedRowKeys: expandedId ? [expandedId] : [], showExpandColumn: false, onExpand: (_, row) => toggle(row.id) }} /></div>
@@ -193,5 +198,5 @@ export default function Sessions() {
       </Space>
     </Modal>
     <NoteFormDrawer open={quickDraft !== null} initial={null} tasks={tasks} prefill={quickDraft || undefined} suppressSuccess onClose={() => setQuickDraft(null)} onSaved={note => { setQuickDraft(null); message.success({ content: <>笔记已保存 · <Link to={`/notes/${note.id}`}>查看笔记</Link></> }); }} />
-  </Card><SessionTokenStats onOpen={openSearchHit} /><SessionLearningPath userIds={[...new Set(items.map(item => item.userId))].sort()} onOpen={openSearchHit} /></>;
+  </Card><SessionTokenStats onOpen={openSearchHit} /><SessionCostStats onSessionCosts={acceptSessionCosts} /><SessionLearningPath userIds={[...new Set(items.map(item => item.userId))].sort()} onOpen={openSearchHit} /></>;
 }

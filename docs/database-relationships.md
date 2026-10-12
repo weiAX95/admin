@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)。迁移后数据库共有 110 张表。
+> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量与成本见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql) 和 [063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)。迁移后数据库共有 111 张表。
 
 ## 系统设置与个人偏好
 
@@ -74,7 +74,7 @@ flowchart LR
 
 `retention_settings` 是单行版本化保留配置，保存独立安全审计保留天数、会话保留天数、核心内容回收天数以及系统时区下的清理时间。`retention_cleanup_runs` 以本地日历日为主键，记录每日清理结果和逐项永久删除失败原因，避免重启后重复执行。清理器删除过期 `security_audit_logs` 与 `sessions`；会话删除级联消息和评分，未审核会话候选同时删除，已审核候选和摘录笔记保留并显示“原会话已清理”。[035_core_recycle_bin.sql](../db/migrations/035_core_recycle_bin.sql) 给 `tasks`、`notes`、`experiments` 增加 `deleted_at`；`prompt_library` 已在旧迁移中有该字段。删除后正常读取过滤已删除行，管理员可恢复或永久删除；到期清理按行设置保存点，关联约束阻止删除时保留条目并记录失败。恢复实验不会恢复已撤销的分享或暂停的调度；恢复任务暂不重建删除时从其他任务移除的依赖边。这两张保留策略表无外键。
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)。当前共 **110 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)。当前共 **111 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -419,6 +419,8 @@ flowchart LR
 flowchart LR
   ChatUser["聊天端用户 ID<br/>外部标识，不是本库表"] -. "sessions.external_user_id" .-> Sessions["sessions"]
   Sessions -->|"FK session_id"| Messages["session_messages"]
+  Messages -->|"复合 FK session_id + message_id · ON DELETE CASCADE"| SessionPrices["session_usage_prices"]
+  Models["experiment_models"] -->|"FK model_id · ON DELETE SET NULL"| SessionPrices
   Messages -->|"复合 FK (session_id, message_id)"| Annotations["message_annotations"]
   Users["users"] -->|"FK user_id"| Tokens["auth_sessions"]
   Users -->|"FK reviewer_id；删除账号时置空"| Annotations
@@ -427,7 +429,7 @@ flowchart LR
 
 消息 ID 只要求在**同一会话内**唯一；`session_messages` 的主键为 `(session_id, id)`。[062 迁移](../db/migrations/062_session_token_usage.sql) 在该表增加可空的 assistant 消息输入／输出 token 与模型名，并由数据库检查两个 token 字段同时存在且非负；旧消息保持缺失值。会话用量按明确上报的消息合计，口径见 [会话用量说明](session-token-usage.md)。评分表用 `(session_id, message_id)` 复合外键引用这两个字段。同一管理端账号对同一消息的有效评分由唯一索引限制为一条；删除评分账号时 `reviewer_id` 置空，原评分仍参与汇总。`annotation_tags.tag` 另有 [CHECK 约束](../db/migrations/002_constraints.sql)，只允许“准确、不准确、偏题、幻觉、过于冗长、过于简略、格式错误”七种标签。删除会话会级联删除消息、评分及其标签。`sessions.external_user_id` 不引用 `users.id`，不能把聊天端用户当成管理端评分账号。
 
-会话全文搜索读取 `sessions` 与 `session_messages`，以数据库令牌验证管理端账号后使用独立的只读查询，不经过加载全部业务表的事务。普通关键词与正则模式、片段边界、查询时限及本机测量见 [会话搜索说明](session-search.md)。
+会话成本估算通过 [063 迁移](../db/migrations/063_session_cost_snapshots.sql) 的 `session_usage_prices` 保留首次上报时的价格；现价模式读取 `experiment_models` 当前价格，缺价消息单列而不当作零。两种口径及上海日历聚合见 [成本说明](session-costs.md)。会话全文搜索读取 `sessions` 与 `session_messages`，以数据库令牌验证管理端账号后使用独立的只读查询，不经过加载全部业务表的事务。普通关键词与正则模式、片段边界、查询时限及本机测量见 [会话搜索说明](session-search.md)。
 
 | 表 | 当前内容与关键关系 | 对应页面或功能 |
 | --- | --- | --- |
@@ -435,6 +437,7 @@ flowchart LR
 | `auth_sessions` | 登录令牌哈希、到期与撤销时间；`user_id` 外键，删除账号时级联删除。 | 登录、退出、HTTP／WebSocket 鉴权 |
 | `sessions` | 聊天端上报的会话；`external_user_id` 是外部用户标识。 | `/sessions` |
 | `session_messages` | 会话中的 user／assistant 消息，保留顺序和首次确定的 ID；`session_id` 外键；assistant 消息可存明确上报的输入／输出 token 与模型名。 | 会话行内预览、全文搜索、Token 用量 |
+| `session_usage_prices` | 每条已上报消息首次匹配的模型与价格快照；消息复合外键级联删除，模型外键删除时置空。旧消息无快照不伪造历史价。 | 会话成本的「上报时价格」模式 |
 | `message_annotations` | assistant 消息的 1–5 星评分；复合消息外键及可置空的评分账号外键。 | 会话消息下的评分和汇总 |
 | `annotation_tags` | 一条评分可选的多个标签；`annotation_id` 外键，`tag` 受 `002_constraints.sql` 的七种标签 CHECK 约束。 | 会话消息下的标签人数 |
 

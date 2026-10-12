@@ -11,6 +11,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { listActivity } from "./activity.mjs";
 import { searchSessions } from "./session-search.mjs";
 import { exportSessions } from "./session-export.mjs";
+import { handleSessionCosts, saveSessionPriceSnapshot } from './session-costs.mjs';
 import { getSessionLearningPath } from "./session-learning-path.mjs";
 import { getRelatedSessions } from "./session-related.mjs";
 import { activityHeatmap, activityDay, validDateKey } from "./heatmap.mjs";
@@ -612,6 +613,11 @@ async function handleRequest(req, res) {
     if (sharingResponse) return send(res, sharingResponse.status, sharingResponse.data);
     const scheduleResponse = await handleExperimentSchedules({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (scheduleResponse) return send(res, scheduleResponse.status, scheduleResponse.data);
+    const sessionCostResponse = await handleSessionCosts({ pathname, method, client: activeClient, me, url, readBody: () => readBody(req), sessions: db.sessions });
+    if (sessionCostResponse) {
+      if (method === 'PATCH' && sessionCostResponse.status === 200) saveDb();
+      return send(res, sessionCostResponse.status, sessionCostResponse.data);
+    }
 
     if (method === "GET" && pathname === "/api/auth/me") {
       return send(res, 200, publicUser(me));
@@ -1393,17 +1399,20 @@ async function handleRequest(req, res) {
           if (previous && (previous.role !== item.role || previous.content !== item.content || previous.at !== item.at)) return send(res, 409, { error: `已有消息不能改写：${item.id}` });
           if (previous?.usage && item.usage && JSON.stringify(previous.usage) !== JSON.stringify(item.usage)) return send(res, 409, { error: `已有消息用量不能改写：${item.id}` });
         }
+        const newlyReported = incoming.filter(item => item.usage && !existing.messages.find(previous => previous.id === item.id)?.usage);
         for (const item of incoming) {
           const previous = existing.messages.find(message => message.id === item.id);
           if (previous && !previous.usage && item.usage) previous.usage = item.usage;
         }
         existing.messages.push(...incoming.filter(item => !existing.messages.some(message => message.id === item.id)));
+        if (newlyReported.length) afterSave(async client => { for (const item of newlyReported) await saveSessionPriceSnapshot(client, existing.id, item); });
         existing.updatedAt = nowIso();
         saveDb(db);
         return send(res, 200, existing);
       }
       const s = { id: body.id || newId(), userId: body.userId || "unknown", createdAt: nowIso(), updatedAt: nowIso(), messages: incoming };
       db.sessions.unshift(s);
+      if (incoming.some(item => item.usage)) afterSave(async client => { for (const item of incoming) await saveSessionPriceSnapshot(client, s.id, item); });
       saveDb(db);
       return send(res, 201, s);
     }

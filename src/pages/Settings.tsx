@@ -6,6 +6,7 @@ import { getStoredUser, getToken } from '../api/client';
 import type { AuthUser } from '../types';
 import { useSettings } from '../components/SettingsProvider';
 import ModelConnectionsSettings from '../components/ModelConnectionsSettings';
+import SessionModelPriceSettings from '../components/SessionModelPriceSettings';
 import RetentionSettings from '../components/RetentionSettings';
 import BackupSettings from '../components/BackupSettings';
 import { getVersionInfo, type VersionInfo } from '../api/version-info';
@@ -80,6 +81,7 @@ export default function Settings() {
       </Form>
     </Card>}
     {admin && <ModelConnectionsSettings />}
+    {admin && <SessionModelPriceSettings />}
     {admin && <RetentionSettings />}
     {admin && <BackupSettings />}
     <Card title="个人偏好" loading={!personal}>

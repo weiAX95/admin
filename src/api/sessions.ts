@@ -15,6 +15,22 @@ export interface SessionTokenStats {
 }
 export const getSessionTokenStats = () => http.get<SessionTokenStats>('/sessions/token-stats');
 
+export type SessionPriceMode = 'current' | 'snapshot';
+export type SessionCostGranularity = 'day' | 'week' | 'month';
+export interface SessionCostRow { id: string; title: string; costUsd: number | null; knownCostUsd: number | null; pricedMessages: number; unpricedMessages: number }
+export interface SessionCostStats {
+  totalUsd: number | null;
+  pricedMessages: number;
+  unpricedMessages: number;
+  trend: { date: string; costUsd: number }[];
+  byModel: { model: string; costUsd: number }[];
+  sessions: SessionCostRow[];
+}
+export interface SessionModelPrice { id: string; name: string; displayName: string; inputUsdPer1K: number; outputUsdPer1K: number; status: string }
+export const getSessionCostStats = (priceMode: SessionPriceMode, granularity: SessionCostGranularity) => http.get<SessionCostStats>('/sessions/cost-stats', { priceMode, granularity });
+export const getSessionModelPrices = () => http.get<{ items: SessionModelPrice[] }>('/sessions/model-prices');
+export const updateSessionModelPrice = (id: string, inputUsdPer1K: number, outputUsdPer1K: number) => http.patch<SessionModelPrice>(`/sessions/model-prices/${encodeURIComponent(id)}`, { inputUsdPer1K, outputUsdPer1K });
+
 export interface SessionSearchHit {
   sessionId: string;
   messageId: string;
