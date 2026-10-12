@@ -7,6 +7,7 @@ import { applyTaskProgress } from "./task-checklist.mjs";
 import { initializeTaskWork } from "./task-worklog.mjs";
 import { initializeTaskTrends } from "./task-trends.mjs";
 import { canonicalNoteTags } from "./note-tags.mjs";
+import { saveSessionQuality } from './session-quality.mjs';
 
 pg.types.setTypeParser(1700, value => Number(value));
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -230,6 +231,7 @@ export async function importJson(client, data, sourceHash) {
   initializeTaskTrends(data);
   const empty = Object.fromEntries([...specs.map(item => [item.name, []]), ["legacyActivityIds", []], ["taskTrendEvents", []], ["taskTrendSnapshots", []]]);
   await saveData(client, empty, data);
+  for (const session of data.sessions || []) await saveSessionQuality(client, session);
   // The schema migration runs before a JSON import, so seed review plans for
   // the imported accounts and notes inside this same import transaction.
   await client.query("INSERT INTO note_review_progress(user_id,note_id,started_on,due_on) SELECT u.id,n.id,(now() AT TIME ZONE 'Asia/Shanghai')::date,(now() AT TIME ZONE 'Asia/Shanghai')::date+1 FROM users u CROSS JOIN notes n ON CONFLICT DO NOTHING");

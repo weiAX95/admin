@@ -43,20 +43,23 @@ export default function Sessions() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [exporting, setExporting] = useState<"json" | "markdown" | null>(null);
   const [costsBySession, setCostsBySession] = useState<Record<string, SessionCostRow>>({});
+  const [qualityFilter, setQualityFilter] = useState<"rejection" | "excessive_length" | "">("");
   const acceptSessionCosts = useCallback((rows: SessionCostRow[]) => setCostsBySession(Object.fromEntries(rows.map(row => [row.id, row]))), []);
   const searchRequest = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setItems((await listSessions()).items); }
+    try { setItems((await listSessions(qualityFilter || undefined)).items); }
     catch (error) { message.error(error instanceof Error ? error.message : "加载会话失败"); }
     finally { setLoading(false); }
-  }, [message]);
+  }, [message, qualityFilter]);
 
   useEffect(() => {
     void load();
-    void listTasks({}).then(result => setTasks(result.items)).catch(() => setTasks([]));
   }, [load]);
+  useEffect(() => {
+    void listTasks({}).then(result => setTasks(result.items)).catch(() => setTasks([]));
+  }, []);
   useEffect(() => {
     const term = query.trim();
     const requestId = ++searchRequest.current;
@@ -144,6 +147,7 @@ export default function Sessions() {
     { title: "会话主题", dataIndex: "title", key: "title", render: (value: string) => <Typography.Text strong>{value}</Typography.Text> },
     { title: "用户", dataIndex: "userId", key: "userId", width: 140 },
     { title: "消息数", dataIndex: "messageCount", key: "messageCount", width: 90, render: (value: number) => <Tag>{value}</Tag> },
+    { title: "质量标记", key: "quality", width: 120, render: (_, row) => row.qualityFlags.length ? <Tooltip title={row.qualityFlags.map(flag => flag === "rejection" ? "检测到拒答" : "输出超过 2000 token").join("；")}><Tag color="warning">⚠️ {row.qualityFlags.length}</Tag></Tooltip> : <Typography.Text type="secondary">—</Typography.Text> },
     { title: 'Token 用量', dataIndex: 'totalTokens', key: 'totalTokens', width: 120, render: (value: number | null) => value === null ? <Typography.Text type="secondary">未上报</Typography.Text> : value.toLocaleString() },
     { title: '估算成本 USD', key: 'costUsd', width: 140, render: (_, row) => { const cost = costsBySession[row.id]; if (!cost) return '—'; if (cost.unpricedMessages) return <Tooltip title={`${cost.unpricedMessages} 条消息未定价，当前已知部分 $${cost.knownCostUsd?.toFixed(6) ?? '0'}`}><Typography.Text type="warning">{cost.pricedMessages ? '部分未定价' : '未定价'}</Typography.Text></Tooltip>; return cost.costUsd === null ? <Typography.Text type="secondary">无用量</Typography.Text> : `$${cost.costUsd.toFixed(6)}`; } },
     { title: "更新时间", dataIndex: "updatedAt", key: "updatedAt", width: 180, render: (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false }) },
@@ -176,6 +180,7 @@ export default function Sessions() {
     <div className="session-search-controls">
       <Input.Search value={query} onChange={event => { setQuery(event.target.value); setSearchPage(1); }} allowClear placeholder="搜索所有会话消息" aria-label="搜索会话消息" />
       <Space size={8}><Switch checked={regex} onChange={value => { setRegex(value); setSearchPage(1); }} aria-label="正则表达式搜索" /><Typography.Text>正则表达式</Typography.Text></Space>
+      <Select aria-label="按质量标记筛选会话" value={qualityFilter} style={{ minWidth: 170 }} onChange={value => { setQualityFilter(value); setPage(1); setSelectedIds([]); }} options={[{ value: "", label: "全部质量标记" }, { value: "rejection", label: "检测到拒答" }, { value: "excessive_length", label: "输出过长" }]} />
     </div>
     {query.trim() && <div className="session-search-results" aria-live="polite">
       {searchError && <Alert type="warning" showIcon message={searchError} />}

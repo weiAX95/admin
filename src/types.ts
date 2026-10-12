@@ -169,6 +169,7 @@ export interface SessionSummary {
   createdAt: string;
   updatedAt: string;
   totalTokens: number | null;
+  qualityFlags: ("rejection" | "excessive_length")[];
 }
 
 export interface SessionDetail extends SessionSummary {

@@ -12,6 +12,7 @@ import { listActivity } from "./activity.mjs";
 import { searchSessions } from "./session-search.mjs";
 import { exportSessions } from "./session-export.mjs";
 import { handleSessionCosts, saveSessionPriceSnapshot } from './session-costs.mjs';
+import { saveSessionQuality } from './session-quality.mjs';
 import { getSessionLearningPath } from "./session-learning-path.mjs";
 import { getRelatedSessions } from "./session-related.mjs";
 import { activityHeatmap, activityDay, validDateKey } from "./heatmap.mjs";
@@ -1328,11 +1329,20 @@ async function handleRequest(req, res) {
       return send(res, 200, annotation);
     }
     if (pathname === "/api/sessions" && method === "GET") {
+      const quality = url.searchParams.get('quality');
+      if (quality && !['rejection', 'excessive_length'].includes(quality)) return send(res, 400, { error: '质量标记类型无效' });
+      const flagRows = (await activeClient.query("SELECT session_id,flag_type FROM session_quality_flags ORDER BY session_id, CASE flag_type WHEN 'rejection' THEN 0 ELSE 1 END")).rows;
+      const qualityBySession = new Map();
+      for (const row of flagRows) {
+        if (!qualityBySession.has(row.session_id)) qualityBySession.set(row.session_id, new Set());
+        qualityBySession.get(row.session_id).add(row.flag_type);
+      }
       const items = db.sessions.map(s => {
         const usage = sessionUsage(s);
         return { id: s.id, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt,
-          messageCount: s.messages.length, title: sessionTitle(s), totalTokens: usage?.totalTokens ?? null };
-      });
+          messageCount: s.messages.length, title: sessionTitle(s), totalTokens: usage?.totalTokens ?? null,
+          qualityFlags: [...(qualityBySession.get(s.id) || [])] };
+      }).filter(item => !quality || item.qualityFlags.includes(quality));
       items.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
       return send(res, 200, { items });
     }
@@ -1366,7 +1376,8 @@ async function handleRequest(req, res) {
       const title = sessionTitle(s);
       const annotated = [];
       for (const item of s.messages) annotated.push(item.role === "assistant" ? { ...item, annotation: await annotationView(activeClient, s.id, item.id, me.id) } : item);
-      return send(res, 200, { ...s, messages: annotated, title, messageCount: s.messages.length, totalTokens: sessionUsage(s)?.totalTokens ?? null });
+      const qualityFlags = (await activeClient.query("SELECT DISTINCT flag_type FROM session_quality_flags WHERE session_id=$1 ORDER BY flag_type DESC", [s.id])).rows.map(row => row.flag_type);
+      return send(res, 200, { ...s, messages: annotated, title, messageCount: s.messages.length, totalTokens: sessionUsage(s)?.totalTokens ?? null, qualityFlags });
     }
     // web 端上报会话（预留联动入口）
     if (pathname === "/api/sessions/ingest" && method === "POST") {
@@ -1410,6 +1421,7 @@ async function handleRequest(req, res) {
         }
         existing.messages.push(...incoming.filter(item => !existing.messages.some(message => message.id === item.id)));
         if (newlyReported.length) afterSave(async client => { for (const item of newlyReported) await saveSessionPriceSnapshot(client, existing.id, item); });
+        afterSave(client => saveSessionQuality(client, existing));
         existing.updatedAt = nowIso();
         saveDb(db);
         return send(res, 200, existing);
@@ -1418,6 +1430,7 @@ async function handleRequest(req, res) {
       db.sessions.unshift(s);
       afterSave(client => client.query("UPDATE sessions SET ingested_by=$1 WHERE id=$2", [me.id, s.id]));
       if (incoming.some(item => item.usage)) afterSave(async client => { for (const item of incoming) await saveSessionPriceSnapshot(client, s.id, item); });
+      afterSave(client => saveSessionQuality(client, s));
       saveDb(db);
       return send(res, 201, s);
     }

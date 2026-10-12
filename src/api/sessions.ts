@@ -1,8 +1,8 @@
 import type { MessageAnnotationTag, MessageAnnotationView, SessionDetail, SessionSummary } from "../types";
 import { ApiError, clearAuth, getToken, http } from "./client";
 
-export const listSessions = () =>
-  http.get<{ items: SessionSummary[] }>("/sessions");
+export const listSessions = (quality?: "rejection" | "excessive_length") =>
+  http.get<{ items: SessionSummary[] }>("/sessions", quality ? { quality } : undefined);
 
 export interface SessionTokenStats {
   hasData: boolean;
