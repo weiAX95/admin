@@ -52,11 +52,23 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [repository.id]);
 
-  const start = async () => {
-    if (!scanId || !modelId) return;
+  useEffect(() => {
+    if (!report) return;
+    let cancelled = false;
+    const analysisId = report.id;
+    void getProjectAnalysis(repository.id, analysisId).then(updated => {
+      if (!cancelled) setReport(current => current?.id === analysisId ? updated : current);
+    }).catch(cause => {
+      if (!cancelled) setError(cause instanceof Error ? cause.message : '报告刷新失败');
+    });
+    return () => { cancelled = true; };
+  }, [repository.id, repository.goal, repository.requirementBaseline, repository.baselineVersionId, repository.commitSha]);
+
+  const start = async (selectedScan = scanId, selectedModel = modelId) => {
+    if (!selectedScan || !selectedModel) return;
     setStarting(true);
     try {
-      const job = await startProjectAnalysis(repository.id, scanId, modelId);
+      const job = await startProjectAnalysis(repository.id, selectedScan, selectedModel);
       setItems(current => [job, ...current.filter(item => item.id !== job.id)]);
       message.success('分析任务已提交');
     } catch (cause) { setError(cause instanceof Error ? cause.message : '分析提交失败'); }
@@ -105,6 +117,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     catch (cause) { setError(cause instanceof Error ? cause.message : '需求文档读取失败'); }
     finally { setRequirementLoading(false); }
   };
+  const reviewScan = report && scans.find(scan => scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status));
+  const reviewModelAvailable = report && models.some(model => model.id === report.modelId);
 
   return <Card title="项目分析报告">
     <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
@@ -131,7 +145,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       </Space> },
     ]} />
     {report && <Card size="small" title={`报告 · ${report.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setReport(null)}>关闭</Button>}>
-      {report.staleReasons.length > 0 && <Alert type="warning" showIcon message="报告基线已变化，旧建议需重审" description={report.staleReasons.join('；')} style={{ marginBottom: 12 }} />}
+      {report.staleReasons.length > 0 && <Alert type="warning" showIcon message="报告基线已变化，旧建议需重审" description={<Space direction="vertical"><span>{report.staleReasons.join('；')}</span>{reviewScan && reviewModelAvailable ? <Popconfirm title="按当前基线重新分析？" description="会重新调用模型，可能产生费用；旧报告和人工处理记录仍保留。" onConfirm={() => void start(reviewScan.id, report.modelId)}><Button size="small" loading={starting}>重新分析当前扫描</Button></Popconfirm> : <span>{reviewScan ? '原模型当前不可用，请选择其他模型生成报告。' : '请先扫描当前 commit，再生成新报告。'}</span>}</Space>} style={{ marginBottom: 12 }} />}
       {!report.analysisCoverageComplete && <Alert type="warning" showIcon message="本次报告只覆盖部分已扫描内容；未发现实现不代表整个仓库没有实现" style={{ marginBottom: 12 }} />}
       <Typography.Paragraph><strong>项目目标：</strong>{report.goal}</Typography.Paragraph>
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
@@ -170,10 +184,12 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <Typography.Paragraph><strong>前置知识：</strong>{suggestion.prerequisites.length ? suggestion.prerequisites.join('、') : '暂无明确前置知识'}</Typography.Paragraph>
         <Typography.Paragraph><strong>实践：</strong>{suggestion.practice}</Typography.Paragraph>
         <Typography.Paragraph><strong>验收：</strong>{suggestion.acceptance}</Typography.Paragraph>
+        {!suggestion.decision && suggestion.possibleDuplicates.length > 0 && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={suggestion.possibleDuplicates.some(item => item.exact) ? '相同建议已创建任务' : '可能已有相关学习任务，请先核对'} description={<Space wrap>{suggestion.possibleDuplicates.map(item => <Link key={item.taskId} to={`/tasks/${item.taskId}`}>{item.title}</Link>)}</Space>} />}
         {suggestion.decision?.status === 'accepted' && <Space><Tag color="success">已加入任务</Tag>{suggestion.decision.taskId && <Link to={`/tasks/${suggestion.decision.taskId}`}>查看任务</Link>}</Space>}
         {suggestion.decision?.status === 'ignored' && <Tag>已忽略</Tag>}
+        {suggestion.status === 'stale' && <Tag color="warning">已失效，需重审</Tag>}
         {!suggestion.decision && <Space>
-          <Popconfirm title="确认将此建议创建为学习任务？" description="任务会保留实践、验收要求与当前报告来源。" onConfirm={() => void decide(suggestion.id,'accept')}><Button type="primary" size="small" disabled={report.staleReasons.length > 0} loading={actingSuggestionId === suggestion.id}>加入任务</Button></Popconfirm>
+          <Popconfirm title="确认将此建议创建为学习任务？" description={suggestion.possibleDuplicates.length ? '可能已有相关任务；确认它们不同后再创建。' : '任务会保留实践、验收要求与当前报告来源。'} onConfirm={() => void decide(suggestion.id,'accept')}><Button type="primary" size="small" disabled={report.staleReasons.length > 0 || suggestion.possibleDuplicates.some(item => item.exact)} loading={actingSuggestionId === suggestion.id}>加入任务</Button></Popconfirm>
           <Popconfirm title="确认忽略此建议？" onConfirm={() => void decide(suggestion.id,'ignore')}><Button size="small" loading={actingSuggestionId === suggestion.id}>忽略</Button></Popconfirm>
         </Space>}
       </Card>) : <Empty description="暂无建议" />}

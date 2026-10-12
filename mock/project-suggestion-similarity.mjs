@@ -1,0 +1,32 @@
+const normalize = value => String(value || '').normalize('NFKC').toLocaleLowerCase().replace(/[\p{P}\p{S}\s]+/gu, '');
+
+function bigrams(value) {
+  const characters = [...normalize(value)];
+  if (!characters.length) return [];
+  if (characters.length === 1) return characters;
+  return characters.slice(1).map((character, index) => characters[index] + character);
+}
+
+function dice(left, right) {
+  const a = bigrams(left), b = bigrams(right);
+  if (!a.length || !b.length) return 0;
+  const counts = new Map();
+  for (const item of a) counts.set(item, (counts.get(item) || 0) + 1);
+  let overlap = 0;
+  for (const item of b) {
+    const remaining = counts.get(item) || 0;
+    if (remaining) { overlap++; counts.set(item, remaining - 1); }
+  }
+  return 2 * overlap / (a.length + b.length);
+}
+
+export function relatedAcceptedSuggestions(suggestion, accepted, limit = 3) {
+  return accepted.map(item => ({
+    taskId: item.taskId,
+    title: item.title,
+    exact: normalize(suggestion.topic) === normalize(item.topic) && normalize(suggestion.practice) === normalize(item.practice),
+    similarity: Math.round((dice(suggestion.topic, item.topic) * 0.4 + dice(suggestion.practice, item.practice) * 0.6) * 100) / 100,
+  })).filter(item => item.similarity >= 0.55)
+    .sort((a, b) => b.similarity - a.similarity || a.taskId.localeCompare(b.taskId))
+    .slice(0, limit);
+}

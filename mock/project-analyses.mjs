@@ -7,6 +7,7 @@ import { checkTokenReservations, reserveRunTokens } from './model-quotas.mjs';
 import { checkModelRate, reserveModelRate } from './model-rate-limits.mjs';
 import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvidence, mergeProjectModuleReports, parseProjectRequirements, selectProjectEvidence, validateProjectReport } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
+import { relatedAcceptedSuggestions } from './project-suggestion-similarity.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -174,12 +175,16 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       feedbackByFinding.set(feedback.finding_id,entries);
     }
     const findings = (await client.query('SELECT * FROM project_analysis_findings WHERE analysis_id=$1 ORDER BY position', [analysisId])).rows.map(row => ({ id: row.id, requirementId: row.requirement_id, moduleKey: row.module_key, title: row.title, status: row.status, detail: row.detail, evidence: row.evidence_path === null ? null : { type: row.evidence_type, path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha?.trim() || null }, feedback: feedbackByFinding.get(row.id) || [] }));
-    const suggestions = (await client.query('SELECT s.*,d.state AS decision_state,d.task_id,d.decided_at FROM project_analysis_suggestions s LEFT JOIN project_suggestion_decisions d ON d.suggestion_id=s.id WHERE s.analysis_id=$1 ORDER BY s.position', [analysisId])).rows.map(row => ({ id: row.id, findingId: row.finding_id, topic: row.topic, reason: row.reason, practice: row.practice, acceptance: row.acceptance, impact: row.impact, impactReason: row.impact_reason, prerequisites: row.prerequisites || [], decision: row.decision_state ? { status: row.decision_state, taskId: row.task_id, decidedAt: row.decided_at } : null }));
+    const staleReasons = [job.goal !== repository.goal ? '项目目标已变化' : null, job.requirement_baseline !== repository.requirement_baseline || job.baseline_version_id !== repository.baseline_version_id ? '需求基线已变化' : null, job.commit_sha.trim() !== repository.commit_sha.trim() ? '仓库 commit 已变化' : null].filter(Boolean);
+    const accepted = (await client.query(`SELECT s.topic,s.practice,t.id AS task_id,t.title
+      FROM project_suggestion_decisions d JOIN project_analysis_suggestions s ON s.id=d.suggestion_id
+      JOIN tasks t ON t.id=d.task_id AND t.owner_id=d.owner_id AND t.deleted_at IS NULL
+      WHERE d.repository_id=$1 AND d.owner_id=$2 AND d.state='accepted'`, [repositoryId, me.id])).rows.map(row => ({ topic: row.topic, practice: row.practice, taskId: row.task_id, title: row.title }));
+    const suggestions = (await client.query('SELECT s.*,d.state AS decision_state,d.task_id,d.decided_at FROM project_analysis_suggestions s LEFT JOIN project_suggestion_decisions d ON d.suggestion_id=s.id WHERE s.analysis_id=$1 ORDER BY s.position', [analysisId])).rows.map(row => ({ id: row.id, findingId: row.finding_id, topic: row.topic, reason: row.reason, practice: row.practice, acceptance: row.acceptance, impact: row.impact, impactReason: row.impact_reason, prerequisites: row.prerequisites || [], status: row.decision_state || (staleReasons.length ? 'stale' : 'pending'), decision: row.decision_state ? { status: row.decision_state, taskId: row.task_id, decidedAt: row.decided_at } : null, possibleDuplicates: row.decision_state ? [] : relatedAcceptedSuggestions(row, accepted) }));
     const modules = (await client.query('SELECT * FROM project_analysis_modules WHERE analysis_id=$1 ORDER BY module_key', [analysisId])).rows.map(row => ({ moduleKey: row.module_key, indexedCount: row.indexed_count, readCount: row.read_count, selectedCount: row.selected_count, truncatedCount: row.truncated_count, excludedCount: row.excluded_count, failedCount: row.failed_count, unscannedCount: row.unscanned_count, summary: row.summary }));
     const technologies = (await client.query('SELECT * FROM project_analysis_technologies WHERE analysis_id=$1 ORDER BY name', [analysisId])).rows.map(row => ({ name: row.name, packageName: row.package_name, evidence: { path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha.trim() } }));
     const baselineDocument = job.baseline_version_id ? (await client.query('SELECT content FROM project_requirement_baselines WHERE id=$1',[job.baseline_version_id])).rows[0]?.content : null;
     const requirements = parseProjectRequirements(baselineDocument);
-    const staleReasons = [job.goal !== repository.goal ? '项目目标已变化' : null, job.requirement_baseline !== repository.requirement_baseline || job.baseline_version_id !== repository.baseline_version_id ? '需求基线已变化' : null, job.commit_sha.trim() !== repository.commit_sha.trim() ? '仓库 commit 已变化' : null].filter(Boolean);
     return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, requirements, staleReasons, findings, suggestions, modules, technologies } };
   }
   if (method === 'POST' && analysisId && action === 'cancel') {

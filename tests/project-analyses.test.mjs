@@ -128,6 +128,7 @@ test('analysis calls the model per selected module and merges evidence with cumu
   const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel });
   assert.equal(await waitFor(client, started.data.id), 'completed');
   const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.equal(detail.suggestions[0].status, 'pending');
   assert.equal(calls,2);
   assert.deepEqual(detail.findings.map(finding => finding.moduleKey), ['src','src/pages']);
   assert.deepEqual(detail.suggestions.map(suggestion => suggestion.findingId), detail.findings.map(finding => finding.id));
@@ -236,10 +237,12 @@ test('accepting a learning suggestion creates one linked task with task history 
   assert.equal((await client.query('SELECT count(*)::int AS n FROM project_suggestion_decisions WHERE suggestion_id=$1', [detail.suggestions[0].id])).rows[0].n,1);
   const refreshed = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
   assert.deepEqual(refreshed.suggestions[0].decision.status,'accepted');
+  assert.equal(refreshed.suggestions[0].status,'accepted');
   assert.equal(refreshed.suggestions[0].decision.taskId,task.id);
   const second = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: report, promptTokens: 2, completionTokens: 3 }) });
   assert.equal(await waitFor(client,second.data.id),'completed');
   const secondDetail = (await handleProjectAnalyses({ pathname: `${path}/${second.data.id}`, method: 'GET', client, me })).data;
+  assert.deepEqual(secondDetail.suggestions[0].possibleDuplicates, [{ taskId: task.id, title: task.title, exact: true, similarity: 1 }]);
   const duplicate = await handleProjectSuggestionAction({ pathname: `${path}/${second.data.id}/suggestions/${secondDetail.suggestions[0].id}/accept`, method: 'POST', client, me });
   assert.equal(duplicate.status,409);
   assert.equal(duplicate.data.taskId,task.id);
@@ -256,8 +259,12 @@ test('suggestion decisions reject stale reports and preserve an ignored choice',
   const base = `${path}/${started.data.id}/suggestions/${detail.suggestions[0].id}`;
   assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/accept`, method: 'POST', client, me: { id: 'learner', role: 'member' } })).status,404);
   await client.query('UPDATE project_repositories SET goal=$2 WHERE id=$1', [repositoryId,'新的项目目标']);
+  const stale = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.equal(stale.suggestions[0].status, 'stale');
   assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/accept`, method: 'POST', client, me })).status,409);
   assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/ignore`, method: 'POST', client, me })).status,200);
+  const ignored = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.equal(ignored.suggestions[0].status, 'ignored');
   assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/ignore`, method: 'POST', client, me })).status,200);
   assert.equal((await handleProjectSuggestionAction({ pathname: `${base}/accept`, method: 'POST', client, me })).status,409);
   assert.equal((await client.query("SELECT count(*)::int AS n FROM tasks WHERE category='项目学习'")).rows[0].n,0);
