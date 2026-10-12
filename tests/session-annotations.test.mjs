@@ -53,6 +53,13 @@ test("session ingest and annotations survive upsert, account removal and restart
   assert.equal(detail.messages[1].annotation.mine.rating, 4);
   await Promise.all([4, 5].map(rating => request(`/sessions/review-session/messages/${assistant.id}/annotation`, "POST", admin, { rating, tags: ["幻觉"] })));
   await request(`/sessions/review-session/messages/${assistant.id}/annotation`, "POST", admin, { rating: 5, tags: ["幻觉"] });
+  qaExport = await request('/evaluation/candidates/qa-export', 'GET', admin);
+  assert.equal(JSON.parse(qaExport.data.content.trim()).input, '审核后的问题');
+  assert.equal(JSON.parse(qaExport.data.content.trim()).expectedOutput, '审核后的答案');
+  await request(`/sessions/review-session/messages/${assistant.id}/annotation`, 'POST', admin, { rating: 2, tags: [] });
+  assert.equal((await request('/evaluation/candidates/qa-export', 'GET', admin)).data.count, 0);
+  await request(`/sessions/review-session/messages/${assistant.id}/annotation`, 'POST', admin, { rating: 5, tags: ['幻觉'] });
+  assert.equal(JSON.parse((await request('/evaluation/candidates/qa-export', 'GET', admin)).data.content.trim()).input, '审核后的问题');
   detail = (await request("/sessions/review-session", "GET", admin)).data;
   assert.equal(detail.messages[1].annotation.summary.ratingCount, 2);
   assert.equal(detail.messages[1].annotation.summary.averageRating, 3.5);

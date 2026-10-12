@@ -57,7 +57,12 @@ export async function syncEvaluationCandidate(client, { sourceType, annotationId
   const status = rating >= 4 ? 'pending' : 'ineligible';
   await client.query(`INSERT INTO evaluation_candidates(id,source_type,source_annotation_id,source_entity_id,rating,input_payload,expected_payload,context_payload,tags,status)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-    ON CONFLICT(source_type,source_annotation_id) DO UPDATE SET rating=EXCLUDED.rating,input_payload=EXCLUDED.input_payload,expected_payload=EXCLUDED.expected_payload,context_payload=EXCLUDED.context_payload,tags=EXCLUDED.tags,status=CASE WHEN evaluation_candidates.status='published' THEN 'published' WHEN EXCLUDED.rating<4 THEN 'ineligible' WHEN evaluation_candidates.status IN ('staged','rejected') THEN evaluation_candidates.status ELSE 'pending' END,updated_at=now()`,
+    ON CONFLICT(source_type,source_annotation_id) DO UPDATE SET rating=EXCLUDED.rating,
+      input_payload=CASE WHEN evaluation_candidates.status IN ('staged','rejected','published') THEN evaluation_candidates.input_payload ELSE EXCLUDED.input_payload END,
+      expected_payload=CASE WHEN evaluation_candidates.status IN ('staged','rejected','published') THEN evaluation_candidates.expected_payload ELSE EXCLUDED.expected_payload END,
+      context_payload=EXCLUDED.context_payload,tags=EXCLUDED.tags,
+      status=CASE WHEN evaluation_candidates.status IN ('staged','rejected','published') THEN evaluation_candidates.status WHEN EXCLUDED.rating<4 THEN 'ineligible' ELSE 'pending' END,
+      updated_at=now()`,
   [uuid(),sourceType,annotationId,sourceEntityId,rating,JSON.stringify(input),JSON.stringify(expected),JSON.stringify(context),tags,status]);
 }
 
