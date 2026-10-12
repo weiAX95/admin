@@ -49,6 +49,8 @@ async function recordModelUsage(db, job, moduleKey, response, costUsd) {
   const client = pooled ? await db.connect() : db;
   try {
     await client.query('BEGIN');
+    const call = await client.query("UPDATE project_analysis_module_calls SET status='completed',response_output=$4,prompt_tokens=$5,completion_tokens=$6,cost_usd=$7,completed_at=now() WHERE analysis_id=$1 AND attempt=$2 AND module_key=$3 AND status='started' RETURNING analysis_id", [job.id,job.attempts,moduleKey,response.output,response.promptTokens,response.completionTokens,costUsd]);
+    if (!call.rowCount) throw new Error('模块调用记录已失效');
     await client.query('INSERT INTO project_analysis_model_charges(id,analysis_id,attempt,module_key,prompt_tokens,completion_tokens,cost_usd) VALUES($1,$2,$3,$4,$5,$6,$7)', [crypto.randomUUID(),job.id,job.attempts,moduleKey,response.promptTokens,response.completionTokens,costUsd]);
     await client.query('UPDATE project_analysis_attempts SET prompt_tokens=COALESCE(prompt_tokens,0)+$3,completion_tokens=COALESCE(completion_tokens,0)+$4,cost_usd=COALESCE(cost_usd,0)+$5,charged_at=now() WHERE analysis_id=$1 AND attempt=$2', [job.id,job.attempts,response.promptTokens,response.completionTokens,costUsd]);
     await client.query("UPDATE project_analyses SET prompt_tokens=COALESCE(prompt_tokens,0)+$2,completion_tokens=COALESCE(completion_tokens,0)+$3,cost_usd=COALESCE(cost_usd,0)+$4 WHERE id=$1 AND attempts=$5 AND status IN ('analyzing','canceled')", [job.id,response.promptTokens,response.completionTokens,costUsd,job.attempts]);
@@ -82,6 +84,12 @@ async function saveReport(db, job, report, metadata) {
 }
 
 export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
+  const pooled = db instanceof pg.Pool;
+  const lockClient = pooled ? await db.connect() : db;
+  let locked = false;
+  try {
+    locked = (await lockClient.query('SELECT pg_try_advisory_lock(748206,hashtext($1)) AS locked', [id])).rows[0].locked;
+    if (!locked) return;
   const started = await db.query("UPDATE project_analyses SET status='analyzing',attempts=attempts+CASE WHEN status='queued' THEN 1 ELSE 0 END,started_at=now(),finished_at=NULL,error_code=NULL WHERE id=$1 AND status IN ('queued','analyzing') RETURNING *", [id]);
   if (!started.rowCount) return;
   const job = started.rows[0];
@@ -104,10 +112,19 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     const results = [];
     for (const group of plan) {
       if (controller.signal.aborted) return;
-      const response = await runModel(db, job, group.messages, controller.signal);
-      const costUsd = (response.promptTokens * Number(job.input_price) + response.completionTokens * Number(job.output_price)) / 1_000_000;
-      if (!Number.isInteger(response.promptTokens) || !Number.isInteger(response.completionTokens) || response.promptTokens < 0 || response.completionTokens < 0 || !Number.isFinite(costUsd)) throw Object.assign(new Error('模型用量无效'), { code: 'INVALID_USAGE' });
-      await recordModelUsage(db,job,group.moduleKey,response,costUsd);
+      const recorded = (await db.query('SELECT status,response_output,prompt_tokens,completion_tokens FROM project_analysis_module_calls WHERE analysis_id=$1 AND attempt=$2 AND module_key=$3', [job.id,job.attempts,group.moduleKey])).rows[0];
+      if (recorded?.status === 'started') throw Object.assign(new Error('上次模型调用结果未知，已停止自动重试'), { code: 'CALL_OUTCOME_UNKNOWN' });
+      let response;
+      if (recorded?.status === 'completed') response = { output: recorded.response_output, promptTokens: recorded.prompt_tokens, completionTokens: recorded.completion_tokens };
+      else {
+        const marker = await db.query("INSERT INTO project_analysis_module_calls(analysis_id,attempt,module_key,status) SELECT $1,$2,$3,'started' WHERE EXISTS(SELECT 1 FROM project_analyses WHERE id=$1 AND status='analyzing' AND attempts=$2) ON CONFLICT DO NOTHING RETURNING analysis_id", [job.id,job.attempts,group.moduleKey]);
+        if (!marker.rowCount) return;
+        response = await runModel(db, job, group.messages, controller.signal);
+        const costUsd = (response.promptTokens * Number(job.input_price) + response.completionTokens * Number(job.output_price)) / 1_000_000;
+        if (!Number.isInteger(response.promptTokens) || !Number.isInteger(response.completionTokens) || response.promptTokens < 0 || response.completionTokens < 0 || !Number.isFinite(costUsd)) throw Object.assign(new Error('模型用量无效'), { code: 'INVALID_USAGE' });
+        try { await recordModelUsage(db,job,group.moduleKey,response,costUsd); }
+        catch { throw Object.assign(new Error('模型已响应但结果未能可靠入账，需人工确认后重试'), { code: 'CALL_OUTCOME_UNKNOWN' }); }
+      }
       let report;
       try { report = validateProjectReport(response.output, group.files, { maxFindings: 5, maxSuggestions: 3, requirementIds: parseProjectRequirements(job.requirement_document).map(item => item.id) }); }
       catch { throw Object.assign(new Error('模型报告或证据无效'), { code: 'INVALID_REPORT' }); }
@@ -116,10 +133,14 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     }
     await saveReport(db, job, mergeProjectModuleReports(results), { selectedCount: selected.length, availableCount, coverageComplete, modules, technologies, results });
   } catch (error) {
-    const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
+    const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE','CALL_OUTCOME_UNKNOWN'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
     await db.query("UPDATE project_analyses SET status='failed',error_code=$2,summary=NULL,finished_at=now() WHERE id=$1 AND status='analyzing'", [id,errorCode]);
     await db.query("UPDATE project_analysis_attempts SET status=(SELECT status FROM project_analyses WHERE id=$1) WHERE analysis_id=$1 AND attempt=$2", [id,job.attempts]);
   } finally { if (running.get(id) === controller) running.delete(id); }
+  } finally {
+    if (locked) await lockClient.query('SELECT pg_advisory_unlock(748206,hashtext($1))', [id]).catch(() => {});
+    if (pooled) lockClient.release();
+  }
 }
 
 export async function resumeProjectAnalyses(db, runModel = defaultRunModel) {

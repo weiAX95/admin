@@ -8,7 +8,7 @@ const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队�
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
 const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' };
 const impactOrder = { high: 0, medium: 1, low: 2 };
-const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败' };
+const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用' };
 
 export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void }) {
   const { message } = App.useApp();
@@ -125,7 +125,9 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       { title: '操作', render: (_, item: ProjectAnalysisJob) => <Space size="small">
         {item.status === 'completed' && <Button type="link" onClick={() => void show(item.id)}>查看报告</Button>}
         {['queued','analyzing'].includes(item.status) && <Popconfirm title="确定取消这次分析？" onConfirm={() => void act(item,'cancel')}><Button type="link" danger loading={actingId === item.id}>取消</Button></Popconfirm>}
-        {item.status === 'failed' && item.attempts < item.maxAttempts && <Button type="link" loading={actingId === item.id} onClick={() => void act(item,'retry')}>重试</Button>}
+        {item.status === 'failed' && item.attempts < item.maxAttempts && (item.errorCode === 'CALL_OUTCOME_UNKNOWN'
+          ? <Popconfirm title="上次模型调用结果未知" description="再次执行可能产生额外模型费用，确定重试？" onConfirm={() => void act(item,'retry')}><Button type="link" loading={actingId === item.id}>重试</Button></Popconfirm>
+          : <Button type="link" loading={actingId === item.id} onClick={() => void act(item,'retry')}>重试</Button>)}
       </Space> },
     ]} />
     {report && <Card size="small" title={`报告 · ${report.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setReport(null)}>关闭</Button>}>

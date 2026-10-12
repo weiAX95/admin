@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http from 'node:http';
+import pg from 'pg';
 import { createPgTestServer } from './pg-helper.mjs';
-import { handleProjectAnalyses, resumeProjectAnalyses } from '../mock/project-analyses.mjs';
+import { handleProjectAnalyses, resumeProjectAnalyses, runProjectAnalysis } from '../mock/project-analyses.mjs';
 import { handleProjectRepositories } from '../mock/project-repositories.mjs';
 import { handleProjectSuggestionAction } from '../mock/project-suggestion-actions.mjs';
 import { handleProjectFindingFeedback } from '../mock/project-finding-feedback.mjs';
@@ -332,6 +333,49 @@ test('failed analysis retries with fresh reservation and stops at attempt limit'
   assert.ok(attempts.every(row => row.status === 'failed' && Number(row.cost_usd) > 0));
   const total = (await client.query('SELECT cost_usd FROM project_analyses WHERE id=$1', [started.data.id])).rows[0].cost_usd;
   assert.equal(Number(total), attempts.reduce((sum,row) => sum + Number(row.cost_usd),0));
+});
+
+test('a second process cannot invoke the same analyzing job while its model call is active', async t => {
+  const { client, url } = await createPgTestServer(t);
+  const { scanId, path } = await fixture(client);
+  let entered, release;
+  const inside = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  let calls = 0;
+  const runModel = async () => { calls++; entered(); await gate; return { output: report, promptTokens: 1, completionTokens: 1 }; };
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me: { id: 'member', role: 'member' }, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel });
+  await inside;
+  const other = new pg.Pool({ connectionString: url });
+  try {
+    await Promise.race([runProjectAnalysis(other, started.data.id, runModel), new Promise((_, reject) => setTimeout(() => reject(new Error('second process waited on the active model call')), 2000))]);
+    assert.equal(calls, 1);
+  } finally { release(); await other.end(); }
+  assert.equal(await waitFor(client, started.data.id), 'completed');
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_model_charges WHERE analysis_id=$1', [started.data.id])).rows[0].n, 1);
+});
+
+test('restart resumes a stored module response but stops when an external call outcome is unknown', async t => {
+  const { client } = await createPgTestServer(t);
+  const { scanId } = await fixture(client);
+  const insertJob = async id => {
+    await client.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,model_id,provider,api_model,input_price,output_price,estimated_max_cost_usd,status,attempts) SELECT $1,repository_id,id,'member',full_name,branch,commit_sha,'学习项目','v1','project-model','legacy','fake-model',1,1,0.1,'analyzing',1 FROM project_scans WHERE id=$2", [id,scanId]);
+    await client.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,1,0.1,'analyzing')", [id]);
+  };
+  const completedId = crypto.randomUUID();
+  await insertJob(completedId);
+  await client.query("INSERT INTO project_analysis_module_calls(analysis_id,attempt,module_key,status,response_output,prompt_tokens,completion_tokens) VALUES($1,1,'src','completed',$2,1,1)", [completedId,report]);
+  let calls = 0;
+  await runProjectAnalysis(client, completedId, async () => { calls++; throw new Error('stored output should be reused'); });
+  assert.equal(calls, 0);
+  assert.equal((await client.query('SELECT status FROM project_analyses WHERE id=$1', [completedId])).rows[0].status, 'completed');
+
+  const unknownId = crypto.randomUUID();
+  await insertJob(unknownId);
+  await client.query("INSERT INTO project_analysis_module_calls(analysis_id,attempt,module_key,status) VALUES($1,1,'src','started')", [unknownId]);
+  await runProjectAnalysis(client, unknownId, async () => { calls++; throw new Error('must not call provider twice'); });
+  const unknown = (await client.query('SELECT status,error_code FROM project_analyses WHERE id=$1', [unknownId])).rows[0];
+  assert.deepEqual(unknown, { status: 'failed', error_code: 'CALL_OUTCOME_UNKNOWN' });
+  assert.equal(calls, 0);
 });
 
 test('HTTP analysis calls the configured server-side model and returns a persisted report', async t => {
