@@ -170,6 +170,16 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         { title: '截断', dataIndex: 'truncatedCount' },
         { title: '排除 / 失败 / 未扫描', render: (_, item: ProjectAnalysisReport['modules'][number]) => `${item.excludedCount} / ${item.failedCount} / ${item.unscannedCount}` },
       ]} style={{ marginBottom: 16 }} /> : <Typography.Paragraph type="secondary">此报告创建时尚未记录模块覆盖信息</Typography.Paragraph>}
+      <Typography.Title level={5}>核心流程线索</Typography.Title>
+      <Typography.Paragraph type="secondary">每个步骤都来自本次固定 commit 的代码或测试行；静态阅读不能证明流程已在运行环境通过。</Typography.Paragraph>
+      {report.flows.length ? report.flows.map(flow => <Card key={flow.id} size="small" title={<Space>{flow.title}<Tag>{flow.moduleKey}</Tag></Space>} style={{ marginBottom: 8 }}>
+        <ol style={{ margin: 0, paddingLeft: 20 }}>{flow.steps.map((step,index) => <li key={`${flow.id}-${index}`} style={{ marginBottom: 10 }}>
+          <Typography.Text>{step.description}</Typography.Text><br />
+          <Typography.Text type="secondary">{step.evidence.type === 'test' ? '测试证据' : '代码证据'}：</Typography.Text>
+          <a href={sourceLink(step.evidence.path,step.evidence.line)} target="_blank" rel="noopener noreferrer">{step.evidence.path}:{step.evidence.line}</a><br />
+          <code style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{step.evidence.excerpt}</code>
+        </li>)}</ol>
+      </Card>) : <Typography.Paragraph type="secondary">扫描范围内没有足够的逐步代码证据，暂不列出核心流程。</Typography.Paragraph>}
       <Typography.Title level={5}>进度判断与证据</Typography.Title>
       {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}{finding.requirementId && <Tag color="purple">{finding.requirementId}</Tag>}{finding.moduleKey && <Tag>{finding.moduleKey}</Tag>}<Tag>{findingStates[finding.status]}</Tag></Space>}>
         <Typography.Paragraph>{finding.detail}</Typography.Paragraph>

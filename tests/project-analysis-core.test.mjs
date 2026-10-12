@@ -110,6 +110,24 @@ test('model report requires exact evidence from selected commit lines', () => {
   ]) assert.throws(() => validateProjectReport(invalid, selected), /证据|建议/);
 });
 
+test('core flow steps require ordered source or test lines from the selected commit', () => {
+  const selected = selectProjectEvidence(files);
+  const valid = { summary: '入口流程线索', findings: [{ title: '入口', status: 'unverified', detail: '仍需运行验证', evidence: null, requirementId: null }], suggestions: [], flows: [{ title: '启动流程', steps: [
+    { description: '导出应用', evidence: { path: 'src/app.ts', line: 1, excerpt: 'export const app = true;' } },
+    { description: '调用应用', evidence: { path: 'src/app.ts', line: 2, excerpt: 'run(app);' } },
+  ] }] };
+  const parsed = validateProjectReport(JSON.stringify(valid),selected);
+  assert.equal(parsed.flows[0].steps[1].evidence.gitSha,'a'.repeat(40));
+  assert.equal(parsed.flows[0].steps[1].evidence.type,'code');
+  assert.deepEqual(mergeProjectModuleReports([{ moduleKey: 'src', report: parsed }]).flows[0].moduleKey,'src');
+  for (const invalid of [
+    { ...valid, flows: [{ ...valid.flows[0], steps: valid.flows[0].steps.slice(0,1) }] },
+    { ...valid, flows: [{ ...valid.flows[0], steps: [{ ...valid.flows[0].steps[0], evidence: { path: 'README.md', line: 2, excerpt: 'Learning app' } }, valid.flows[0].steps[1]] }] },
+    { ...valid, flows: [{ ...valid.flows[0], steps: [{ ...valid.flows[0].steps[0], evidence: { path: 'src/app.ts', line: 1, excerpt: 'invented' } }, valid.flows[0].steps[1]] }] },
+  ]) assert.throws(() => validateProjectReport(JSON.stringify(invalid),selected),/核心流程/);
+  assert.deepEqual(validateProjectReport(JSON.stringify({ ...valid, flows: undefined }),selected).flows,[]);
+});
+
 test('unsupported model output is rejected rather than saved as a successful report', () => {
   const selected = selectProjectEvidence(files);
   for (const raw of ['```json\n{}\n```', '{broken', JSON.stringify({ summary: 'ok', findings: [], suggestions: [], completionPercent: 100 }), JSON.stringify({ summary: 'ok', findings: [{ title: '猜测', status: 'implemented', requirementId: null, detail: '无证据', evidence: null }], suggestions: [] })]) {

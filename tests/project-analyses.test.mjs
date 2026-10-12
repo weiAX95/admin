@@ -112,6 +112,31 @@ test('analysis persists validated report and source evidence, isolates owners, a
   assert.ok(preserved.data.staleReasons.includes('项目目标已变化'));
 });
 
+test('completed report persists ordered core flow steps with fixed commit evidence', async t => {
+  const { client } = await createPgTestServer(t);
+  const { scanId, path } = await fixture(client);
+  const content = 'export function main() {}\nmain();';
+  await client.query('UPDATE project_scan_files SET content=$3,content_sha256=$4,byte_size=$5 WHERE scan_id=$1 AND path=$2', [scanId,'src/main.ts',content,crypto.createHash('sha256').update(content).digest('hex'),Buffer.byteLength(content)]);
+  const output = JSON.parse(report);
+  output.flows = [{ title: '入口调用线索', steps: [
+    { description: '定义入口函数', evidence: { path: 'src/main.ts', line: 1, excerpt: 'export function main() {}' } },
+    { description: '调用入口函数', evidence: { path: 'src/main.ts', line: 2, excerpt: 'main();' } },
+  ] }];
+  const me = { id: 'member', role: 'member' };
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: JSON.stringify(output), promptTokens: 2, completionTokens: 3 }) });
+  assert.equal(await waitFor(client,started.data.id),'completed');
+  const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.equal(detail.flows.length,1);
+  assert.equal(detail.flows[0].moduleKey,'src');
+  assert.deepEqual(detail.flows[0].steps.map(step => step.evidence.line),[1,2]);
+  assert.ok(detail.flows[0].steps.every(step => step.evidence.gitSha === 'b'.repeat(40)));
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_flow_steps')).rows[0].n,2);
+  output.flows[0].steps[1].evidence.excerpt = 'invented();';
+  const invalid = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: JSON.stringify(output), promptTokens: 2, completionTokens: 3 }) });
+  assert.equal(await waitFor(client,invalid.data.id),'failed');
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_analysis_flows')).rows[0].n,1);
+});
+
 test('analysis calls the model per selected module and merges evidence with cumulative usage', async t => {
   const { client } = await createPgTestServer(t);
   const { scanId, path } = await fixture(client);
