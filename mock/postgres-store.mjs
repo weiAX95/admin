@@ -36,7 +36,7 @@ const specs = [
   spec("timeEntries", "time_entries", ["id", "taskId", "recordedBy", "recordedByName", "mode", "workDate", "startedAt", "endedAt", "durationMinutes", "note", "createdAt", "updatedAt"]),
   spec("changeLogs", "change_logs", ["id", "operationId", "taskId", "changedBy", "changedByName", "changedAt", "fieldName", "oldValue", "newValue", "action", "sourceEntryId"]),
   spec("sessions", "sessions", ["id", ["userId", "external_user_id"], "createdAt", "updatedAt"], [
-    child("messages", "session_messages", ["id", "role", "content", "at"], "session_id"),
+    child("messages", "session_messages", ["id", "role", "content", "at", ["promptTokens", "prompt_tokens"], ["completionTokens", "completion_tokens"], ["usageModel", "usage_model"]], "session_id"),
   ]),
   spec("noteCategories", "note_categories", ["id", "name", "parentId", "createdAt", "updatedAt"]),
   spec("noteTagDefinitions", "note_tag_definitions", ["id", "name", "normalizedKey", "createdAt", "updatedAt"]),
@@ -83,6 +83,10 @@ function childItems(entity, descriptor, name) {
 function assignChildren(entity, descriptor, rows, name) {
   const result = rows.map(row => {
     const item = mapped(row, descriptor.fields);
+    if (descriptor.name === "messages") {
+      const { promptTokens, completionTokens, usageModel, ...message } = item;
+      return promptTokens === undefined ? message : { ...message, usage: { promptTokens, completionTokens, ...(usageModel ? { model: usageModel } : {}) } };
+    }
     if (descriptor.fields.length === 1 && pair(descriptor.fields[0])[0] === "value") return item.value;
     if (descriptor.name === "checklist" && name === "tasks") return { ...item, order: row.item_order };
     if (descriptor.name === "snapshotChecklist") return { ...item, order: row.item_order };
@@ -158,9 +162,10 @@ async function saveChildren(client, descriptor, entity, name, oldEntity) {
   } else await client.query(`DELETE FROM ${descriptor.table} WHERE ${descriptor.parentColumn}=$1`, [entity.id]);
   for (let index = 0; index < items.length; index++) {
     const item = typeof items[index] === "object" ? items[index] : { value: items[index] };
+    const record = descriptor.name === "messages" ? { ...item, promptTokens: item.usage?.promptTokens, completionTokens: item.usage?.completionTokens, usageModel: item.usage?.model } : item;
     const fields = [["parent", descriptor.parentColumn], ["index", descriptor.orderField], ...descriptor.fields];
     const cols = columns(fields);
-    const parameters = values({ parent: entity.id, index, ...item }, fields);
+    const parameters = values({ parent: entity.id, index, ...record }, fields);
     const base = `INSERT INTO ${descriptor.table} (${cols.join(",")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(",")})`;
     const update = cols.filter(col => col !== descriptor.parentColumn && col !== "id").map(col => `${col}=EXCLUDED.${col}`).join(",");
     const query = descriptor.name === "messages" ? `${base} ON CONFLICT (session_id,id) DO UPDATE SET ${update}` : base;

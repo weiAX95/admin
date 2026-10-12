@@ -13,6 +13,7 @@ function markdown(sessions, exportedAt) {
     lines.push(`## 会话 ${session.id}`, '', `- 聊天端用户 ID：${session.userId}`, `- 创建时间：${session.createdAt}`, `- 更新时间：${session.updatedAt}`, `- 消息数：${session.messages.length}`, '');
     for (const entry of session.messages) {
       lines.push(`### ${entry.role === 'assistant' ? 'Assistant' : 'User'} · ${entry.at}`, '', fenced(entry.content), '');
+      if (entry.usage) lines.push(`- Token 用量：输入 ${entry.usage.promptTokens}，输出 ${entry.usage.completionTokens}${entry.usage.model ? `；模型：${entry.usage.model}` : ''}`);
       for (const annotation of entry.annotations) lines.push(`- 标注：${annotation.rating}/5；标签：${annotation.tags.join('、') || '无'}；时间：${annotation.updatedAt}`);
       if (entry.annotations.length) lines.push('');
     }
@@ -34,7 +35,7 @@ export async function exportSessions(pool, body, role, now = new Date()) {
       await client.query('ROLLBACK');
       return { status: 404, error: '所选会话不存在，请刷新列表后重试' };
     }
-    const messagesResult = await client.query('SELECT session_id,id,role,content,at,item_order FROM session_messages WHERE session_id=ANY($1::text[]) ORDER BY session_id,item_order,id', [ids]);
+    const messagesResult = await client.query('SELECT session_id,id,role,content,at,item_order,prompt_tokens,completion_tokens,usage_model FROM session_messages WHERE session_id=ANY($1::text[]) ORDER BY session_id,item_order,id', [ids]);
     const annotationsResult = await client.query(`SELECT a.id,a.session_id,a.message_id,a.reviewer_id,a.rating,a.created_at,a.updated_at,
       coalesce(array_agg(t.tag ORDER BY t.tag) FILTER (WHERE t.tag IS NOT NULL),ARRAY[]::text[]) AS tags
       FROM message_annotations a LEFT JOIN annotation_tags t ON t.annotation_id=a.id
@@ -47,7 +48,7 @@ export async function exportSessions(pool, body, role, now = new Date()) {
       annotations.get(key).push({ id: row.id, ...(role === 'admin' ? { reviewerId: row.reviewer_id } : {}), rating: row.rating, tags: row.tags, createdAt: row.created_at, updatedAt: row.updated_at });
     }
     const messages = new Map(ids.map(id => [id, []]));
-    for (const row of messagesResult.rows) messages.get(row.session_id).push({ id: row.id, role: row.role, content: row.content, at: row.at, annotations: annotations.get(`${row.session_id}\0${row.id}`) || [] });
+    for (const row of messagesResult.rows) messages.get(row.session_id).push({ id: row.id, role: row.role, content: row.content, at: row.at, ...(row.prompt_tokens === null ? {} : { usage: { promptTokens: row.prompt_tokens, completionTokens: row.completion_tokens, ...(row.usage_model ? { model: row.usage_model } : {}) } }), annotations: annotations.get(`${row.session_id}\0${row.id}`) || [] });
     const byId = new Map(sessionsResult.rows.map(row => [row.id, row]));
     const sessions = ids.map(id => {
       const row = byId.get(id);

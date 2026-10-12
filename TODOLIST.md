@@ -223,14 +223,10 @@
   - [ ] 每个 cluster 自动生成标签（提取 TF-IDF top-3 关键词）
   - [ ] 会话列表支持按 cluster 筛选
   - [ ] AC：聚类结果可手动调整标签；新增会话自动归入最近 cluster
-- [ ] **3.5 Token 用量统计**
-  - [ ] 每条会话显示 token 消耗（由聊天端上报或后端 proxy 层记录）
-  - [ ] 汇总面板（Dashboard 子页或独立指标区）：
-    - [ ] 总 token 消耗（本月 / 总计）
-    - [ ] 每日 token 消耗趋势折线图
-    - [ ] 平均每次会话 token 数
-    - [ ] Top 10 耗 token 会话列表
-  - [ ] AC：无 token 数据时显示「需接入 token 统计」
+- [ ] **3.5 Token 用量统计（接口和构建已验证，页面显示待用户验收）**
+  - [x] 聊天端可对 assistant 消息首次上报或补报 token 用量；会话列表展示已上报总量，未上报显示缺失而非零
+  - [x] 会话页独立指标区展示本月／总计、上海日历每日趋势、每次已上报会话平均量及 Top 10 会话；口径与上报契约见 [会话用量说明](docs/session-token-usage.md)
+  - [ ] AC：无 token 数据时显示「需接入 token 统计」；页面正式显示由用户验收，聊天端尚需接入实际上报
 - [ ] **3.6 成本估算**
   - [ ] 设置页配置各模型定价（input/output per 1K tokens）
   - [ ] 每条会话成本 = input_tokens × input_price + output_tokens × output_price

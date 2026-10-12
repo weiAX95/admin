@@ -151,6 +151,7 @@ export interface SessionMessage {
   role: "user" | "assistant";
   content: string;
   at: string;
+  usage?: { promptTokens: number; completionTokens: number; model?: string };
   annotation?: MessageAnnotationView;
 }
 
@@ -167,6 +168,7 @@ export interface SessionSummary {
   messageCount: number;
   createdAt: string;
   updatedAt: string;
+  totalTokens: number | null;
 }
 
 export interface SessionDetail extends SessionSummary {

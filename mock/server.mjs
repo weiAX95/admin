@@ -1292,6 +1292,14 @@ async function handleRequest(req, res) {
     }
 
     // ---- sessions ----
+    const sessionUsage = session => {
+      const reported = session.messages.filter(item => item.role === 'assistant' && item.usage);
+      if (!reported.length) return null;
+      const promptTokens = reported.reduce((sum, item) => sum + item.usage.promptTokens, 0);
+      const completionTokens = reported.reduce((sum, item) => sum + item.usage.completionTokens, 0);
+      return { promptTokens, completionTokens, totalTokens: promptTokens + completionTokens, reportedMessages: reported.length };
+    };
+    const sessionTitle = session => (session.messages.find(item => item.role === 'user')?.content || '（无标题）').slice(0, 40);
     const annotationRoute = pathname.match(/^\/api\/sessions\/([^/]+)\/messages\/([^/]+)\/annotation$/);
     if (annotationRoute && method === "POST") {
       const session = db.sessions.find(item => item.id === annotationRoute[1]);
@@ -1314,22 +1322,45 @@ async function handleRequest(req, res) {
       return send(res, 200, annotation);
     }
     if (pathname === "/api/sessions" && method === "GET") {
-      const items = db.sessions.map((s) => ({
-        id: s.id, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt,
-        messageCount: s.messages.length,
-        title: (s.messages.find((m) => m.role === "user")?.content || "（无标题）").slice(0, 40),
-      }));
+      const items = db.sessions.map(s => {
+        const usage = sessionUsage(s);
+        return { id: s.id, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt,
+          messageCount: s.messages.length, title: sessionTitle(s), totalTokens: usage?.totalTokens ?? null };
+      });
       items.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
       return send(res, 200, { items });
+    }
+    if (pathname === '/api/sessions/token-stats' && method === 'GET') {
+      const reported = db.sessions.map(session => ({ session, usage: sessionUsage(session) })).filter(item => item.usage);
+      const totalTokens = reported.reduce((sum, item) => sum + item.usage.totalTokens, 0);
+      const currentMonth = shanghaiDate(new Date()).slice(0, 7);
+      const daily = new Map();
+      let monthTokens = 0;
+      for (const { session } of reported) for (const entry of session.messages) {
+        if (!entry.usage) continue;
+        const day = shanghaiDate(entry.at);
+        const tokens = entry.usage.promptTokens + entry.usage.completionTokens;
+        daily.set(day, (daily.get(day) || 0) + tokens);
+        if (day.startsWith(currentMonth)) monthTokens += tokens;
+      }
+      return send(res, 200, {
+        hasData: reported.length > 0,
+        totalTokens: reported.length ? totalTokens : null,
+        monthTokens: reported.length ? monthTokens : null,
+        averagePerSession: reported.length ? totalTokens / reported.length : null,
+        reportedSessions: reported.length,
+        daily: [...daily].sort(([left], [right]) => left.localeCompare(right)).map(([date, tokens]) => ({ date, totalTokens: tokens })),
+        topSessions: reported.sort((left, right) => right.usage.totalTokens - left.usage.totalTokens || left.session.id.localeCompare(right.session.id)).slice(0, 10).map(({ session, usage }) => ({ id: session.id, title: sessionTitle(session), totalTokens: usage.totalTokens })),
+      });
     }
     const sess = pathname.match(/^\/api\/sessions\/([^/]+)$/);
     if (sess && method === "GET") {
       const s = db.sessions.find((x) => x.id === sess[1]);
       if (!s) return send(res, 404, { error: "session not found" });
-      const title = (s.messages.find((m) => m.role === "user")?.content || "（无标题）").slice(0, 40);
+      const title = sessionTitle(s);
       const annotated = [];
       for (const item of s.messages) annotated.push(item.role === "assistant" ? { ...item, annotation: await annotationView(activeClient, s.id, item.id, me.id) } : item);
-      return send(res, 200, { ...s, messages: annotated, title, messageCount: s.messages.length });
+      return send(res, 200, { ...s, messages: annotated, title, messageCount: s.messages.length, totalTokens: sessionUsage(s)?.totalTokens ?? null });
     }
     // web 端上报会话（预留联动入口）
     if (pathname === "/api/sessions/ingest" && method === "POST") {
@@ -1340,16 +1371,31 @@ async function handleRequest(req, res) {
       const incoming = [];
       for (const item of body.messages) {
         if (!item || !["user", "assistant"].includes(item.role) || typeof item.content !== "string" || (item.id !== undefined && (typeof item.id !== "string" || !item.id))) return send(res, 422, { error: "消息格式无效" });
+        let usage;
+        if (Object.hasOwn(item, 'usage')) {
+          const value = item.usage;
+          if (item.role !== 'assistant' || !value || typeof value !== 'object' || Array.isArray(value)
+            || !Number.isInteger(value.promptTokens) || value.promptTokens < 0 || value.promptTokens > 2147483647
+            || !Number.isInteger(value.completionTokens) || value.completionTokens < 0 || value.completionTokens > 2147483647
+            || (value.model !== undefined && (typeof value.model !== 'string' || !value.model.trim() || value.model.length > 120))) return send(res, 422, { error: 'assistant 用量必须包含非负整数 promptTokens / completionTokens，可选 model' });
+          if (Number.isNaN(Date.parse(item.at || nowIso()))) return send(res, 422, { error: '上报用量的消息时间无效' });
+          usage = { promptTokens: value.promptTokens, completionTokens: value.completionTokens, ...(value.model === undefined ? {} : { model: value.model.trim() }) };
+        }
         if (existing && !item.id) return send(res, 422, { error: "再次上报会话时，消息必须携带首次返回的 ID" });
         const id = item.id || newId();
         if (seen.has(id)) return send(res, 409, { error: "同一会话内消息 ID 重复" });
         seen.add(id);
-        incoming.push({ id, role: item.role, content: item.content, at: item.at || nowIso() });
+        incoming.push({ id, role: item.role, content: item.content, at: item.at || nowIso(), ...(usage ? { usage } : {}) });
       }
       if (existing) {
         for (const item of incoming) {
           const previous = existing.messages.find(message => message.id === item.id);
           if (previous && (previous.role !== item.role || previous.content !== item.content || previous.at !== item.at)) return send(res, 409, { error: `已有消息不能改写：${item.id}` });
+          if (previous?.usage && item.usage && JSON.stringify(previous.usage) !== JSON.stringify(item.usage)) return send(res, 409, { error: `已有消息用量不能改写：${item.id}` });
+        }
+        for (const item of incoming) {
+          const previous = existing.messages.find(message => message.id === item.id);
+          if (previous && !previous.usage && item.usage) previous.usage = item.usage;
         }
         existing.messages.push(...incoming.filter(item => !existing.messages.some(message => message.id === item.id)));
         existing.updatedAt = nowIso();

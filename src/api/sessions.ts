@@ -4,6 +4,17 @@ import { ApiError, clearAuth, getToken, http } from "./client";
 export const listSessions = () =>
   http.get<{ items: SessionSummary[] }>("/sessions");
 
+export interface SessionTokenStats {
+  hasData: boolean;
+  totalTokens: number | null;
+  monthTokens: number | null;
+  averagePerSession: number | null;
+  reportedSessions: number;
+  daily: { date: string; totalTokens: number }[];
+  topSessions: { id: string; title: string; totalTokens: number }[];
+}
+export const getSessionTokenStats = () => http.get<SessionTokenStats>('/sessions/token-stats');
+
 export interface SessionSearchHit {
   sessionId: string;
   messageId: string;
