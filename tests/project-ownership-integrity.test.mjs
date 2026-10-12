@@ -25,10 +25,32 @@ test('project analysis relationships cannot cross repositories or owners', async
   await insertAnalysis(analysisA, repositoryA, scanA, 'member');
   await insertAnalysis(analysisB, repositoryB, scanB, 'learner');
 
+  const baselineA = randomUUID(), baselineB = randomUUID();
+  for (const [id, repository] of [[baselineA, repositoryA], [baselineB, repositoryB]]) {
+    await client.query("INSERT INTO project_requirement_baselines(id,repository_id,version,content,content_sha256) VALUES($1,$2,1,'需求',$3)", [id, repository, 'c'.repeat(64)]);
+  }
+  await assert.rejects(client.query('UPDATE project_repositories SET baseline_version_id=$2 WHERE id=$1', [repositoryA, baselineB]), { code: '23503' });
+  await assert.rejects(client.query('UPDATE project_analyses SET baseline_version_id=$2 WHERE id=$1', [analysisA, baselineB]), { code: '23503' });
+  await client.query('UPDATE project_repositories SET baseline_version_id=$2 WHERE id=$1', [repositoryA, baselineA]);
+  await client.query('UPDATE project_analyses SET baseline_version_id=$2 WHERE id=$1', [analysisA, baselineA]);
+  await client.query('DELETE FROM project_requirement_baselines WHERE id=$1', [baselineA]);
+  assert.equal((await client.query('SELECT baseline_version_id FROM project_repositories WHERE id=$1', [repositoryA])).rows[0].baseline_version_id, null);
+  assert.equal((await client.query('SELECT baseline_version_id FROM project_analyses WHERE id=$1', [analysisA])).rows[0].baseline_version_id, null);
+
   const suggestionA = randomUUID(), suggestionB = randomUUID();
   for (const [id, analysis] of [[suggestionA, analysisA], [suggestionB, analysisB]]) {
     await client.query("INSERT INTO project_analysis_suggestions(id,analysis_id,position,topic,reason,practice,acceptance) VALUES($1,$2,0,'主题','理由','实践','验收')", [id, analysis]);
   }
+  const findingA = randomUUID(), findingB = randomUUID();
+  for (const [id, analysis] of [[findingA, analysisA], [findingB, analysisB]]) {
+    await client.query("INSERT INTO project_analysis_findings(id,analysis_id,position,title,status,detail) VALUES($1,$2,0,'功能','unverified','待验证')", [id, analysis]);
+  }
+  await assert.rejects(client.query('UPDATE project_analysis_suggestions SET finding_id=$2 WHERE id=$1', [suggestionA, findingB]), { code: '23503' });
+  await client.query('UPDATE project_analysis_suggestions SET finding_id=$2 WHERE id=$1', [suggestionA, findingA]);
+  const feedback = (finding, analysis, owner) => client.query("INSERT INTO project_finding_feedback(id,analysis_id,finding_id,owner_id,corrected_status,reason) VALUES($1,$2,$3,$4,'partial','人工复核后发现尚未完成')", [randomUUID(), analysis, finding, owner]);
+  await assert.rejects(feedback(findingB, analysisA, 'member'), { code: '23503' });
+  await assert.rejects(feedback(findingA, analysisA, 'learner'), { code: '23503' });
+  await feedback(findingA, analysisA, 'member');
   const decide = (suggestion, analysis, repository, owner) => client.query(`INSERT INTO project_suggestion_decisions
     (suggestion_id,analysis_id,repository_id,owner_id,state,fingerprint)
     VALUES ($1,$2,$3,$4,'ignored',$5)`, [suggestion, analysis, repository, owner, 'f'.repeat(64)]);

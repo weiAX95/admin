@@ -4,6 +4,8 @@
 
 > [069_project_ownership_integrity.sql](../db/migrations/069_project_ownership_integrity.sql) 为项目分析增加复合外键，防止仓库、扫描、分析、建议决定在数据库层交叉归属；表数量不变。迁移遇到历史关联不一致时会报错，需先核对来源，不会自动改写旧记录。
 
+> [070_project_report_provenance.sql](../db/migrations/070_project_report_provenance.sql) 进一步限制需求版本必须属于指向它的仓库，结论与建议及人工校正必须属于同一分析，校正账号必须是分析所属账号。删除需求版本时仅清空版本指针，不清空仓库或分析归属。
+
 ## 系统设置与个人偏好
 
 ```mermaid
@@ -84,7 +86,7 @@ flowchart LR
 flowchart LR
   Users[(users)] -->|"FK owner_id · ON DELETE CASCADE"| Repositories[(project_repositories)]
   Repositories -->|"FK repository_id · ON DELETE CASCADE"| Baselines[(project_requirement_baselines)]
-  Baselines -->|"FK baseline_version_id · ON DELETE SET NULL"| Repositories
+  Baselines -->|"FK baseline_version_id + repository_id · ON DELETE SET NULL baseline_version_id"| Repositories
   Page["/project-analysis"] --> API["/api/project-repositories"] --> Repositories
   API --> GitHub["GitHub 公开仓库与分支 REST API"]
   Repositories -->|"FK repository_id · ON DELETE CASCADE"| Scans[(project_scans)]
@@ -93,7 +95,7 @@ flowchart LR
   Users -->|"FK linked_by · ON DELETE SET NULL"| RepositoryTasks
   Scans -->|"FK scan_id · ON DELETE CASCADE"| Files[(project_scan_files)]
   Repositories -->|"FK repository_id + owner_id · ON DELETE CASCADE"| Analyses[(project_analyses)]
-  Baselines -->|"FK baseline_version_id · ON DELETE SET NULL"| Analyses
+  Baselines -->|"FK baseline_version_id + repository_id · ON DELETE SET NULL baseline_version_id"| Analyses
   Scans -->|"FK scan_id + repository_id · ON DELETE CASCADE"| Analyses
   Users -->|"FK owner_id · ON DELETE CASCADE"| Analyses
   Models[(experiment_models)] -->|"FK model_id"| Analyses
@@ -105,10 +107,10 @@ flowchart LR
   Modules -->|"FK analysis_id + module_key · ON DELETE CASCADE"| Findings[(project_analysis_findings)]
   Analyses -->|"FK analysis_id · ON DELETE CASCADE"| Findings[(project_analysis_findings)]
   Analyses -->|"FK analysis_id · ON DELETE CASCADE"| Suggestions[(project_analysis_suggestions)]
-  Findings -->|"FK finding_id · ON DELETE SET NULL"| Suggestions
-  Findings -->|"FK finding_id · ON DELETE CASCADE"| Feedback[(project_finding_feedback)]
+  Findings -->|"FK finding_id + analysis_id · ON DELETE SET NULL finding_id"| Suggestions
+  Findings -->|"FK finding_id + analysis_id · ON DELETE CASCADE"| Feedback[(project_finding_feedback)]
   Analyses -->|"FK analysis_id · ON DELETE CASCADE"| Feedback
-  Users -->|"FK owner_id · ON DELETE CASCADE"| Feedback
+  Users -->|"FK owner_id · ON DELETE CASCADE；分析所属账号"| Feedback
   Suggestions -->|"FK suggestion_id + analysis_id · ON DELETE CASCADE"| Decisions[(project_suggestion_decisions)]
   Analyses -->|"FK analysis_id + repository_id + owner_id · ON DELETE CASCADE"| Decisions
   Repositories -->|"FK repository_id · ON DELETE CASCADE"| Decisions
