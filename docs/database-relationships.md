@@ -12,6 +12,8 @@
 
 > [073_project_suggestion_task_links.sql](../db/migrations/073_project_suggestion_task_links.sql) 将过去已接受建议创建、仍存在但未关联仓库的任务补入关联表；重复执行不产生重复关联，现有手工关联不被覆盖。
 
+> [074_project_suggestion_existing_tasks.sql](../db/migrations/074_project_suggestion_existing_tasks.sql) 为建议决定增加 `target_mode`：接受时区分新建任务与关联已有任务，旧接受记录标记为新建；忽略决定保持空值，CHECK 约束校验状态组合。
+
 ## 系统设置与个人偏好
 
 ```mermaid
@@ -84,7 +86,7 @@ flowchart LR
 
 `retention_settings` 是单行版本化保留配置，保存独立安全审计保留天数、会话保留天数、核心内容回收天数以及系统时区下的清理时间。`retention_cleanup_runs` 以本地日历日为主键，记录每日清理结果和逐项永久删除失败原因，避免重启后重复执行。清理器删除过期 `security_audit_logs` 与 `sessions`；会话删除级联消息和评分，未审核会话候选同时删除，已审核候选和摘录笔记保留并显示“原会话已清理”。[035_core_recycle_bin.sql](../db/migrations/035_core_recycle_bin.sql) 给 `tasks`、`notes`、`experiments` 增加 `deleted_at`；`prompt_library` 已在旧迁移中有该字段。删除后正常读取过滤已删除行，管理员可恢复或永久删除；到期清理按行设置保存点，关联约束阻止删除时保留条目并记录失败。恢复实验不会恢复已撤销的分享或暂停的调度；恢复任务暂不重建删除时从其他任务移除的依赖边。这两张保留策略表无外键。
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [073_project_suggestion_task_links.sql](../db/migrations/073_project_suggestion_task_links.sql)。当前共 **118 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [074_project_suggestion_existing_tasks.sql](../db/migrations/074_project_suggestion_existing_tasks.sql)。当前共 **118 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -141,7 +143,7 @@ flowchart LR
 
 `project_scans` 固定创建时的仓库名称、分支与 commit，记录排队、扫描中、完整、部分或失败状态及各类覆盖计数。进行中的相同仓库／commit 扫描由唯一索引合并；服务重启后排队或扫描中的作业重新运行。`project_scan_files` 以扫描 ID 与路径为复合主键，保存文件 Git SHA、大小、分类、读取状态、内容哈希及成功读取的 UTF-8 正文；非读取成功的记录由 CHECK 约束禁止保存正文。列表只返回索引字段，正文读取接口先验证当前账号拥有仓库连接。迁移前的旧扫描正文为空，需要重新扫描。
 
-`project_analyses` 兼作后台任务和已完成报告的固定头部，保存账号、仓库、扫描、模型的外键，以及提交时冻结的仓库名称、分支、commit、目标、需求基线、供应商／模型和单价。相同扫描与模型的进行中任务由部分唯一索引合并；启动后排队任务会重新处理；分析中的任务按模块调用记录恢复，结果未知时停止。`attempts` 记录已发起的调用尝试，默认最多三次；`project_analysis_attempts` 以分析 ID＋次数为复合主键，外键指向主任务并级联删除，保存每次预算预估及累计用量。`project_analysis_module_calls` 以分析 ID＋次数＋模块名为复合主键，调用前记录 `started`，响应及费用入账时同事务改为 `completed`。`project_analysis_model_charges` 逐次保存模块模型调用的 token、费用和入账时间，并以分析 ID＋次数外键关联尝试；迁移时旧尝试的已知费用保留为单条调用。活跃预留持续占用当日预算，实际费用按每次调用的入账日统计。`project_analysis_modules` 以分析 ID＋目录模块名为复合主键，保存此次报告的索引、读取、入选、截断、排除、失败和未扫描文件数，以及成功分析的模块摘要；只在整份报告成功事务中写入，不为旧报告伪造历史选择。`project_analysis_technologies` 记录固定扫描中可读 `package.json`、`requirements.txt`、`pyproject.toml`、`go.mod`、`Cargo.toml` 明确依赖行的已知技术名称、包名、原始文件行与 Git SHA；它只提供有限的依赖声明线索，不证明运行或实际使用。`project_analysis_findings` 的可空 `module_key` 与分析 ID 一起引用模块，旧结论保持空值。新增可空 `requirement_id` 保存本次固定需求正文中提取的稳定 ID；它是报告内文本标识，不是 SQL 外键，旧结论保持空值。`project_finding_feedback` 逐条记录账号对结论状态的人工校正及理由，不改写模型判断与代码证据；报告按时间倒序展示全部记录。`project_suggestion_decisions` 以建议 ID 为主键，保存账号对建议的接受／忽略决定；接受时在同一事务创建现有 `tasks` 行，数据库的部分唯一索引阻止同账号同仓库归一化文字指纹重复接受。任务被永久删除后 `task_id` 置空；删除报告或仓库时决定记录级联删除，已创建任务仍保留，任务正文包含当时的实践、验收及来源链接。`canceled_at` 记录取消时间；取消时中断运行中请求，迟到结果不得写成成功报告。`project_analysis_findings` 逐条保存状态、说明和文件行证据；`project_analysis_suggestions` 保存实践任务与验收要求，可用外键指向关联结论，删除结论时置空。新报告还保存模型估计的影响等级、影响下一步开发的理由和前置知识数组；旧报告这些新增字段为空，不反推模型当时未给出的判断。子表随分析删除级联。分析结果在一个事务中写入；只有每个模块 JSON 结构及路径／行号／原文证据校验通过才置为已完成。当前模型调用由 API 进程内队列执行，并以 PostgreSQL 咨询锁防止跨进程并行接手。重启后已保存的模块响应可复用；调用结果未知时停止自动重发，需人工决定是否重试，仍无法保证供应商严格只计费一次。已经发出的请求取消后也可能由供应商计费，详见[分析调用恢复规则](project-analysis-recovery.md)。
+`project_analyses` 兼作后台任务和已完成报告的固定头部，保存账号、仓库、扫描、模型的外键，以及提交时冻结的仓库名称、分支、commit、目标、需求基线、供应商／模型和单价。相同扫描与模型的进行中任务由部分唯一索引合并；启动后排队任务会重新处理；分析中的任务按模块调用记录恢复，结果未知时停止。`attempts` 记录已发起的调用尝试，默认最多三次；`project_analysis_attempts` 以分析 ID＋次数为复合主键，外键指向主任务并级联删除，保存每次预算预估及累计用量。`project_analysis_module_calls` 以分析 ID＋次数＋模块名为复合主键，调用前记录 `started`，响应及费用入账时同事务改为 `completed`。`project_analysis_model_charges` 逐次保存模块模型调用的 token、费用和入账时间，并以分析 ID＋次数外键关联尝试；迁移时旧尝试的已知费用保留为单条调用。活跃预留持续占用当日预算，实际费用按每次调用的入账日统计。`project_analysis_modules` 以分析 ID＋目录模块名为复合主键，保存此次报告的索引、读取、入选、截断、排除、失败和未扫描文件数，以及成功分析的模块摘要；只在整份报告成功事务中写入，不为旧报告伪造历史选择。`project_analysis_technologies` 记录固定扫描中可读 `package.json`、`requirements.txt`、`pyproject.toml`、`go.mod`、`Cargo.toml` 明确依赖行的已知技术名称、包名、原始文件行与 Git SHA；它只提供有限的依赖声明线索，不证明运行或实际使用。`project_analysis_findings` 的可空 `module_key` 与分析 ID 一起引用模块，旧结论保持空值。新增可空 `requirement_id` 保存本次固定需求正文中提取的稳定 ID；它是报告内文本标识，不是 SQL 外键，旧结论保持空值。`project_finding_feedback` 逐条记录账号对结论状态的人工校正及理由，不改写模型判断与代码证据；报告按时间倒序展示全部记录。`project_suggestion_decisions` 以建议 ID 为主键，保存账号对建议的接受／忽略决定；接受时可在同一事务新建 `tasks` 行，或经字段差异预览和任务版本检查后，仅给已有任务描述追加实践、验收与来源；`target_mode` 标明新建或已有任务。数据库的部分唯一索引阻止同账号同仓库归一化文字指纹重复接受。任务被永久删除后 `task_id` 置空；删除报告或仓库时决定记录级联删除，任务本体仍保留。`canceled_at` 记录取消时间；取消时中断运行中请求，迟到结果不得写成成功报告。`project_analysis_findings` 逐条保存状态、说明和文件行证据；`project_analysis_suggestions` 保存实践任务与验收要求，可用外键指向关联结论，删除结论时置空。新报告还保存模型估计的影响等级、影响下一步开发的理由和前置知识数组；旧报告这些新增字段为空，不反推模型当时未给出的判断。子表随分析删除级联。分析结果在一个事务中写入；只有每个模块 JSON 结构及路径／行号／原文证据校验通过才置为已完成。当前模型调用由 API 进程内队列执行，并以 PostgreSQL 咨询锁防止跨进程并行接手。重启后已保存的模块响应可复用；调用结果未知时停止自动重发，需人工决定是否重试，仍无法保证供应商严格只计费一次。已经发出的请求取消后也可能由供应商计费，详见[分析调用恢复规则](project-analysis-recovery.md)。
 
 `project_analysis_flows` 按分析与模块保存模型提出的有序核心流程线索，`project_analysis_flow_steps` 保存每个步骤的说明、代码或测试证据类型、文件路径、行号、原文及固定 Git SHA。每一步均需逐字匹配本次进入模型的源码或测试行；文档、目录名及无法定位的文字不能形成流程。流程与其他报告内容在同一事务中保存，任一步校验失败时整份报告不得置为成功。页面展示固定 commit 的行链接，并明确静态线索不是运行验收。
 

@@ -348,6 +348,49 @@ test('accepting a learning suggestion creates one linked task with task history 
   assert.equal((await client.query("SELECT count(*)::int AS n FROM tasks WHERE title='验证入口'")).rows[0].n,1);
 });
 
+test('existing task suggestion requires a current diff preview and preserves manual task fields', async t => {
+  const { client, base } = await createPgTestServer(t);
+  const { repositoryId, scanId, path } = await fixture(client);
+  const me = { id: 'member', username: 'member', role: 'member' };
+  await client.query("INSERT INTO tasks(id,title,description,status,progress,manual_progress,owner_id,version,category,phase,priority,due_date,planned_start_date,created_at,updated_at) VALUES('existing-learning','人工任务','已有手写内容','in_progress',45,45,'member',4,'自定义','实战','high','','',now()::text,now()::text)");
+  const started = await handleProjectAnalyses({ pathname: path, method: 'POST', client, me, readBody: async () => ({ scanId, modelId: 'project-model' }), connectionAvailable: async () => true, runModel: async () => ({ output: report, promptTokens: 2, completionTokens: 3 }) });
+  assert.equal(await waitFor(client,started.data.id),'completed');
+  const detail = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  const suggestionId = detail.suggestions[0].id;
+  const previewPath = `${path}/${started.data.id}/suggestions/${suggestionId}/preview`;
+  const actionPath = `${path}/${started.data.id}/suggestions/${suggestionId}/accept`;
+  const preview = await handleProjectSuggestionAction({ pathname: previewPath, method: 'GET', client, me, url: new URL(`http://local${previewPath}?taskId=existing-learning`) });
+  assert.equal(preview.status,200);
+  assert.equal(preview.data.version,4);
+  assert.equal(preview.data.changes[0].oldValue,'已有手写内容');
+  assert.ok(preview.data.changes[0].newValue.startsWith('已有手写内容\n\n---\n\n'));
+  assert.match(preview.data.changes[0].addedValue,/## 验收标准/);
+  assert.equal((await handleProjectSuggestionAction({ pathname: previewPath, method: 'GET', client, me, url: new URL(`http://local${previewPath}?taskId=seed-task-1`) })).status,404);
+  const stale = await handleProjectSuggestionAction({ pathname: actionPath, method: 'POST', client, me, readBody: async () => ({ targetTaskId: 'existing-learning', expectedTaskVersion: 3 }) });
+  assert.equal(stale.status,409);
+  assert.equal((await client.query("SELECT description,version FROM tasks WHERE id='existing-learning'")).rows[0].version,4);
+  assert.equal((await client.query('SELECT count(*)::int AS n FROM project_suggestion_decisions WHERE suggestion_id=$1', [suggestionId])).rows[0].n,0);
+  const accepted = await handleProjectSuggestionAction({ pathname: actionPath, method: 'POST', client, me, readBody: async () => ({ targetTaskId: 'existing-learning', expectedTaskVersion: preview.data.version }) });
+  assert.equal(accepted.status,201);
+  assert.equal(accepted.data.targetMode,'existing');
+  assert.equal(accepted.data.taskId,'existing-learning');
+  const task = (await client.query("SELECT title,description,status,progress,manual_progress,version,category,phase,priority FROM tasks WHERE id='existing-learning'")).rows[0];
+  assert.equal(task.description,preview.data.changes[0].newValue);
+  assert.deepEqual({ title: task.title, status: task.status, progress: Number(task.progress), manualProgress: Number(task.manual_progress), version: task.version, category: task.category, phase: task.phase, priority: task.priority }, { title: '人工任务', status: 'in_progress', progress: 45, manualProgress: 45, version: 5, category: '自定义', phase: '实战', priority: 'high' });
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM change_logs WHERE task_id='existing-learning' AND field_name='description'")).rows[0].n,1);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM activity WHERE task_id='existing-learning' AND type='update'")).rows[0].n,1);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM project_repository_tasks WHERE repository_id=$1 AND task_id='existing-learning'", [repositoryId])).rows[0].n,1);
+  assert.equal((await handleProjectSuggestionAction({ pathname: actionPath, method: 'POST', client, me, readBody: async () => ({ targetTaskId: 'existing-learning', expectedTaskVersion: 4 }) })).status,200);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM change_logs WHERE task_id='existing-learning' AND field_name='description'")).rows[0].n,1);
+  assert.equal((await handleProjectSuggestionAction({ pathname: actionPath, method: 'POST', client, me, readBody: async () => ({ targetTaskId: 'seed-task-1', expectedTaskVersion: 1 }) })).status,409);
+  const refreshed = (await handleProjectAnalyses({ pathname: `${path}/${started.data.id}`, method: 'GET', client, me })).data;
+  assert.equal(refreshed.suggestions[0].decision.targetMode,'existing');
+  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
+  const { token } = await login.json();
+  const httpPreview = await fetch(`${base}${previewPath.slice(4)}?taskId=existing-learning`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(httpPreview.status,409);
+});
+
 test('suggestion decisions reject stale reports and preserve an ignored choice', async t => {
   const { client } = await createPgTestServer(t);
   const { repositoryId, scanId, path } = await fixture(client);

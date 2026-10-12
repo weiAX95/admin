@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
-import { addProjectFindingFeedback, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
+import { listTasks } from '../api/tasks';
+import { addProjectFindingFeedback, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, previewProjectSuggestionTask, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan, type ProjectSuggestionTaskPreview } from '../api/projectRepositories';
 import ProjectReportComparison from './ProjectReportComparison';
 
 const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败', canceled: '已取消' };
@@ -28,6 +29,13 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [starting, setStarting] = useState(false);
   const [actingId, setActingId] = useState('');
   const [actingSuggestionId, setActingSuggestionId] = useState('');
+  const [attachSuggestionId, setAttachSuggestionId] = useState('');
+  const [attachOptions, setAttachOptions] = useState<{ value: string; label: string }[]>([]);
+  const [attachTaskId, setAttachTaskId] = useState('');
+  const [attachPreview, setAttachPreview] = useState<ProjectSuggestionTaskPreview | null>(null);
+  const [attachLoading, setAttachLoading] = useState(false);
+  const [attachSaving, setAttachSaving] = useState(false);
+  const [attachError, setAttachError] = useState('');
   const [feedbackFindingId, setFeedbackFindingId] = useState('');
   const [feedbackStatus, setFeedbackStatus] = useState<ProjectAnalysisReport['findings'][number]['status']>('unverified');
   const [feedbackReason, setFeedbackReason] = useState('');
@@ -48,6 +56,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     setComparison(null);
     setOlderId('');
     setNewerId('');
+    setAttachSuggestionId('');
     loadedMore.current = false;
     latestCompletedId.current = '';
     let cancelled = false;
@@ -139,6 +148,39 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       message.success(action === 'accept' ? '已创建学习任务' : '已忽略建议');
     } catch (cause) { setError(cause instanceof Error ? cause.message : '建议处理失败'); }
     finally { setActingSuggestionId(''); }
+  };
+  const openAttach = async (suggestionId: string) => {
+    setAttachSuggestionId(suggestionId);
+    setAttachTaskId('');
+    setAttachPreview(null);
+    setAttachError('');
+    setAttachLoading(true);
+    try {
+      const tasks = await listTasks();
+      setAttachOptions(tasks.items.map(task => ({ value: task.id, label: `${task.title} · ${task.status}` })));
+    } catch (cause) { setAttachError(cause instanceof Error ? cause.message : '任务列表读取失败'); }
+    finally { setAttachLoading(false); }
+  };
+  const previewAttach = async () => {
+    if (!report || !attachTaskId || !attachSuggestionId) return;
+    setAttachLoading(true);
+    setAttachError('');
+    try { setAttachPreview(await previewProjectSuggestionTask(repository.id,report.id,attachSuggestionId,attachTaskId)); }
+    catch (cause) { setAttachPreview(null); setAttachError(cause instanceof Error ? cause.message : '变更预览失败'); }
+    finally { setAttachLoading(false); }
+  };
+  const confirmAttach = async () => {
+    if (!report || !attachPreview || attachPreview.taskId !== attachTaskId) return;
+    setAttachSaving(true);
+    setAttachError('');
+    try {
+      await decideProjectSuggestion(repository.id,report.id,attachSuggestionId,'accept',{ targetTaskId: attachTaskId, expectedTaskVersion: attachPreview.version });
+      setReport(await getProjectAnalysis(repository.id,report.id));
+      setAttachSuggestionId('');
+      setAttachPreview(null);
+      message.success('已关联任务并追加建议来源');
+    } catch (cause) { setAttachPreview(null); setAttachError(cause instanceof Error ? cause.message : '保存失败，请重新预览'); }
+    finally { setAttachSaving(false); }
   };
   const saveFeedback = async () => {
     if (!report || !feedbackFindingId) return;
@@ -250,15 +292,35 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <Typography.Paragraph><strong>实践：</strong>{suggestion.practice}</Typography.Paragraph>
         <Typography.Paragraph><strong>验收：</strong>{suggestion.acceptance}</Typography.Paragraph>
         {!suggestion.decision && suggestion.possibleDuplicates.length > 0 && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={suggestion.possibleDuplicates.some(item => item.exact) ? '相同建议已创建任务' : '可能已有相关学习任务，请先核对'} description={<Space wrap>{suggestion.possibleDuplicates.map(item => <Link key={item.taskId} to={`/tasks/${item.taskId}`}>{item.title}</Link>)}</Space>} />}
-        {suggestion.decision?.status === 'accepted' && <Space><Tag color="success">已加入任务</Tag>{suggestion.decision.taskId && <Link to={`/tasks/${suggestion.decision.taskId}`}>查看任务</Link>}</Space>}
+        {suggestion.decision?.status === 'accepted' && <Space><Tag color="success">{suggestion.decision.targetMode === 'existing' ? '已关联已有任务' : '已创建学习任务'}</Tag>{suggestion.decision.taskId && <Link to={`/tasks/${suggestion.decision.taskId}`}>查看任务</Link>}</Space>}
         {suggestion.decision?.status === 'ignored' && <Tag>已忽略</Tag>}
         {suggestion.status === 'stale' && <Tag color="warning">已失效，需重审</Tag>}
         {!suggestion.decision && <Space>
           <Popconfirm title="确认将此建议创建为学习任务？" description={suggestion.possibleDuplicates.length ? '可能已有相关任务；确认它们不同后再创建。' : '任务会保留实践、验收要求与当前报告来源。'} onConfirm={() => void decide(suggestion.id,'accept')}><Button type="primary" size="small" disabled={report.staleReasons.length > 0 || suggestion.possibleDuplicates.some(item => item.exact)} loading={actingSuggestionId === suggestion.id}>加入任务</Button></Popconfirm>
+          <Button size="small" disabled={report.staleReasons.length > 0 || suggestion.possibleDuplicates.some(item => item.exact)} onClick={() => void openAttach(suggestion.id)}>关联已有任务</Button>
           <Popconfirm title="确认忽略此建议？" onConfirm={() => void decide(suggestion.id,'ignore')}><Button size="small" loading={actingSuggestionId === suggestion.id}>忽略</Button></Popconfirm>
         </Space>}
       </Card>) : <Empty description="暂无建议" />}
     </Card>}
+    <Modal title="关联建议到已有任务" open={Boolean(attachSuggestionId)} width={900} onCancel={() => { setAttachSuggestionId(''); setAttachPreview(null); }} onOk={() => void confirmAttach()} okText="确认追加并关联" okButtonProps={{ disabled: !attachPreview || attachPreview.taskId !== attachTaskId, loading: attachSaving }}>
+      <Typography.Paragraph type="secondary">只在任务描述末尾追加本建议、验收标准和固定 commit 来源；原标题、状态、进度及其他手工字段不会被修改。确认时会检查任务版本，若其他人已修改，须重新预览。</Typography.Paragraph>
+      {attachError && <Alert type="error" showIcon message={attachError} style={{ marginBottom: 12 }} />}
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Select aria-label="选择已有学习任务" showSearch optionFilterProp="label" value={attachTaskId || undefined} onChange={value => { setAttachTaskId(value); setAttachPreview(null); }} options={attachOptions} loading={attachLoading} placeholder="搜索任务" style={{ minWidth: 350 }} />
+        <Button disabled={!attachTaskId} loading={attachLoading} onClick={() => void previewAttach()}>预览字段差异</Button>
+      </Space>
+      {attachPreview && <>
+        <Typography.Paragraph><strong>任务：</strong>{attachPreview.title}（版本 {attachPreview.version}）</Typography.Paragraph>
+        {attachPreview.changes.map(change => <div key={change.fieldName}>
+          <Typography.Title level={5}>描述字段</Typography.Title>
+          <Space align="start" style={{ width: '100%' }} wrap>
+            <div style={{ flex: '1 1 300px' }}><Typography.Text type="secondary">当前内容</Typography.Text><Input.TextArea aria-label="当前任务描述" value={change.oldValue || '（空）'} readOnly rows={8} /></div>
+            <div style={{ flex: '1 1 300px' }}><Typography.Text type="secondary">确认后内容</Typography.Text><Input.TextArea aria-label="确认后任务描述" value={change.newValue} readOnly rows={8} /></div>
+          </Space>
+          <Typography.Paragraph style={{ marginTop: 12 }}><Tag color="green">新增内容</Tag><Typography.Text style={{ whiteSpace: 'pre-wrap' }}>{change.addedValue}</Typography.Text></Typography.Paragraph>
+        </div>)}
+      </>}
+    </Modal>
     <Modal title="修正报告判断" open={Boolean(feedbackFindingId)} onCancel={() => setFeedbackFindingId('')} onOk={() => void saveFeedback()} okText="保存校正" okButtonProps={{ disabled: feedbackReason.trim().length < 10 || feedbackReason.trim().length > 1000, loading: savingFeedback }}>
       <Typography.Paragraph type="secondary">校正会作为独立记录保存，原始模型结论和证据不变。</Typography.Paragraph>
       <Select aria-label="人工判断" value={feedbackStatus} onChange={setFeedbackStatus} style={{ width: '100%', marginBottom: 12 }} options={Object.entries(findingStates).map(([value,label]) => ({ value,label }))} />
