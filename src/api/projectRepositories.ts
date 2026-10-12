@@ -19,6 +19,9 @@ export interface ProjectRepository {
 
 export const listProjectRepositories = () => http.get<{ items: ProjectRepository[] }>('/project-repositories');
 export const createProjectRepository = (body: { url: string; branch?: string; goal: string; requirementBaseline?: string }) => http.post<ProjectRepository>('/project-repositories', body);
+export const updateProjectRepository = (item: ProjectRepository, body: { goal: string; requirementBaseline: string }) => http.patch<ProjectRepository>(`/project-repositories/${item.id}`, {
+  ...body, expectedGoal: item.goal, expectedRequirementBaseline: item.requirementBaseline, expectedBaselineVersionId: item.baselineVersionId,
+});
 export const refreshProjectRepository = (id: string) => http.post<ProjectRepository>(`/project-repositories/${id}/refresh`, {});
 export interface ProjectLinkedTask { id: string; title: string; status: string; ownerId?: string }
 export const listProjectLinkedTasks = (repositoryId: string) => http.get<{ items: ProjectLinkedTask[] }>(`/project-repositories/${repositoryId}/tasks`);

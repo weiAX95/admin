@@ -12,6 +12,7 @@ export function parseGitHubRepository(value) {
 }
 
 const validBranch = value => typeof value === 'string' && value.length >= 1 && value.length <= 200 && /^[\w./-]+$/.test(value) && !value.startsWith('/') && !value.endsWith('/') && !value.includes('..') && !value.includes('//');
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const publicRow = row => ({ id: row.id, ownerId: row.owner_id, fullName: row.full_name, url: `https://github.com/${row.full_name}`, branch: row.branch, goal: row.goal, requirementBaseline: row.requirement_baseline, baselineVersionId: row.baseline_version_id || null, commitSha: row.commit_sha.trim(), lastCheckedAt: row.last_checked_at, lastAnalysisAt: row.last_analysis_at || null, lastAnalyzedCommitSha: row.last_analyzed_commit_sha?.trim() || null, createdAt: row.created_at, updatedAt: row.updated_at });
 const repositoryQuery = `SELECT r.*, latest.finished_at AS last_analysis_at, latest.commit_sha AS last_analyzed_commit_sha
   FROM project_repositories r LEFT JOIN LATERAL (
@@ -76,7 +77,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     } catch (error) { if (error.code === '23505') return fail(409, '该分支已接入'); throw error; }
   }
   const id = pathname.split('/')[3];
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return fail(404, '项目不存在');
+  if (!UUID.test(id)) return fail(404, '项目不存在');
   const row = (await client.query(`${repositoryQuery} WHERE r.id=$1 AND r.owner_id=$2`, [id,me.id])).rows[0];
   if (!row) return fail(404, '项目不存在');
   if (pathname.endsWith('/tasks') && method === 'GET') {
@@ -99,6 +100,22 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     try { taskId = decodeURIComponent(unlink[1]); } catch { return fail(400, '任务 ID 无效'); }
     const deleted = await client.query('DELETE FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [id,taskId]);
     return deleted.rowCount ? { status: 200, data: { deleted: true, taskId } } : fail(404, '关联不存在');
+  }
+  if (method === 'PATCH' && pathname.endsWith(`/${id}`)) {
+    const body = await readBody();
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['goal','requirementBaseline','expectedGoal','expectedRequirementBaseline','expectedBaselineVersionId'].includes(key))) return fail(400, '项目修改字段无效');
+    const goal = typeof body.goal === 'string' ? body.goal.trim() : '';
+    const baseline = body.requirementBaseline === undefined ? row.requirement_baseline : typeof body.requirementBaseline === 'string' ? body.requirementBaseline.trim() : null;
+    if (!goal || goal.length > 2000 || baseline === null || baseline.length > 200 || containsKnownSecret(goal) || containsKnownSecret(baseline)) return fail(400, '项目目标或需求基线无效，且不得包含凭据');
+    if (typeof body.expectedGoal !== 'string' || typeof body.expectedRequirementBaseline !== 'string' || body.expectedBaselineVersionId !== null && (typeof body.expectedBaselineVersionId !== 'string' || !UUID.test(body.expectedBaselineVersionId))) return fail(400, '缺少当前项目版本，请刷新后重试');
+    if (row.baseline_version_id && baseline !== row.requirement_baseline) return fail(409, '已有版本化需求文档，请通过新版本修改正文');
+    const changed = await client.query(`UPDATE project_repositories SET goal=$3,requirement_baseline=$4,updated_at=now()
+      WHERE id=$1 AND owner_id=$2 AND goal=$5 AND requirement_baseline=$6
+        AND baseline_version_id IS NOT DISTINCT FROM $7::uuid
+        AND (baseline_version_id IS NULL OR requirement_baseline=$4)
+      RETURNING *`, [id,me.id,goal,baseline,body.expectedGoal,body.expectedRequirementBaseline,body.expectedBaselineVersionId]);
+    if (!changed.rowCount) return fail(409, '项目目标或需求版本已变化，请刷新后重试');
+    return { status: 200, data: publicRow({ ...changed.rows[0], last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) };
   }
   if (method === 'GET' && pathname.endsWith(`/${id}`)) return { status: 200, data: publicRow(row) };
   if (method === 'POST' && pathname.endsWith('/refresh')) {

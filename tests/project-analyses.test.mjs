@@ -105,6 +105,11 @@ test('analysis persists validated report and source evidence, isolates owners, a
   const afterRefresh = (await handleProjectRepositories({ pathname: `/api/project-repositories/${repositoryId}`, method: 'GET', client, me })).data;
   assert.equal(afterRefresh.commitSha, 'f'.repeat(40));
   assert.equal(afterRefresh.lastAnalyzedCommitSha, sha);
+  const edited = await handleProjectRepositories({ pathname: `/api/project-repositories/${repositoryId}`, method: 'PATCH', client, me, readBody: async () => ({ goal: '新的学习目标', expectedGoal: '学习项目', expectedRequirementBaseline: 'v1', expectedBaselineVersionId: null }) });
+  assert.equal(edited.status, 200);
+  const preserved = await handleProjectAnalyses({ pathname: `${path}/${start.data.id}`, method: 'GET', client, me });
+  assert.equal(preserved.data.goal, '学习项目');
+  assert.ok(preserved.data.staleReasons.includes('项目目标已变化'));
 });
 
 test('analysis calls the model per selected module and merges evidence with cumulative usage', async t => {

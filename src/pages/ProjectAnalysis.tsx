@@ -1,20 +1,25 @@
 import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
-import { getStoredUser } from '../api/client';
+import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
-import { createProjectRepository, createProjectRequirementBaseline, getProjectRequirementBaseline, linkProjectTask, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, unlinkProjectTask, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
+import { createProjectRepository, createProjectRequirementBaseline, getProjectRequirementBaseline, linkProjectTask, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, unlinkProjectTask, updateProjectRepository, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
 type FormValues = { url: string; branch?: string; goal: string; requirementBaseline?: string };
+type EditValues = { goal: string; requirementBaseline: string };
 
 export default function ProjectAnalysis() {
   const { message } = App.useApp();
   const [form] = Form.useForm<FormValues>();
+  const [editForm] = Form.useForm<EditValues>();
   const [items, setItems] = useState<ProjectRepository[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState<ProjectRepository | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
   const [refreshing, setRefreshing] = useState('');
   const [selectedRepositoryId, setSelectedRepositoryId] = useState('');
   const [baselineRepositoryId, setBaselineRepositoryId] = useState('');
@@ -49,6 +54,26 @@ export default function ProjectAnalysis() {
     try { await refreshProjectRepository(id); await load(); message.success('分支 commit 已更新'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '读取分支失败'); }
     finally { setRefreshing(''); }
+  };
+  const openEdit = (item: ProjectRepository) => {
+    setEditing(item);
+    setEditError('');
+    editForm.setFieldsValue({ goal: item.goal, requirementBaseline: item.requirementBaseline });
+  };
+  const saveEdit = async (values: EditValues) => {
+    if (!editing) return;
+    setEditSaving(true);
+    setEditError('');
+    try {
+      await updateProjectRepository(editing, values);
+      setEditing(null);
+      await load();
+      message.success('项目目标已更新，已有报告保留原始快照');
+    } catch (cause) {
+      setEditError(cause instanceof ApiError && cause.status === 409 ? `${cause.message}。关闭弹窗后重新打开可加载最新内容。` : cause instanceof Error ? cause.message : '项目修改失败');
+      if (cause instanceof ApiError && cause.status === 409) await load();
+    }
+    finally { setEditSaving(false); }
   };
   const openBaseline = async (item: ProjectRepository) => {
     setBaselineRepositoryId(item.id);
@@ -128,9 +153,18 @@ export default function ProjectAnalysis() {
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
         { title: '最近完成分析', render: (_, item: ProjectRepository) => item.lastAnalysisAt && item.lastAnalyzedCommitSha ? <Space direction="vertical" size={0}><span>{new Date(item.lastAnalysisAt).toLocaleString('zh-CN')}</span><a href={`${item.url}/commit/${item.lastAnalyzedCommitSha}`} target="_blank" rel="noopener noreferrer" title={item.lastAnalyzedCommitSha}><code>{item.lastAnalyzedCommitSha.slice(0, 10)}</code></a>{item.commitSha !== item.lastAnalyzedCommitSha && <Tag color="warning">有新提交待分析</Tag>}</Space> : '尚无完成的分析' },
-        { title: '操作', render: (_, item: ProjectRepository) => <Space><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
+        { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />
     </Card>
+    <Modal title={editing ? `编辑项目 · ${editing.fullName}` : '编辑项目'} open={Boolean(editing)} forceRender onCancel={() => { if (!editSaving) setEditing(null); }} onOk={() => editForm.submit()} okText="保存修改" okButtonProps={{ loading: editSaving }} cancelButtonProps={{ disabled: editSaving }}>
+      {editError && <Alert type="error" showIcon message={editError} style={{ marginBottom: 16 }} />}
+      <Typography.Paragraph type="secondary">修改后只影响后续分析；已有报告保留创建时的目标与需求快照。</Typography.Paragraph>
+      <Form form={editForm} layout="vertical" onFinish={values => void saveEdit(values)}>
+        <Form.Item name="goal" label="项目目标" rules={[{ required: true, whitespace: true, message: '请填写项目目标' }, { max: 2000 }]}><Input.TextArea rows={4} maxLength={2000} showCount /></Form.Item>
+        <Form.Item name="requirementBaseline" label="需求基线标记" rules={[{ max: 200 }]}><Input maxLength={200} disabled={Boolean(editing?.baselineVersionId)} /></Form.Item>
+        {editing?.baselineVersionId && <Typography.Paragraph type="secondary">已有版本化需求文档。请使用“需求文档”入口保存新版本。</Typography.Paragraph>}
+      </Form>
+    </Modal>
     {items.find(item => item.id === selectedRepositoryId) && <ProjectScanPanel key={selectedRepositoryId} repository={items.find(item => item.id === selectedRepositoryId)!} onAnalysisCompleted={() => void load()} />}
     <Modal title="关联已有学习任务" open={Boolean(taskRepositoryId)} footer={null} onCancel={() => setTaskRepositoryId('')}>
       {taskError && <Alert type="error" showIcon message={taskError} style={{ marginBottom: 12 }} />}

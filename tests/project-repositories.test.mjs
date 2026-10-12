@@ -20,6 +20,31 @@ test('repository goals containing credentials are rejected before contacting Git
   assert.equal(calls, 0);
 });
 
+test('project owner can repair legacy metadata without rewriting versioned requirements', async t => {
+  const { client } = await createPgTestServer(t);
+  const id = '11111111-1111-4111-8111-111111111111';
+  const oldGoal = 'inspect github_pat_' + 'A'.repeat(48);
+  await client.query("INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,requirement_baseline,commit_sha) VALUES($1,'member','octocat/example','main',$2,'旧标记',$3)", [id,oldGoal,'a'.repeat(40)]);
+  const path = `/api/project-repositories/${id}`;
+  const member = { id: 'member', role: 'member' }, other = { id: 'learner', role: 'member' };
+  const body = { goal: '安全的学习目标', requirementBaseline: '新标记', expectedGoal: oldGoal, expectedRequirementBaseline: '旧标记', expectedBaselineVersionId: null };
+  const update = (me, patch = body) => handleProjectRepositories({ pathname: path, method: 'PATCH', client, me, readBody: async () => patch });
+  assert.equal((await update(other)).status, 404);
+  assert.equal((await update(member, { ...body, goal: 'github_pat_' + 'B'.repeat(48) })).status, 400);
+  const repaired = await update(member);
+  assert.equal(repaired.status, 200);
+  assert.equal(repaired.data.goal, body.goal);
+  assert.equal(repaired.data.requirementBaseline, body.requirementBaseline);
+  assert.equal((await update(member)).status, 409);
+  const baselineId = '22222222-2222-4222-8222-222222222222';
+  await client.query("INSERT INTO project_requirement_baselines(id,repository_id,version,content,content_sha256) VALUES($1,$2,1,'固定需求',$3)", [baselineId,id,'b'.repeat(64)]);
+  await client.query('UPDATE project_repositories SET baseline_version_id=$2,requirement_baseline=$3 WHERE id=$1', [id,baselineId,'需求文档 v1']);
+  const current = { goal: '修订目标', expectedGoal: body.goal, expectedRequirementBaseline: '需求文档 v1', expectedBaselineVersionId: baselineId };
+  assert.equal((await update(member, { ...current, requirementBaseline: '绕过版本' })).status, 409);
+  assert.equal((await update(member, current)).status, 200);
+  assert.equal((await client.query('SELECT content FROM project_requirement_baselines WHERE id=$1', [baselineId])).rows[0].content, '固定需求');
+});
+
 test('repository registration pins a public branch commit and isolates accounts', async t => {
   const { client } = await createPgTestServer(t);
   const calls = [];
@@ -57,7 +82,7 @@ test('repository registration pins a public branch commit and isolates accounts'
 });
 
 test('HTTP project routes require a live login before reading account projects', async t => {
-  const { base } = await createPgTestServer(t);
+  const { base, client } = await createPgTestServer(t);
   assert.equal((await fetch(`${base}/project-repositories`)).status, 401);
   const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
   const { token } = await login.json();
@@ -67,6 +92,14 @@ test('HTTP project routes require a live login before reading account projects',
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
   assert.equal((await fetch(`${base}/project-repositories`, { method: 'POST', headers, body: '{' })).status, 400);
   assert.equal((await fetch(`${base}/project-repositories`, { method: 'POST', headers, body: JSON.stringify({ url: 'x'.repeat(17000) }) })).status, 413);
+  const id = '33333333-3333-4333-8333-333333333333';
+  await client.query("INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,commit_sha) VALUES($1,'member','octocat/http','main','旧目标',$2)", [id,'a'.repeat(40)]);
+  const patch = { goal: '更新后的目标', requirementBaseline: '', expectedGoal: '旧目标', expectedRequirementBaseline: '', expectedBaselineVersionId: null };
+  assert.equal((await fetch(`${base}/project-repositories/${id}`, { method: 'PATCH', body: JSON.stringify(patch), headers: { 'Content-Type': 'application/json' } })).status, 401);
+  const updated = await fetch(`${base}/project-repositories/${id}`, { method: 'PATCH', body: JSON.stringify(patch), headers });
+  assert.equal(updated.status, 200);
+  assert.equal((await updated.json()).goal, '更新后的目标');
+  assert.equal((await fetch(`${base}/project-repositories/${id}`, { method: 'PATCH', body: JSON.stringify(patch), headers })).status, 409);
 });
 
 test('repository task links require project ownership and an eligible task, then follow task deletion', async t => {
