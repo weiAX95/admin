@@ -2,6 +2,8 @@
 
 > 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量、成本、上报归属与质量标记见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)、[063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)、[064_session_ingest_ownership.sql](../db/migrations/064_session_ingest_ownership.sql) 、[065_session_quality_flags.sql](../db/migrations/065_session_quality_flags.sql) 、[066_session_clusters.sql](../db/migrations/066_session_clusters.sql) 和 [067_session_cluster_counters.sql](../db/migrations/067_session_cluster_counters.sql)；分析调用恢复见 [068_project_analysis_call_recovery.sql](../db/migrations/068_project_analysis_call_recovery.sql)。迁移后数据库共有 115 张表。
 
+> [069_project_ownership_integrity.sql](../db/migrations/069_project_ownership_integrity.sql) 为项目分析增加复合外键，防止仓库、扫描、分析、建议决定在数据库层交叉归属；表数量不变。迁移遇到历史关联不一致时会报错，需先核对来源，不会自动改写旧记录。
+
 ## 系统设置与个人偏好
 
 ```mermaid
@@ -90,9 +92,9 @@ flowchart LR
   Tasks[(tasks)] -->|"FK task_id · ON DELETE CASCADE"| RepositoryTasks
   Users -->|"FK linked_by · ON DELETE SET NULL"| RepositoryTasks
   Scans -->|"FK scan_id · ON DELETE CASCADE"| Files[(project_scan_files)]
-  Repositories -->|"FK repository_id · ON DELETE CASCADE"| Analyses[(project_analyses)]
+  Repositories -->|"FK repository_id + owner_id · ON DELETE CASCADE"| Analyses[(project_analyses)]
   Baselines -->|"FK baseline_version_id · ON DELETE SET NULL"| Analyses
-  Scans -->|"FK scan_id · ON DELETE CASCADE"| Analyses
+  Scans -->|"FK scan_id + repository_id · ON DELETE CASCADE"| Analyses
   Users -->|"FK owner_id · ON DELETE CASCADE"| Analyses
   Models[(experiment_models)] -->|"FK model_id"| Analyses
   Analyses -->|"FK analysis_id · ON DELETE CASCADE"| Attempts[(project_analysis_attempts)]
@@ -107,8 +109,8 @@ flowchart LR
   Findings -->|"FK finding_id · ON DELETE CASCADE"| Feedback[(project_finding_feedback)]
   Analyses -->|"FK analysis_id · ON DELETE CASCADE"| Feedback
   Users -->|"FK owner_id · ON DELETE CASCADE"| Feedback
-  Suggestions -->|"FK suggestion_id · ON DELETE CASCADE"| Decisions[(project_suggestion_decisions)]
-  Analyses -->|"FK analysis_id · ON DELETE CASCADE"| Decisions
+  Suggestions -->|"FK suggestion_id + analysis_id · ON DELETE CASCADE"| Decisions[(project_suggestion_decisions)]
+  Analyses -->|"FK analysis_id + repository_id + owner_id · ON DELETE CASCADE"| Decisions
   Repositories -->|"FK repository_id · ON DELETE CASCADE"| Decisions
   Users -->|"FK owner_id · ON DELETE CASCADE"| Decisions
   Tasks -->|"FK task_id · ON DELETE SET NULL"| Decisions
