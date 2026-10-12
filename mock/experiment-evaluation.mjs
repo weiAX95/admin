@@ -150,8 +150,26 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     if (me.role !== 'admin') return fail('仅管理员可审核候选池', 403);
     const status = url.searchParams.get('status') || 'pending';
     if (!['pending','staged','rejected','ineligible','published'].includes(status)) return fail('候选状态无效');
+    const source = url.searchParams.get('source') || 'all';
+    if (!['all','session','experiment'].includes(source)) return fail('候选来源无效');
     const page = Math.max(1,Math.min(10000,Number(url.searchParams.get('page')) || 1));
-    return ok({ items: (await client.query('SELECT * FROM evaluation_candidates WHERE status=$1 ORDER BY created_at DESC LIMIT 50 OFFSET $2', [status,(page-1)*50])).rows, page });
+    return ok({ items: (await client.query('SELECT * FROM evaluation_candidates WHERE status=$1 AND ($2=$3 OR source_type=$2) ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET $4', [status,source,'all',(page-1)*50])).rows, page });
+  }
+  if (pathname === '/api/evaluation/candidates/qa-summary' && method === 'GET') {
+    if (me.role !== 'admin') return fail('仅管理员可查看问答审核统计', 403);
+    const counts = (await client.query(`SELECT
+      count(*) FILTER (WHERE status='pending')::int AS pending,
+      count(*) FILTER (WHERE status IN ('staged','published'))::int AS accepted,
+      count(*) FILTER (WHERE status='rejected')::int AS rejected
+      FROM evaluation_candidates WHERE source_type='session' AND rating>=4`)).rows[0];
+    const reviewed = counts.accepted + counts.rejected;
+    return ok({ ...counts, reviewed, approvalRate: reviewed ? counts.accepted / reviewed : null });
+  }
+  if (pathname === '/api/evaluation/candidates/qa-export' && method === 'GET') {
+    if (me.role !== 'admin') return fail('仅管理员可导出问答对', 403);
+    const rows = (await client.query("SELECT id,input_payload,expected_payload,context_payload,tags FROM evaluation_candidates WHERE source_type='session' AND rating>=4 AND status IN ('staged','published') ORDER BY created_at,id")).rows;
+    const content = rows.map(row => JSON.stringify({ caseKey: `candidate-${row.id}`, input: row.input_payload, expectedOutput: row.expected_payload, context: row.context_payload, tags: row.tags, difficulty: 3, source: 'session_extract' })).join('\n');
+    return ok({ filename: 'session-qa.jsonl', content: content ? `${content}\n` : '', count: rows.length });
   }
   if (pathname === '/api/evaluation/candidates/publish' && method === 'POST') {
     if (me.role !== 'admin') return fail('仅管理员可发布候选用例', 403);
