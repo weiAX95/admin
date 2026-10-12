@@ -45,6 +45,79 @@ test('core content is hidden, restorable, and purged with its child records', as
   assert.equal((await client.query('SELECT count(*)::int AS n FROM experiments WHERE id=$1', [experiment.data.id])).rows[0].n, 0);
 });
 
+test('restoring multiple deleted predecessors rebuilds untouched dependent edges and history', async t => {
+  const { base, client } = await createPgTestServer(t);
+  const admin = await login(base, 'admin', 'admin123');
+  await client.query("INSERT INTO tasks(id,title,status,owner_id,version,description) VALUES('recycle-a','前置 A','todo','admin',1,''),('recycle-b','前置 B','todo','admin',1,''),('recycle-c','下游任务','in_progress','admin',1,'')");
+  await client.query("INSERT INTO task_dependencies(task_id,dependency_id,item_order) VALUES('recycle-c','recycle-a',0),('recycle-c','recycle-b',1)");
+  const deleted = await request(base,admin,'POST','/tasks/bulk',{ ids: ['recycle-a','recycle-b'], versions: { 'recycle-a': 1, 'recycle-b': 1 }, action: 'delete' });
+  assert.equal(deleted.status,200);
+  assert.deepEqual((await request(base,admin,'GET','/tasks/recycle-c')).data.dependencyIds,[]);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM task_dependency_restore_edges WHERE dependent_task_id='recycle-c'")).rows[0].n,2);
+  const first = await request(base,admin,'POST','/settings/recycle-bin/task/recycle-b/restore');
+  assert.equal(first.status,200);
+  assert.equal(first.data.restoredDependencies,1);
+  assert.deepEqual(first.data.skippedDependencies,[]);
+  assert.deepEqual((await request(base,admin,'GET','/tasks/recycle-c')).data.dependencyIds,['recycle-b']);
+  const second = await request(base,admin,'POST','/settings/recycle-bin/task/recycle-a/restore');
+  assert.equal(second.status,200);
+  assert.equal(second.data.restoredDependencies,1);
+  assert.deepEqual((await request(base,admin,'GET','/tasks/recycle-c')).data.dependencyIds,['recycle-a','recycle-b']);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM change_logs WHERE task_id='recycle-c' AND field_name='dependencyIds'")).rows[0].n,3);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM task_dependency_restore_edges WHERE dependent_task_id='recycle-c'")).rows[0].n,0);
+});
+
+test('restore reports dependent tasks changed after deletion instead of overwriting their dependencies', async t => {
+  const { base, client } = await createPgTestServer(t);
+  const admin = await login(base, 'admin', 'admin123');
+  await client.query("INSERT INTO tasks(id,title,status,owner_id,version,description) VALUES('recycle-other','其他前置','todo','admin',1,'')");
+  await client.query("INSERT INTO task_dependencies(task_id,dependency_id,item_order) VALUES('seed-task-2','seed-task-1',0)");
+  assert.equal((await request(base,admin,'DELETE','/tasks/seed-task-1')).status,200);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM task_dependency_restore_edges WHERE deleted_task_id='seed-task-1'")).rows[0].n,1);
+  assert.equal((await request(base,admin,'PATCH','/tasks/seed-task-2',{ dependencyIds: ['recycle-other'] })).status,200);
+  const restored = await request(base,admin,'POST','/settings/recycle-bin/task/seed-task-1/restore');
+  assert.equal(restored.status,200);
+  assert.equal(restored.data.restoredDependencies,0);
+  assert.deepEqual(restored.data.skippedDependencies,[{ taskId: 'seed-task-2', reason: '关联任务的依赖已被修改' }]);
+  assert.deepEqual((await request(base,admin,'GET','/tasks/seed-task-2')).data.dependencyIds,['recycle-other']);
+});
+
+test('restoration waits for a deleted dependent task and reconnects when it is restored', async t => {
+  const { base, client } = await createPgTestServer(t);
+  const admin = await login(base, 'admin', 'admin123');
+  await client.query("INSERT INTO task_dependencies(task_id,dependency_id,item_order) VALUES('seed-task-2','seed-task-1',0)");
+  assert.equal((await request(base,admin,'DELETE','/tasks/seed-task-1')).status,200);
+  assert.equal((await request(base,admin,'DELETE','/tasks/seed-task-2')).status,200);
+  const parent = await request(base,admin,'POST','/settings/recycle-bin/task/seed-task-1/restore');
+  assert.equal(parent.status,200);
+  assert.equal(parent.data.restoredDependencies,0);
+  assert.equal(parent.data.deferredDependencies,1);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM task_dependency_restore_edges WHERE deleted_task_id='seed-task-1'")).rows[0].n,1);
+  const child = await request(base,admin,'POST','/settings/recycle-bin/task/seed-task-2/restore');
+  assert.equal(child.status,200);
+  assert.equal(child.data.restoredDependencies,1);
+  assert.deepEqual((await request(base,admin,'GET','/tasks/seed-task-2')).data.dependencyIds,['seed-task-1']);
+});
+
+test('restore refuses a dependency cycle and purge removes pending restoration edges', async t => {
+  const { base, client } = await createPgTestServer(t);
+  const admin = await login(base, 'admin', 'admin123');
+  await client.query("INSERT INTO task_dependencies(task_id,dependency_id,item_order) VALUES('seed-task-2','seed-task-1',0)");
+  assert.equal((await request(base,admin,'DELETE','/tasks/seed-task-1')).status,200);
+  await client.query("INSERT INTO task_dependencies(task_id,dependency_id,item_order) VALUES('seed-task-1','seed-task-2',0)");
+  const restored = await request(base,admin,'POST','/settings/recycle-bin/task/seed-task-1/restore');
+  assert.equal(restored.status,200);
+  assert.equal(restored.data.restoredDependencies,0);
+  assert.match(restored.data.skippedDependencies[0].reason,/循环依赖/);
+  assert.deepEqual((await request(base,admin,'GET','/tasks/seed-task-2')).data.dependencyIds,[]);
+  await client.query("DELETE FROM task_dependencies WHERE task_id='seed-task-1'");
+  await client.query("INSERT INTO task_dependencies(task_id,dependency_id,item_order) VALUES('seed-task-2','seed-task-1',0)");
+  assert.equal((await request(base,admin,'DELETE','/tasks/seed-task-1')).status,200);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM task_dependency_restore_edges WHERE deleted_task_id='seed-task-1'")).rows[0].n,1);
+  assert.equal((await request(base,admin,'POST','/settings/recycle-bin/task/seed-task-1/purge',{ confirmTitle: '起始任务' })).status,200);
+  assert.equal((await client.query("SELECT count(*)::int AS n FROM task_dependency_restore_edges WHERE deleted_task_id='seed-task-1'")).rows[0].n,0);
+});
+
 test('expired recycle rows are purged once; zero-day policy deletes immediately', async t => {
   const { base, client } = await createPgTestServer(t);
   const admin = await login(base, 'admin', 'admin123');

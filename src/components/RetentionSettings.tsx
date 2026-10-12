@@ -24,7 +24,13 @@ export default function RetentionSettings() {
   };
   const restore = async (item: RecycleItem) => {
     setBusyId(item.id);
-    try { await restoreRecycleItem(item); await refresh(); message.success('已恢复'); }
+    try {
+      const result = await restoreRecycleItem(item);
+      await refresh();
+      if (result.skippedDependencies?.length) Modal.warning({ title: '任务已恢复，部分依赖需要手动处理', content: <Space direction="vertical">{result.skippedDependencies.map(edge => <Typography.Text key={edge.taskId}>{edge.taskId}：{edge.reason}</Typography.Text>)}</Space> });
+      else if (result.deferredDependencies) message.info(`已恢复；${result.deferredDependencies} 条依赖将在相关任务恢复后尝试接回`);
+      else message.success(result.restoredDependencies ? `已恢复，接回 ${result.restoredDependencies} 条任务依赖` : '已恢复');
+    }
     catch (error) { message.error(error instanceof Error ? error.message : '恢复失败'); }
     finally { setBusyId(null); }
   };
@@ -34,7 +40,7 @@ export default function RetentionSettings() {
     onOk: async () => { setBusyId(item.id); try { await purgeRecycleItem(item); await refresh(); message.success('已永久删除'); } catch (error) { message.error(error instanceof Error ? error.message : '删除失败'); } finally { setBusyId(null); } },
   });
   return <Card title="数据保留策略" loading={!policy}>
-    <Typography.Paragraph type="secondary">清理时间按系统默认时区计算；服务启动后补做当天错过的清理。任务、笔记、实验及提示词删除后进入回收站；保留天数设为 0 时立即永久删除。恢复实验不会自动重新启用调度或分享。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">清理时间按系统默认时区计算；服务启动后补做当天错过的清理。任务、笔记、实验及提示词删除后进入回收站；保留天数设为 0 时立即永久删除。恢复任务会尝试接回删除时解除的依赖；下游任务的依赖若已被修改，会提示手动处理。恢复实验不会自动重新启用调度或分享。</Typography.Paragraph>
     <Form form={form} layout="inline" onFinish={save} style={{ rowGap: 12, marginBottom: 20 }}>
       <Form.Item name="auditDays" label="安全审计保留天数" rules={[{ required: true }]}><InputNumber min={30} max={365} /></Form.Item>
       <Form.Item name="sessionDays" label="会话保留天数" rules={[{ required: true }]}><InputNumber min={7} max={730} /></Form.Item>

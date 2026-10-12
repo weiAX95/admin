@@ -28,7 +28,43 @@ export async function handleRecycleBin({ pathname, method, client, me, readBody 
       if (invalid.length) return { status: 409, data: { error: `前置任务仍在回收站：${invalid.map(item => item.dependency_id).join('、')}` } };
     }
     await client.query(`UPDATE ${source.table} SET deleted_at=NULL WHERE id=$1`, [id]);
-    return { status: 200, data: { restored: true, id, type } };
+    if (type !== 'task') return { status: 200, data: { restored: true, id, type } };
+    const pending = (await client.query(`SELECT e.deleted_task_id,e.dependent_task_id,e.original_position,e.expected_dependency_ids,
+      parent.deleted_at AS parent_deleted_at,dependent.deleted_at AS dependent_deleted_at
+      FROM task_dependency_restore_edges e JOIN tasks parent ON parent.id=e.deleted_task_id
+      JOIN tasks dependent ON dependent.id=e.dependent_task_id
+      WHERE e.deleted_task_id=$1 OR e.dependent_task_id=$1 ORDER BY e.dependent_task_id,e.original_position FOR UPDATE OF e`, [id])).rows;
+    const edges = pending.filter(edge => !edge.parent_deleted_at && !edge.dependent_deleted_at);
+    const deferredDependencies = pending.length - edges.length;
+    const data = await loadData(client);
+    const before = structuredClone(data);
+    const skippedDependencies = [];
+    let restoredDependencies = 0;
+    for (const edge of edges) {
+      const dependent = data.tasks.find(task => task.id === edge.dependent_task_id);
+      if (!dependent) { skippedDependencies.push({ taskId: edge.dependent_task_id, reason: '关联任务已删除或仍在回收站' }); continue; }
+      const oldIds = dependent.dependencyIds || [];
+      if (JSON.stringify(oldIds) !== JSON.stringify(edge.expected_dependency_ids)) { skippedDependencies.push({ taskId: dependent.id, reason: '关联任务的依赖已被修改' }); continue; }
+      const nextIds = [...oldIds];
+      nextIds.splice(Math.min(edge.original_position,nextIds.length),0,edge.deleted_task_id);
+      const error = validateDependencies(data.tasks,dependent.id,nextIds,{ id: me.id, role: 'admin' });
+      if (error) { skippedDependencies.push({ taskId: dependent.id, reason: error }); continue; }
+      const original = structuredClone(dependent);
+      dependent.dependencyIds = nextIds;
+      dependent.version = (dependent.version || 1) + 1;
+      dependent.updatedAt = new Date().toISOString();
+      recordTaskChanges(data,original,dependent,me);
+      const predecessor = data.tasks.find(task => task.id === edge.deleted_task_id);
+      data.activity.unshift({ id: crypto.randomUUID(), type: 'update', taskId: dependent.id, title: dependent.title, detail: `恢复前置任务「${predecessor?.title || edge.deleted_task_id}」的依赖`, at: dependent.updatedAt, userId: me.id, username: me.username || me.id, userName: me.name || me.username || me.id });
+      await client.query('UPDATE task_dependency_restore_edges SET expected_dependency_ids=$3::jsonb WHERE dependent_task_id=$1 AND deleted_task_id<>$2 AND expected_dependency_ids=$4::jsonb', [dependent.id,edge.deleted_task_id,JSON.stringify(nextIds),JSON.stringify(oldIds)]);
+      restoredDependencies++;
+    }
+    if (restoredDependencies) {
+      data.activity.length = Math.min(data.activity.length,500);
+      await saveData(client,before,data);
+    }
+    for (const edge of edges) await client.query('DELETE FROM task_dependency_restore_edges WHERE deleted_task_id=$1 AND dependent_task_id=$2', [edge.deleted_task_id,edge.dependent_task_id]);
+    return { status: 200, data: { restored: true, id, type, restoredDependencies, deferredDependencies, skippedDependencies } };
   }
   const body = await readBody();
   if (body?.confirmTitle !== row.title) return { status: 400, data: { error: '请确认资源名称后永久删除' } };
@@ -43,3 +79,7 @@ export async function handleRecycleBin({ pathname, method, client, me, readBody 
   catch { await client.query('ROLLBACK TO SAVEPOINT recycle_purge'); await client.query('RELEASE SAVEPOINT recycle_purge'); return { status: 409, data: { error: '关联记录阻止永久删除，请先处理引用关系' } }; }
   return { status: 200, data: { purged: true, id, type } };
 }
+import crypto from 'node:crypto';
+import { loadData, saveData } from './postgres-store.mjs';
+import { validateDependencies } from './task-dependencies.mjs';
+import { recordTaskChanges } from './task-change-log.mjs';

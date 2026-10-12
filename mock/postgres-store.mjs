@@ -176,6 +176,18 @@ async function saveChildren(client, descriptor, entity, name, oldEntity) {
 
 export async function saveData(client, before, after) {
   let recycleDays;
+  const nextTasks = new Map((after.tasks || []).map(task => [task.id, task]));
+  const removedTaskIds = new Set((before.tasks || []).filter(task => !nextTasks.has(task.id)).map(task => task.id));
+  for (const previous of before.tasks || []) {
+    const current = nextTasks.get(previous.id);
+    if (!current) continue;
+    for (const [position,dependencyId] of (previous.dependencyIds || []).entries()) {
+      if (!removedTaskIds.has(dependencyId) || (current.dependencyIds || []).includes(dependencyId)) continue;
+      await client.query(`INSERT INTO task_dependency_restore_edges(deleted_task_id,dependent_task_id,original_position,expected_dependency_ids)
+        VALUES($1,$2,$3,$4::jsonb) ON CONFLICT (deleted_task_id,dependent_task_id)
+        DO UPDATE SET original_position=EXCLUDED.original_position,expected_dependency_ids=EXCLUDED.expected_dependency_ids,captured_at=now()`, [dependencyId,previous.id,position,JSON.stringify(current.dependencyIds || [])]);
+    }
+  }
   for (const descriptor of specs) {
     const previous = new Map((before[descriptor.name] || []).map(item => [item.id, item]));
     const next = new Map((after[descriptor.name] || []).map(item => [item.id, item]));
