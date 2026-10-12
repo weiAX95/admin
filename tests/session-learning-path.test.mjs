@@ -36,7 +36,7 @@ test('learning path orders one external user sessions without mixing another use
   ];
   const { base } = await createPgTestServer(t, fixture);
   assert.equal((await fetch(`${base}/sessions/learning-path?userId=chat-a`)).status, 401);
-  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
+  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'admin123' }) });
   const { token } = await login.json();
   const response = await fetch(`${base}/sessions/learning-path?userId=chat-a`, { headers: { Authorization: `Bearer ${token}` } });
   assert.equal(response.status, 200);

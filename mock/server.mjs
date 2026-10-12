@@ -550,7 +550,15 @@ async function handleRequest(req, res) {
     const accountTasks = db.tasks.filter(task => canUseDependency(task, me));
     const accountTaskIds = new Set(accountTasks.map(task => task.id));
     const linkedTaskVisible = taskId => !taskId || accountTaskIds.has(taskId);
-    const linkedRecordView = record => record && !linkedTaskVisible(record.taskId) ? { ...record, taskId: null } : record;
+    const noteSourceIds = me.role === 'admin' || !pathname.startsWith('/api/notes') ? null
+      : new Set((await activeClient.query('SELECT id FROM sessions WHERE ingested_by=$1', [me.id])).rows.map(row => row.id));
+    const linkedRecordView = record => {
+      if (!record) return record;
+      return { ...record,
+        taskId: linkedTaskVisible(record.taskId) ? record.taskId : null,
+        ...(noteSourceIds && record.sourceSessionId && !noteSourceIds.has(record.sourceSessionId) ? { sourceSessionId: null } : {}),
+      };
+    };
     const visibleTask = task => canUseDependency(task, me);
     const taskView = task => {
       if (!task || me.role === "admin") return task;
@@ -1300,6 +1308,7 @@ async function handleRequest(req, res) {
     }
 
     // ---- sessions ----
+    const visibleSessionIds = async () => me.role === 'admin' ? null : new Set((await activeClient.query('SELECT id FROM sessions WHERE ingested_by=$1', [me.id])).rows.map(row => row.id));
     const sessionUsage = session => {
       const reported = session.messages.filter(item => item.role === 'assistant' && item.usage);
       if (!reported.length) return null;
@@ -1310,6 +1319,8 @@ async function handleRequest(req, res) {
     const sessionTitle = session => (session.messages.find(item => item.role === 'user')?.content || '（无标题）').slice(0, 40);
     const annotationRoute = pathname.match(/^\/api\/sessions\/([^/]+)\/messages\/([^/]+)\/annotation$/);
     if (annotationRoute && method === "POST") {
+      const allowedSessions = await visibleSessionIds();
+      if (allowedSessions && !allowedSessions.has(annotationRoute[1])) return send(res, 404, { error: '消息不存在' });
       const session = db.sessions.find(item => item.id === annotationRoute[1]);
       const target = session?.messages.find(item => item.id === annotationRoute[2]);
       if (!target) return send(res, 404, { error: "消息不存在" });
@@ -1330,10 +1341,11 @@ async function handleRequest(req, res) {
       return send(res, 200, annotation);
     }
     if (pathname === "/api/sessions" && method === "GET") {
+      const allowedSessions = await visibleSessionIds();
       const quality = url.searchParams.get('quality');
       if (quality && !['rejection', 'excessive_length'].includes(quality)) return send(res, 400, { error: '质量标记类型无效' });
       const clusterId = url.searchParams.get('clusterId');
-      const clusterRows = (await activeClient.query('SELECT s.id,s.cluster_id,c.label AS cluster_label FROM sessions s LEFT JOIN session_clusters c ON c.id=s.cluster_id')).rows;
+      const clusterRows = (await activeClient.query("SELECT s.id,s.cluster_id,CASE WHEN $1='admin' THEN c.label ELSE concat('主题 ',left(c.id,6)) END AS cluster_label FROM sessions s LEFT JOIN session_clusters c ON c.id=s.cluster_id", [me.role])).rows;
       const clustersBySession = new Map(clusterRows.map(row => [row.id, row]));
       if (clusterId && !(await activeClient.query('SELECT 1 FROM session_clusters WHERE id=$1', [clusterId])).rowCount) return send(res, 400, { error: '主题聚类不存在' });
       const flagRows = (await activeClient.query("SELECT session_id,flag_type FROM session_quality_flags ORDER BY session_id, CASE flag_type WHEN 'rejection' THEN 0 ELSE 1 END")).rows;
@@ -1342,7 +1354,7 @@ async function handleRequest(req, res) {
         if (!qualityBySession.has(row.session_id)) qualityBySession.set(row.session_id, new Set());
         qualityBySession.get(row.session_id).add(row.flag_type);
       }
-      const items = db.sessions.map(s => {
+      const items = db.sessions.filter(s => !allowedSessions || allowedSessions.has(s.id)).map(s => {
         const usage = sessionUsage(s);
         return { id: s.id, userId: s.userId, createdAt: s.createdAt, updatedAt: s.updatedAt,
           messageCount: s.messages.length, title: sessionTitle(s), totalTokens: usage?.totalTokens ?? null,
@@ -1354,7 +1366,10 @@ async function handleRequest(req, res) {
     }
     if (pathname === '/api/sessions/clusters' && method === 'GET') {
       const settings = (await activeClient.query('SELECT requested_k,last_built_at FROM session_cluster_settings WHERE id=1')).rows[0];
-      const items = (await activeClient.query('SELECT id,label,auto_label,manually_labeled,member_count FROM session_clusters ORDER BY member_count DESC,label,id')).rows.map(row => ({ id: row.id, label: row.label, autoLabel: row.auto_label, manuallyLabeled: row.manually_labeled, memberCount: row.member_count }));
+      const rows = me.role === 'admin'
+        ? (await activeClient.query('SELECT id,label,auto_label,manually_labeled,member_count FROM session_clusters ORDER BY member_count DESC,label,id')).rows
+        : (await activeClient.query('SELECT c.id,count(s.id)::int AS member_count FROM session_clusters c JOIN sessions s ON s.cluster_id=c.id AND s.ingested_by=$1 GROUP BY c.id ORDER BY member_count DESC,c.id', [me.id])).rows;
+      const items = rows.map(row => ({ id: row.id, label: me.role === 'admin' ? row.label : `主题 ${row.id.slice(0, 6)}`, autoLabel: me.role === 'admin' ? row.auto_label : null, manuallyLabeled: me.role === 'admin' && row.manually_labeled, memberCount: row.member_count }));
       return send(res, 200, { requestedK: settings.requested_k || 'auto', lastBuiltAt: settings.last_built_at, items });
     }
     if (pathname === '/api/sessions/clusters/config' && method === 'PUT') {
@@ -1380,7 +1395,8 @@ async function handleRequest(req, res) {
       return updated.rowCount ? send(res, 200, updated.rows[0]) : send(res, 404, { error: '主题聚类不存在' });
     }
     if (pathname === '/api/sessions/token-stats' && method === 'GET') {
-      const reported = db.sessions.map(session => ({ session, usage: sessionUsage(session) })).filter(item => item.usage);
+      const allowedSessions = await visibleSessionIds();
+      const reported = db.sessions.filter(session => !allowedSessions || allowedSessions.has(session.id)).map(session => ({ session, usage: sessionUsage(session) })).filter(item => item.usage);
       const totalTokens = reported.reduce((sum, item) => sum + item.usage.totalTokens, 0);
       const currentMonth = shanghaiDate(new Date()).slice(0, 7);
       const daily = new Map();
@@ -1404,6 +1420,8 @@ async function handleRequest(req, res) {
     }
     const sess = pathname.match(/^\/api\/sessions\/([^/]+)$/);
     if (sess && method === "GET") {
+      const allowedSessions = await visibleSessionIds();
+      if (allowedSessions && !allowedSessions.has(sess[1])) return send(res, 404, { error: 'session not found' });
       const s = db.sessions.find((x) => x.id === sess[1]);
       if (!s) return send(res, 404, { error: "session not found" });
       const title = sessionTitle(s);
@@ -1646,7 +1664,7 @@ async function handleRequest(req, res) {
         };
         if (!linkedTaskVisible(note.taskId)) return send(res, 404, { error: "任务不存在" });
         if (note.categoryId && !db.noteCategories.some(item => item.id === note.categoryId)) return send(res, 400, { error: "分类不存在" });
-        if (note.sourceSessionId && !db.sessions.some(item => item.id === note.sourceSessionId)) return send(res, 400, { error: "来源会话不存在" });
+        if (note.sourceSessionId && !(await activeClient.query("SELECT 1 FROM sessions WHERE id=$1 AND ($2='admin' OR ingested_by=$3)", [note.sourceSessionId, me.role, me.id])).rowCount) return send(res, 404, { error: "来源会话不存在" });
         db.notes.unshift(note);
         reconcileNoteLinks();
         snapshotNote(note, "save");
@@ -1813,9 +1831,10 @@ const server = http.createServer((req, res) => {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
-      if (!await lookupSession(token)) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      const me = await lookupSession(token);
+      if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       if (req.method !== 'GET') return sendImmediate(res, 405, { error: 'method not allowed' });
-      const result = await getRelatedSessions(pool, decodeURIComponent(relatedRoute[1]));
+      const result = await getRelatedSessions(pool, decodeURIComponent(relatedRoute[1]), me);
       return sendImmediate(res, result.status, result.data);
     })().catch(error => {
       console.error('[session-related] request failed:', error.message);
@@ -1827,10 +1846,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
-      if (!await lookupSession(token)) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      const me = await lookupSession(token);
+      if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       if (req.method !== 'GET') return sendImmediate(res, 405, { error: 'method not allowed' });
       const userId = new URL(req.url, 'http://localhost').searchParams.get('userId');
-      const result = await getSessionLearningPath(pool, userId);
+      const result = await getSessionLearningPath(pool, userId, me);
       return sendImmediate(res, result.status, result.data);
     })().catch(error => {
       console.error('[session-learning-path] request failed:', error.message);
@@ -1845,7 +1865,7 @@ const server = http.createServer((req, res) => {
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       if (req.method !== 'POST') return sendImmediate(res, 405, { error: 'method not allowed' });
-      const result = await exportSessions(pool, await readProjectBody(req), me.role);
+      const result = await exportSessions(pool, await readProjectBody(req), me);
       if (result.status !== 200) return sendImmediate(res, result.status, { error: result.error });
       res.writeHead(200, {
         'Content-Type': `${result.contentType}; charset=utf-8`,
@@ -1866,10 +1886,11 @@ const server = http.createServer((req, res) => {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
-      if (!await lookupSession(token)) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      const me = await lookupSession(token);
+      if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       if (req.method !== 'GET') return sendImmediate(res, 405, { error: 'method not allowed' });
       const params = new URL(req.url, 'http://localhost').searchParams;
-      const response = await searchSessions(pool, { query: params.get('query'), regex: params.get('regex') === 'true', page: Number(params.get('page') || 1) });
+      const response = await searchSessions(pool, { query: params.get('query'), regex: params.get('regex') === 'true', page: Number(params.get('page') || 1), me });
       return sendImmediate(res, response.status, response.data);
     })().catch(error => {
       console.error('[session-search] request failed:', error.message);

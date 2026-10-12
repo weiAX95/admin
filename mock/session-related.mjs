@@ -27,19 +27,19 @@ export function rankRelatedSessions(base, candidates) {
   }).filter(item => item.score >= 0.15).sort((a, b) => b.score - a.score || b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id)).slice(0, 5);
 }
 
-export async function getRelatedSessions(pool, sessionId) {
+export async function getRelatedSessions(pool, sessionId, me) {
   if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 200) return { status: 400, data: { error: '会话 ID 无效' } };
   const client = await pool.connect();
   try {
     await client.query('BEGIN READ ONLY');
-    const baseResult = await client.query('SELECT id,external_user_id FROM sessions WHERE id=$1', [sessionId]);
+    const baseResult = await client.query("SELECT id,external_user_id FROM sessions WHERE id=$1 AND ($2='admin' OR ingested_by=$3)", [sessionId, me.role, me.id]);
     if (!baseResult.rows.length) {
       await client.query('ROLLBACK');
       return { status: 404, data: { error: '会话不存在' } };
     }
     const result = await client.query(`SELECT s.id,s.created_at,m.content,m.item_order
       FROM sessions s LEFT JOIN session_messages m ON m.session_id=s.id AND m.role='user'
-      WHERE s.external_user_id=$1 ORDER BY s.id,m.item_order`, [baseResult.rows[0].external_user_id]);
+      WHERE s.external_user_id=$1 AND ($2='admin' OR s.ingested_by=$3) ORDER BY s.id,m.item_order`, [baseResult.rows[0].external_user_id, me.role, me.id]);
     await client.query('COMMIT');
     const grouped = new Map();
     for (const row of result.rows) {

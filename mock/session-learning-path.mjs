@@ -30,14 +30,14 @@ export function analyzeLearningPath(rows) {
   return { sessions, patterns, recognizedCount: recognized.length, topicCount: distinctTopics.size };
 }
 
-export async function getSessionLearningPath(pool, userId) {
+export async function getSessionLearningPath(pool, userId, me) {
   if (typeof userId !== 'string' || !userId.trim() || userId.length > 200) return { status: 400, data: { error: '请选择有效的聊天端用户 ID' } };
   const client = await pool.connect();
   try {
     await client.query('BEGIN READ ONLY');
     const result = await client.query(`SELECT s.id,s.created_at,m.content,m.item_order
       FROM sessions s LEFT JOIN session_messages m ON m.session_id=s.id AND m.role='user'
-      WHERE s.external_user_id=$1 ORDER BY s.created_at,s.id,m.item_order`, [userId]);
+      WHERE s.external_user_id=$1 AND ($2='admin' OR s.ingested_by=$3) ORDER BY s.created_at,s.id,m.item_order`, [userId, me.role, me.id]);
     await client.query('COMMIT');
     const grouped = new Map();
     for (const row of result.rows) {

@@ -29,7 +29,7 @@ test('related API only returns similar sessions belonging to same external user'
   ];
   const { base } = await createPgTestServer(t, fixture);
   assert.equal((await fetch(`${base}/sessions/base/related`)).status, 401);
-  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
+  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'admin123' }) });
   const { token } = await login.json();
   const request = async id => fetch(`${base}/sessions/${id}/related`, { headers: { Authorization: `Bearer ${token}` } });
   const response = await request('base');

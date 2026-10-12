@@ -21,7 +21,7 @@ function markdown(sessions, exportedAt) {
   return lines.join('\n');
 }
 
-export async function exportSessions(pool, body, role, now = new Date()) {
+export async function exportSessions(pool, body, me, now = new Date()) {
   const { ids, format } = body || {};
   if (!Array.isArray(ids) || ids.length < 1 || ids.length > MAX_SESSIONS || ids.some(id => typeof id !== 'string' || !id || id.length > 200) || new Set(ids).size !== ids.length) {
     return { status: 422, error: '请选择 1–50 条不重复的会话' };
@@ -30,7 +30,7 @@ export async function exportSessions(pool, body, role, now = new Date()) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN READ ONLY');
-    const sessionsResult = await client.query('SELECT id,external_user_id,created_at,updated_at FROM sessions WHERE id=ANY($1::text[])', [ids]);
+    const sessionsResult = await client.query("SELECT id,external_user_id,created_at,updated_at FROM sessions WHERE id=ANY($1::text[]) AND ($2='admin' OR ingested_by=$3)", [ids, me.role, me.id]);
     if (sessionsResult.rows.length !== ids.length) {
       await client.query('ROLLBACK');
       return { status: 404, error: '所选会话不存在，请刷新列表后重试' };
@@ -45,7 +45,7 @@ export async function exportSessions(pool, body, role, now = new Date()) {
     for (const row of annotationsResult.rows) {
       const key = `${row.session_id}\0${row.message_id}`;
       if (!annotations.has(key)) annotations.set(key, []);
-      annotations.get(key).push({ id: row.id, ...(role === 'admin' ? { reviewerId: row.reviewer_id } : {}), rating: row.rating, tags: row.tags, createdAt: row.created_at, updatedAt: row.updated_at });
+      annotations.get(key).push({ id: row.id, ...(me.role === 'admin' ? { reviewerId: row.reviewer_id } : {}), rating: row.rating, tags: row.tags, createdAt: row.created_at, updatedAt: row.updated_at });
     }
     const messages = new Map(ids.map(id => [id, []]));
     for (const row of messagesResult.rows) messages.get(row.session_id).push({ id: row.id, role: row.role, content: row.content, at: row.at, ...(row.prompt_tokens === null ? {} : { usage: { promptTokens: row.prompt_tokens, completionTokens: row.completion_tokens, ...(row.usage_model ? { model: row.usage_model } : {}) } }), annotations: annotations.get(`${row.session_id}\0${row.id}`) || [] });

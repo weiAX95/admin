@@ -15,7 +15,7 @@ test('session search scans all messages and returns Unicode context with session
     ] },
   ];
   const { base } = await createPgTestServer(t, fixture);
-  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
+  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'admin', password: 'admin123' }) });
   const { token } = await login.json();
   const search = async params => {
     const response = await fetch(`${base}/sessions/search?${new URLSearchParams(params)}`, { headers: { Authorization: `Bearer ${token}` } });

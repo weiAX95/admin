@@ -32,7 +32,7 @@ test("note category tree, independent tags and combined full-text filters persis
   assert.equal((await call(`/notes/${second.id}`)).data.categoryId ?? null, null);
   assert.equal((await api.client.query("SELECT count(*)::int AS count FROM note_tags")).rows[0].count, 1);
 
-  assert.equal((await call("/notes", "POST", { title: "无效来源", sourceSessionId: "missing" })).status, 400);
+  assert.equal((await call("/notes", "POST", { title: "无效来源", sourceSessionId: "missing" })).status, 404);
   const session = (await call("/sessions/ingest", "POST", { userId: "chat-user", messages: [{ role: "assistant", content: "一段可摘录的文字" }] })).data;
   const excerpt = (await call("/notes", "POST", { title: "一段可摘录的文字", content: "一段可摘录的文字", sourceSessionId: session.id })).data;
   assert.equal((await call(`/notes/${excerpt.id}`)).data.sourceSessionId, session.id);

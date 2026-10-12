@@ -17,7 +17,7 @@ function excerpt(content, start, end) {
   };
 }
 
-export async function searchSessions(pool, { query, regex = false, page = 1 }) {
+export async function searchSessions(pool, { query, regex = false, page = 1, me }) {
   const term = typeof query === 'string' ? query.trim() : '';
   if (!term || term.length > MAX_QUERY_LENGTH) return { status: 400, data: { error: '搜索词须为 1–200 字' } };
   if (!Number.isSafeInteger(page) || page < 1 || page > 10000) return { status: 400, data: { error: '页码无效' } };
@@ -27,6 +27,9 @@ export async function searchSessions(pool, { query, regex = false, page = 1 }) {
   const parameters = regex ? [term, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE] : [`%${escapeLike(term)}%`, term, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE];
   const limitPosition = regex ? '$2' : '$3';
   const offsetPosition = regex ? '$3' : '$4';
+  const rolePosition = `$${parameters.length + 1}`;
+  const ownerPosition = `$${parameters.length + 2}`;
+  parameters.push(me.role, me.id);
   const client = await pool.connect();
   try {
     await client.query('BEGIN READ ONLY');
@@ -37,7 +40,7 @@ export async function searchSessions(pool, { query, regex = false, page = 1 }) {
       FROM session_messages m JOIN sessions s ON s.id=m.session_id
       LEFT JOIN LATERAL (SELECT left(content,40) AS title FROM session_messages first_message
         WHERE first_message.session_id=s.id AND first_message.role='user' ORDER BY item_order LIMIT 1) heading ON true
-      WHERE ${matchPredicate}
+      WHERE ${matchPredicate} AND (${rolePosition}='admin' OR s.ingested_by=${ownerPosition})
       ORDER BY s.updated_at DESC,m.session_id,m.item_order,m.id LIMIT ${limitPosition} OFFSET ${offsetPosition}`, parameters);
     await client.query('COMMIT');
     const rows = result.rows;

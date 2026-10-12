@@ -14,7 +14,7 @@ test("session ingest and annotations survive upsert, account removal and restart
   const admin = (await request("/auth/login", "POST", "", { username: "admin", password: "admin123" })).data.token;
   const member = (await request("/auth/login", "POST", "", { username: "member", password: "test" })).data.token;
   assert.equal((await server.client.query("SELECT token_hash FROM auth_sessions WHERE user_id='admin'")).rows[0].token_hash.length, 64);
-  const created = await request("/sessions/ingest", "POST", admin, { id: "review-session", userId: "external-web-user", messages: [
+  const created = await request("/sessions/ingest", "POST", member, { id: "review-session", userId: "external-web-user", messages: [
     { role: "user", content: "解释这段代码", at: "2026-10-06T00:00:00Z" },
     { role: "assistant", content: "```js\nconst answer = 42;\n```", at: "2026-10-06T00:00:01Z" },
   ] });
