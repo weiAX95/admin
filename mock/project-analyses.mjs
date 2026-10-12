@@ -8,6 +8,7 @@ import { checkModelRate, reserveModelRate } from './model-rate-limits.mjs';
 import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvidence, mergeProjectModuleReports, parseProjectRequirements, selectProjectEvidence, validateProjectReport } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
 import { relatedAcceptedSuggestions } from './project-suggestion-similarity.mjs';
+import { compareProjectReports } from './project-report-comparison.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -162,7 +163,29 @@ export async function resumeProjectAnalyses(db, runModel = defaultRunModel) {
   return jobs.length;
 }
 
-export async function handleProjectAnalyses({ pathname, method, client, me, readBody, connectionAvailable = modelConnectionAvailable, runModel = defaultRunModel }) {
+export async function handleProjectAnalyses({ pathname, method, client, me, readBody, url, connectionAvailable = modelConnectionAvailable, runModel = defaultRunModel }) {
+  const compare = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/compare\/([^/]+)\/([^/]+)$/);
+  if (compare) {
+    const [, repositoryId, olderId, newerId] = compare;
+    if (method !== 'GET' || ![repositoryId,olderId,newerId].every(value => UUID.test(value)) || olderId === newerId) return fail(400,'报告对照参数无效');
+    const repository = (await client.query('SELECT id FROM project_repositories WHERE id=$1 AND owner_id=$2', [repositoryId,me.id])).rows[0];
+    if (!repository) return fail(404,'项目不存在');
+    const rows = (await client.query("SELECT * FROM project_analyses WHERE repository_id=$1 AND id=ANY($2::uuid[]) AND status='completed'", [repositoryId,[olderId,newerId]])).rows;
+    if (rows.length !== 2) return fail(404,'已完成报告不存在');
+    const findings = (await client.query('SELECT analysis_id,requirement_id,title,status,detail,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha FROM project_analysis_findings WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
+    const suggestions = (await client.query('SELECT analysis_id,topic,practice FROM project_analysis_suggestions WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
+    const report = id => {
+      const row = rows.find(item => item.id === id);
+      return {
+        meta: { ...view(row), fullName: row.full_name }, branch: row.branch, baselineVersionId: row.baseline_version_id,
+        goal: row.goal, analysisCoverageComplete: row.analysis_coverage_complete,
+        selectedFileCount: row.selected_file_count, availableFileCount: row.available_file_count,
+        findings: findings.filter(item => item.analysis_id === id).map(item => ({ requirementId: item.requirement_id, title: item.title, status: item.status, detail: item.detail, evidence: item.evidence_path ? { type: item.evidence_type, path: item.evidence_path, line: item.evidence_line, excerpt: item.evidence_excerpt, gitSha: item.evidence_git_sha?.trim() || null } : null })),
+        suggestions: suggestions.filter(item => item.analysis_id === id).map(item => ({ topic: item.topic, practice: item.practice })),
+      };
+    };
+    return { status: 200, data: compareProjectReports(report(olderId),report(newerId)) };
+  }
   const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses(?:\/([^/]+)(?:\/(cancel|retry))?)?$/);
   if (!match) return null;
   const [, repositoryId, analysisId, action] = match;
@@ -170,8 +193,17 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   const repository = (await client.query('SELECT * FROM project_repositories WHERE id=$1 AND owner_id=$2', [repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
   if (method === 'GET' && !analysisId) {
-    const rows = (await client.query('SELECT * FROM project_analyses WHERE repository_id=$1 ORDER BY created_at DESC LIMIT 30', [repositoryId])).rows;
-    return { status: 200, data: { items: rows.map(view) } };
+    const before = url?.searchParams.get('before') || null;
+    if (before && !UUID.test(before)) return fail(400,'历史游标无效');
+    let cursor = null;
+    if (before) {
+      cursor = (await client.query('SELECT created_at,id FROM project_analyses WHERE repository_id=$1 AND id=$2', [repositoryId,before])).rows[0];
+      if (!cursor) return fail(400,'历史游标已失效');
+    }
+    const rows = (await client.query(`SELECT * FROM project_analyses WHERE repository_id=$1
+      AND ($2::timestamptz IS NULL OR (created_at,id) < ($2::timestamptz,$3::uuid))
+      ORDER BY created_at DESC,id DESC LIMIT 31`, [repositoryId,cursor?.created_at || null,cursor?.id || null])).rows;
+    return { status: 200, data: { items: rows.slice(0,30).map(view), nextCursor: rows.length > 30 ? rows[29].id : null } };
   }
   if (method === 'GET' && analysisId && !action) {
     const job = (await client.query('SELECT * FROM project_analyses WHERE id=$1 AND repository_id=$2', [analysisId,repositoryId])).rows[0];

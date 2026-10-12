@@ -1904,11 +1904,12 @@ const server = http.createServer((req, res) => {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
-      const pathname = new URL(req.url, 'http://localhost').pathname;
+      const url = new URL(req.url, 'http://localhost');
+      const pathname = url.pathname;
       const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
         || await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
         || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
-        || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
+        || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req) })
         || await handleProjectScans({ pathname, method: req.method, client: pool, me, url: new URL(req.url, 'http://localhost') })
         || await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) });
       sendImmediate(res, response?.status || 404, response?.data || { error: '项目接口不存在' });

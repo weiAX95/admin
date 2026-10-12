@@ -78,7 +78,14 @@ export interface ProjectAnalysisReport extends ProjectAnalysisJob {
   findings: { id: string; requirementId: string | null; moduleKey: string | null; title: string; status: 'implemented' | 'partial' | 'not_found' | 'unverified'; detail: string; evidence: null | { type: 'code' | 'test' | 'document'; path: string; line: number; excerpt: string; gitSha: string }; feedback: { id: string; correctedStatus: 'implemented' | 'partial' | 'not_found' | 'unverified'; reason: string; author: string; createdAt: string }[] }[];
   suggestions: { id: string; findingId: string | null; topic: string; reason: string; practice: string; acceptance: string; impact: 'high' | 'medium' | 'low' | null; impactReason: string | null; prerequisites: string[]; status: 'pending' | 'accepted' | 'ignored' | 'stale'; decision: null | { status: 'accepted' | 'ignored'; taskId: string | null; decidedAt: string }; possibleDuplicates: { taskId: string; title: string; exact: boolean; similarity: number }[] }[];
 }
-export const listProjectAnalyses = (repositoryId: string) => http.get<{ items: ProjectAnalysisJob[] }>(`/project-repositories/${repositoryId}/analyses`);
+export const listProjectAnalyses = (repositoryId: string, before?: string) => http.get<{ items: ProjectAnalysisJob[]; nextCursor: string | null }>(`/project-repositories/${repositoryId}/analyses`, { before });
+export interface ProjectReportComparison {
+  older: ProjectAnalysisJob & { fullName: string }; newer: ProjectAnalysisJob & { fullName: string };
+  comparable: boolean; limitations: string[];
+  changes: { requirementId: string; kind: 'completion_signal' | 'possible_regression' | 'new_gap' | 'improved_gap' | 'changed'; before: Pick<ProjectAnalysisReport['findings'][number], 'requirementId' | 'title' | 'status' | 'detail' | 'evidence'>; after: Pick<ProjectAnalysisReport['findings'][number], 'requirementId' | 'title' | 'status' | 'detail' | 'evidence'> }[];
+  suggestions: { added: { topic: string; practice: string }[]; removed: { topic: string; practice: string }[] };
+}
+export const compareProjectAnalyses = (repositoryId: string, olderId: string, newerId: string) => http.get<ProjectReportComparison>(`/project-repositories/${repositoryId}/analyses/compare/${olderId}/${newerId}`);
 export const startProjectAnalysis = (repositoryId: string, scanId: string, modelId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses`, { scanId, modelId });
 export const getProjectAnalysis = (repositoryId: string, analysisId: string) => http.get<ProjectAnalysisReport>(`/project-repositories/${repositoryId}/analyses/${analysisId}`);
 export const cancelProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/cancel`, {});

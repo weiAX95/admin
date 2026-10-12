@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
-import { addProjectFindingFeedback, cancelProjectAnalysis, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
+import { addProjectFindingFeedback, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan } from '../api/projectRepositories';
+import ProjectReportComparison from './ProjectReportComparison';
 
 const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败', canceled: '已取消' };
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
@@ -18,6 +19,12 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [scanId, setScanId] = useState('');
   const [modelId, setModelId] = useState('');
   const [report, setReport] = useState<ProjectAnalysisReport | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [olderId, setOlderId] = useState('');
+  const [newerId, setNewerId] = useState('');
+  const [comparison, setComparison] = useState<Comparison | null>(null);
+  const [comparing, setComparing] = useState(false);
   const [starting, setStarting] = useState(false);
   const [actingId, setActingId] = useState('');
   const [actingSuggestionId, setActingSuggestionId] = useState('');
@@ -29,18 +36,31 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [requirementLoading, setRequirementLoading] = useState(false);
   const [error, setError] = useState('');
   const latestCompletedId = useRef('');
+  const loadedMore = useRef(false);
 
   useEffect(() => {
     setScanId(current => scans.some(scan => scan.id === current && ['completed', 'partial'].includes(scan.status)) ? current : scans.find(scan => ['completed', 'partial'].includes(scan.status))?.id || '');
   }, [scans]);
   useEffect(() => {
+    setItems([]);
+    setNextCursor(null);
+    setReport(null);
+    setComparison(null);
+    setOlderId('');
+    setNewerId('');
+    loadedMore.current = false;
+    latestCompletedId.current = '';
     let cancelled = false;
     void getPlatformConfig().then(config => { if (!cancelled) setModels(config.models.filter(model => model.active && model.status === 'active' && model.adapterReady && model.configured && model.capabilities.output.includes('text'))); }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : '模型目录读取失败'); });
     const load = async () => {
       try {
         const result = await listProjectAnalyses(repository.id);
         if (!cancelled) {
-          setItems(result.items);
+          setItems(current => {
+            const recent = new Set(result.items.map(item => item.id));
+            return [...result.items,...current.filter(item => !recent.has(item.id))];
+          });
+          if (!loadedMore.current) setNextCursor(result.nextCursor);
           setError('');
           const completed = result.items.filter(item => item.status === 'completed').sort((a, b) => new Date(b.finishedAt || 0).getTime() - new Date(a.finishedAt || 0).getTime())[0]?.id || '';
           if (completed && completed !== latestCompletedId.current) { latestCompletedId.current = completed; onAnalysisCompleted(); }
@@ -78,6 +98,27 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const show = async (id: string) => {
     try { setReport(await getProjectAnalysis(repository.id, id)); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '报告读取失败'); }
+  };
+  const loadMore = async () => {
+    if (!nextCursor) return;
+    setLoadingMore(true);
+    try {
+      const result = await listProjectAnalyses(repository.id,nextCursor);
+      loadedMore.current = true;
+      setItems(current => {
+        const seen = new Set(current.map(item => item.id));
+        return [...current,...result.items.filter(item => !seen.has(item.id))];
+      });
+      setNextCursor(result.nextCursor);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '更早的分析记录读取失败'); }
+    finally { setLoadingMore(false); }
+  };
+  const compareReports = async () => {
+    if (!olderId || !newerId || olderId === newerId) return;
+    setComparing(true);
+    try { setComparison(await compareProjectAnalyses(repository.id,olderId,newerId)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '报告对照失败'); }
+    finally { setComparing(false); }
   };
   const act = async (item: ProjectAnalysisJob, action: 'cancel' | 'retry') => {
     setActingId(item.id);
@@ -146,6 +187,13 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
           : <Button type="link" loading={actingId === item.id} onClick={() => void act(item,'retry')}>重试</Button>)}
       </Space> },
     ]} />
+    {nextCursor && <Button loading={loadingMore} onClick={() => void loadMore()} style={{ marginBottom: 16 }}>加载更早的分析记录</Button>}
+    <Space wrap style={{ marginBottom: 16 }}>
+      <Select aria-label="较早的报告" placeholder="较早的报告" value={olderId || undefined} onChange={value => { setOlderId(value); setComparison(null); }} style={{ minWidth: 260 }} options={items.filter(item => item.status === 'completed').map(item => ({ value: item.id, label: `${new Date(item.finishedAt || item.createdAt).toLocaleString('zh-CN')} · ${item.commitSha.slice(0, 10)}` }))} />
+      <Select aria-label="较新的报告" placeholder="较新的报告" value={newerId || undefined} onChange={value => { setNewerId(value); setComparison(null); }} style={{ minWidth: 260 }} options={items.filter(item => item.status === 'completed').map(item => ({ value: item.id, label: `${new Date(item.finishedAt || item.createdAt).toLocaleString('zh-CN')} · ${item.commitSha.slice(0, 10)}` }))} />
+      <Button disabled={!olderId || !newerId || olderId === newerId || new Date(items.find(item => item.id === olderId)?.finishedAt || 0).getTime() >= new Date(items.find(item => item.id === newerId)?.finishedAt || 0).getTime()} loading={comparing} onClick={() => void compareReports()}>对照两次报告</Button>
+    </Space>
+    {comparison && <ProjectReportComparison comparison={comparison} onOpenReport={id => void show(id)} onClose={() => setComparison(null)} />}
     {report && <Card size="small" title={`报告 · ${report.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setReport(null)}>关闭</Button>}>
       {report.staleReasons.length > 0 && <Alert type="warning" showIcon message="报告基线已变化，旧建议需重审" description={<Space direction="vertical"><span>{report.staleReasons.join('；')}</span>{reviewScan && reviewModelAvailable ? <Popconfirm title="按当前基线重新分析？" description="会重新调用模型，可能产生费用；旧报告和人工处理记录仍保留。" onConfirm={() => void start(reviewScan.id, report.modelId)}><Button size="small" loading={starting}>重新分析当前扫描</Button></Popconfirm> : <span>{reviewScan ? '原模型当前不可用，请选择其他模型生成报告。' : '请先扫描当前 commit，再生成新报告。'}</span>}</Space>} style={{ marginBottom: 12 }} />}
       {!report.analysisCoverageComplete && <Alert type="warning" showIcon message="本次报告只覆盖部分已扫描内容；未发现实现不代表整个仓库没有实现" style={{ marginBottom: 12 }} />}

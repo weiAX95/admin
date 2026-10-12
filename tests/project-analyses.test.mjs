@@ -113,6 +113,51 @@ test('analysis persists validated report and source evidence, isolates owners, a
   assert.ok(preserved.data.staleReasons.includes('项目目标已变化'));
 });
 
+test('report history pages beyond 30 and compares only traceable requirement changes', async t => {
+  const { client, base } = await createPgTestServer(t);
+  const { repositoryId, scanId, path } = await fixture(client);
+  const baselineId = crypto.randomUUID();
+  await client.query("INSERT INTO project_requirement_baselines(id,repository_id,version,content,content_sha256) VALUES($1,$2,1,'REQ-001: 入口',$3)", [baselineId,repositoryId,'b'.repeat(64)]);
+  const ids = Array.from({ length: 32 }, () => crypto.randomUUID());
+  for (const [index,id] of ids.entries()) await client.query(`INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,baseline_version_id,model_id,provider,api_model,input_price,output_price,estimated_max_cost_usd,status,summary,selected_file_count,available_file_count,analysis_coverage_complete,created_at,finished_at)
+    VALUES($1,$2,$3,'member','octocat/example','main',$4,'学习项目','v1',$5,'project-model','legacy','fake-model',1,1,0.1,'completed','完成',1,1,true,$6,$6)`, [id,repositoryId,scanId,index < 31 ? sha : 'f'.repeat(40),baselineId,new Date(Date.UTC(2026,0,1,0,index))]);
+  const me = { id: 'member', role: 'member' };
+  const first = await handleProjectAnalyses({ pathname: path, method: 'GET', client, me, url: new URL('http://local' + path) });
+  assert.equal(first.data.items.length,30);
+  assert.ok(first.data.nextCursor);
+  const second = await handleProjectAnalyses({ pathname: path, method: 'GET', client, me, url: new URL(`http://local${path}?before=${first.data.nextCursor}`) });
+  assert.equal(second.data.items.length,2);
+  assert.equal(second.data.nextCursor,null);
+  assert.equal(new Set([...first.data.items,...second.data.items].map(item => item.id)).size,32);
+  assert.equal((await handleProjectAnalyses({ pathname: path, method: 'GET', client, me, url: new URL(`http://local${path}?before=${crypto.randomUUID()}`) })).status,400);
+
+  const olderId = ids[0], newerId = ids[31];
+  await client.query("INSERT INTO project_analysis_findings(id,analysis_id,position,title,status,detail,requirement_id,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha) VALUES($1,$2,0,'入口','not_found','未发现','REQ-001','code','src/main.ts',1,'export function main() {}',$3)", [crypto.randomUUID(),olderId,sha]);
+  await client.query("INSERT INTO project_analysis_findings(id,analysis_id,position,title,status,detail,requirement_id,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha) VALUES($1,$2,0,'入口','implemented','有入口实现','REQ-001','test','src/main.test.ts',2,'test()',$3)", [crypto.randomUUID(),newerId,'f'.repeat(40)]);
+  await client.query("INSERT INTO project_analysis_suggestions(id,analysis_id,position,topic,reason,practice,acceptance) VALUES($1,$2,0,'补测试','原因','写测试','通过')", [crypto.randomUUID(),olderId]);
+  await client.query("INSERT INTO project_analysis_suggestions(id,analysis_id,position,topic,reason,practice,acceptance) VALUES($1,$2,0,'运行验证','原因','本地验证','通过')", [crypto.randomUUID(),newerId]);
+  const comparePath = `${path}/compare/${olderId}/${newerId}`;
+  const result = await handleProjectAnalyses({ pathname: comparePath, method: 'GET', client, me });
+  assert.equal(result.status,200);
+  assert.equal(result.data.comparable,true);
+  assert.equal(result.data.changes[0].kind,'completion_signal');
+  assert.equal(result.data.changes[0].before.evidence.gitSha,sha);
+  assert.equal(result.data.changes[0].after.evidence.gitSha,'f'.repeat(40));
+  assert.deepEqual(result.data.suggestions.added.map(item => item.topic),['运行验证']);
+  assert.deepEqual(result.data.suggestions.removed.map(item => item.topic),['补测试']);
+  assert.equal((await handleProjectAnalyses({ pathname: comparePath, method: 'GET', client, me: { id: 'learner', role: 'member' } })).status,404);
+  const login = await fetch(`${base}/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'member', password: 'test' }) });
+  const { token } = await login.json();
+  const http = await fetch(`${base}${comparePath.slice(4)}`, { headers: { Authorization: `Bearer ${token}` } });
+  assert.equal(http.status,200);
+  assert.equal((await http.json()).changes[0].requirementId,'REQ-001');
+  await client.query('UPDATE project_analyses SET branch=$2,analysis_coverage_complete=false WHERE id=$1', [newerId,'feature']);
+  const limited = await handleProjectAnalyses({ pathname: comparePath, method: 'GET', client, me });
+  assert.equal(limited.data.comparable,false);
+  assert.ok(limited.data.limitations.includes('分支不同'));
+  assert.deepEqual(limited.data.changes,[]);
+});
+
 test('completed report persists ordered core flow steps with fixed commit evidence', async t => {
   const { client } = await createPgTestServer(t);
   const { repositoryId, scanId, path } = await fixture(client);
