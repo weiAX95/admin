@@ -869,7 +869,7 @@
   - [ ] AC：键盘可完成所有核心操作流程
 - [ ] **13.5 性能优化**
   - [x] React.lazy + Suspense 按路由拆包（构建验证：原约 3,032 KB 主包拆为约 747 KB 主包与按需页面包；运行环境性能仍待测）
-  - [ ] 表格虚拟滚动（> 500 行用 react-window 或 antd virtual table）
+  - [ ] 表格虚拟滚动（> 500 行用 react-window 或 antd virtual table）（任务列表桌面端已接入 Ant Design 虚拟滚动；会话等列表及大数据量实际帧率待验收）
   - [ ] 图片懒加载 + WebP 格式
   - [ ] API 响应缓存（SWR / React Query stale-while-revalidate）
   - [ ] Bundle 分析（rollup-plugin-visualizer）+ Tree shaking

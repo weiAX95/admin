@@ -425,6 +425,7 @@ export default function Tasks() {
 
   const visibleColumns = visibleColumnKeys.map(key => columns.find(column => column.key === key)!).filter(Boolean);
   const tableColumns = narrowScreen ? visibleColumns.filter(column => column.key === "title") : visibleColumns;
+  const virtualized = !narrowScreen && sortedItems.length > 500;
 
   const categoryOptions = useMemo(
     () => categories.map((c) => ({ value: c, label: c })),
@@ -531,7 +532,8 @@ export default function Tasks() {
           columnTitle: <Checkbox aria-label="全选当前筛选任务" disabled={bulkBusy || !allIds.length} checked={allIds.length > 0 && selectedKeys.length === allIds.length} indeterminate={selectedKeys.length > 0 && selectedKeys.length < allIds.length} onChange={event => setSelectedKeys(event.target.checked ? allIds : [])} />,
           getCheckboxProps: () => ({ disabled: bulkBusy }),
         }}
-        scroll={narrowScreen ? undefined : { x: 1100 }}
+        virtual={virtualized}
+        scroll={narrowScreen ? undefined : virtualized ? { x: 1100, y: 560 } : { x: 1100 }}
         expandable={narrowScreen ? { expandedRowRender: task => <div className="task-mobile-details">
           <Space wrap size={[6, 6]}><StatusTag status={task.effectiveStatus} /><PriorityTag priority={task.priority} /><Tag>{task.category}</Tag><Tag color="geekblue">{task.phase}</Tag></Space>
           <div>进度 <Progress percent={task.progress} size="small" /></div>
@@ -543,7 +545,7 @@ export default function Tasks() {
             <Popconfirm title="删除该学习任务？" okText="删除" cancelText="取消" onConfirm={() => void remove(task)}><Button size="small" danger>删除</Button></Popconfirm>
           </Space>
         </div> } : undefined}
-        pagination={{ pageSize, showSizeChanger: false }}
+        pagination={virtualized ? false : { pageSize, showSizeChanger: false }}
       /> : view === "gantt" ? <Spin spinning={loading}><TaskGantt tasks={sortedItems} onRefresh={() => refresh(query)} /></Spin> : <Spin spinning={loading}><TaskKanban tasks={sortedItems} onRefresh={() => refresh(query)} /></Spin>}
 
       {view === "table" && selectedKeys.length > 0 && <div className="task-bulk-bar" role="region" aria-label="批量操作">
