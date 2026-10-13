@@ -48,3 +48,4 @@ export const createWebhook = (data: WebhookInput) => http.post<WebhookConfig>('/
 export const updateWebhook = (id: string, data: WebhookInput) => http.put<WebhookConfig>(`/settings/webhooks/${id}`, data);
 export const deleteWebhook = (id: string, version: number) => http.del<{ deleted: true }>(`/settings/webhooks/${id}`, { version });
 export const listWebhookDeliveries = (id: string) => http.get<{ items: WebhookDelivery[] }>(`/settings/webhooks/${id}/deliveries`);
+export const testWebhookDelivery = (id: string) => http.post<{ deliveryId: string; status: 'pending' }>(`/settings/webhooks/${id}/test`, { confirmExternalFields: true });

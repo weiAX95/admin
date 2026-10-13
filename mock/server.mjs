@@ -2004,6 +2004,7 @@ const server = http.createServer((req, res) => {
     const pending = res.__pending || { status: 500, payload: { error: "接口没有返回结果" } };
     send(res, pending.status, pending.payload);
     if (changed) notifyLive();
+    if (req.method === 'POST' && new URL(req.url, 'http://localhost').pathname === '/api/alerts/channels/test' && pending.status === 201) notifyLive();
     if (req.method === 'PUT' && new URL(req.url, 'http://localhost').pathname.startsWith('/api/settings/') && pending.status === 200) notifyLive('settings_changed');
   }).catch(error => {
     console.error("[api] request failed:", error);

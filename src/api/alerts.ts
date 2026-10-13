@@ -21,6 +21,8 @@ export interface AlertGroup {
 }
 export const listAlertGroups = (offset = 0, limit = 20) => http.get<{ items: AlertGroup[]; total: number }>('/alerts/groups', { offset: String(offset), limit: String(limit) });
 export const listAlertGroupIncidents = (id: string) => http.get<{ items: AlertIncident[]; total: number }>(`/alerts/groups/${id}/incidents`);
+export const sendAlertChannelTest = (channel: 'in_app' | 'email') => http.post<{ id: string; channel: string; status: string }>('/alerts/channels/test', { channel });
+export const getAlertChannelTest = (id: string) => http.get<{ id: string; status: string; createdAt: string }>(`/alerts/channels/tests/${id}`);
 export interface AlertIncidentEvent {
   id: string; incident_id: string; actor_id: string | null; actor_name: string | null;
   event_type: 'opened' | 'escalated' | 'acknowledged' | 'assigned' | 'note' | 'resolved' | 'reminded';

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { App, Alert, Button, Card, DatePicker, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd';
 import type { AlertAnalytics as AlertAnalyticsData, AlertAssignee, AlertGroup, AlertImportRow, AlertIncident, AlertIncidentEvent, AlertIncidentQuery, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview, AlertSilence, AlertSilenceInput } from '../api/alerts';
-import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, createAlertSilence, deleteAlertRule, deleteAlertSilence, getAlertAnalytics, importAlertRules, listAlertAssignees, listAlertGroupIncidents, listAlertGroups, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, listAlertSilences, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, updateAlertRule, updateAlertSilence } from '../api/alerts';
+import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, createAlertSilence, deleteAlertRule, deleteAlertSilence, getAlertAnalytics, getAlertChannelTest, importAlertRules, listAlertAssignees, listAlertGroupIncidents, listAlertGroups, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, listAlertSilences, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, sendAlertChannelTest, updateAlertRule, updateAlertSilence } from '../api/alerts';
 import { getPlatformConfig } from '../api/experiment-platform';
 import { listWebhooks, type WebhookConfig } from '../api/outbound-webhooks';
 import AlertAnalytics from '../components/AlertAnalytics';
@@ -35,6 +35,7 @@ export default function Alerts() {
   const [groupPage, setGroupPage] = useState(1);
   const [groupDetails, setGroupDetails] = useState<Record<string,{ items: AlertIncident[]; total: number }>>({});
   const [groupLoading, setGroupLoading] = useState<string | null>(null);
+  const [channelTest, setChannelTest] = useState<{ id: string; channel: string; status: string } | null>(null);
   const [incidentTotal, setIncidentTotal] = useState(0);
   const [incidentQuery, setIncidentQuery] = useState<AlertIncidentQuery>({ limit: 20, offset: 0 });
   const [analyticsDays, setAnalyticsDays] = useState<7 | 30 | 90>(30);
@@ -58,6 +59,7 @@ export default function Alerts() {
   const [importBusy, setImportBusy] = useState(false);
   const [preview, setPreview] = useState<AlertRulePreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [channelTestBusy, setChannelTestBusy] = useState(false);
   const [selectedIncident, setSelectedIncident] = useState<AlertIncident | null>(null);
   const [incidentEvents, setIncidentEvents] = useState<AlertIncidentEvent[]>([]);
   const [assignees, setAssignees] = useState<AlertAssignee[]>([]);
@@ -94,6 +96,17 @@ export default function Alerts() {
     try { const result = await listAlertGroupIncidents(group.id); setGroupDetails(current => ({...current,[group.id]:result})); }
     catch (cause) { message.error(cause instanceof Error ? cause.message : '聚合明细加载失败'); }
     finally { setGroupLoading(null); }
+  };
+  const sendChannelTest = async (channel: 'in_app' | 'email') => {
+    setChannelTestBusy(true);
+    try { setChannelTest(await sendAlertChannelTest(channel)); message.success(channel === 'email' ? '测试邮件已入队' : '站内测试通知已创建'); }
+    catch (cause) { message.error(cause instanceof Error ? cause.message : '渠道测试失败'); }
+    finally { setChannelTestBusy(false); }
+  };
+  const refreshChannelTest = async () => {
+    if (!channelTest) return;
+    try { const latest = await getAlertChannelTest(channelTest.id); setChannelTest({ ...channelTest, status: latest.status }); }
+    catch (cause) { message.error(cause instanceof Error ? cause.message : '测试状态读取失败'); }
   };
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => { void getPlatformConfig().then(result => setModels(result.models)).catch(() => undefined); void listWebhooks().then(result => setWebhooks(result.items)).catch(() => undefined); }, []);
@@ -268,6 +281,7 @@ export default function Alerts() {
         { title: '聚合窗口', render: (_, group) => `${new Date(group.opened_at).toLocaleString('zh-CN')} – ${new Date(group.window_end).toLocaleString('zh-CN')}` },
         { title: '触发', dataIndex: 'incident_count', render: (count: number) => `已触发 ${count} 次` },
       ]} /> },
+      { key: 'channels', label: '渠道测试', children: <Card size="small"><Typography.Paragraph>站内测试通知会发送到当前管理员的顶部铃铛。邮件测试只发送到当前账号在个人设置中启用的收件邮箱；SMTP 未配置时会明确拒绝。Webhook 可在系统设置的出站 Webhook 列表中逐条测试并查看投递日志。</Typography.Paragraph><Space wrap><Button loading={channelTestBusy} onClick={() => void sendChannelTest('in_app')}>测试站内通知</Button><Button loading={channelTestBusy} onClick={() => void sendChannelTest('email')}>测试邮件</Button><a href="/settings">管理与测试 Webhook</a></Space>{channelTest && <Typography.Paragraph style={{ marginTop: 16 }}>最近测试：{channelTest.channel === 'email' ? '邮件' : '站内'} · {channelTest.status} <Button type="link" onClick={() => void refreshChannelTest()}>刷新状态</Button></Typography.Paragraph>}</Card> },
       { key: 'analytics', label: '历史分析', children: <><Space style={{ marginBottom: 12 }}><Select aria-label="分析时间窗口" value={analyticsDays} style={{ width: 140 }} options={[{value:7,label:'近 7 天'},{value:30,label:'近 30 天'},{value:90,label:'近 90 天'}]} onChange={setAnalyticsDays} /><Select aria-label="分析告警级别" placeholder="全部级别" allowClear value={analyticsLevel} style={{ width: 145 }} options={['info','warning','critical'].map(value => ({value,label:value}))} onChange={setAnalyticsLevel} /></Space><AlertAnalytics data={analytics} /></> },
       { key: 'metrics', label: '指标样本', children: <><Select aria-label="查看指标" value={metric} options={metricOptions} onChange={setMetric} style={{ minWidth: 270, marginBottom: 16 }} /><Table<AlertMetricSample> rowKey={item => `${item.metric}:${item.scope_id}:${item.sampled_at}`} dataSource={samples} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="暂无采样数据" /> }} columns={[
         { title: '时间', dataIndex: 'sampled_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },

@@ -95,7 +95,7 @@ async function handleOutboundWebhooksInner({ pathname, method, client, me, readB
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`, [id,body.event,body.url,secret.data,secret.nonce,secret.tag,extra?.data || null,extra?.nonce || null,extra?.tag || null,version,mask(body.secret),body.enabled,me.id]);
     return { status: 201, data: apiView(result.rows[0]) };
   }
-  const route = pathname.match(/^\/api\/settings\/webhooks\/([0-9a-f-]{36})(?:\/(deliveries))?$/);
+  const route = pathname.match(/^\/api\/settings\/webhooks\/([0-9a-f-]{36})(?:\/(deliveries|test))?$/);
   if (!route) return problem(404, 'Webhook 不存在');
   const id = route[1];
   const current = (await client.query('SELECT * FROM outbound_webhooks WHERE id=$1', [id])).rows[0];
@@ -110,6 +110,18 @@ async function handleOutboundWebhooksInner({ pathname, method, client, me, readB
     return { status: 200, data: { items: rows.map(row => ({ ...row, attempts: attempts.filter(item => item.delivery_id === row.id) })) } };
   }
   if (current.deleted_at) return problem(404, 'Webhook 已删除');
+  if (route[2] === 'test' && method === 'POST') {
+    const body = await readBody();
+    if (!current.enabled) return problem(409, '请先启用 Webhook');
+    if (body?.confirmExternalFields !== true) return problem(400, '请确认向外部地址发送测试正文');
+    const eventId = crypto.randomUUID(), deliveryId = crypto.randomUUID();
+    const payload = { sourceType: 'delivery_test', title: 'Webhook 投递测试',
+      body: '这是管理员主动发起的投递测试，不代表真实业务事件。', targetUrl: '/alerts', createdAt: new Date().toISOString() };
+    await client.query(`INSERT INTO outbound_webhook_events(id,event_type,payload,source_key,fanned_out)
+      VALUES($1,$2,$3,$4,true)`, [eventId,current.event_type,JSON.stringify(payload),`delivery-test:${id}:${eventId}`]);
+    await client.query('INSERT INTO outbound_webhook_deliveries(id,webhook_id,event_id) VALUES($1,$2,$3)', [deliveryId,id,eventId]);
+    return { status: 201, data: { deliveryId, status: 'pending' } };
+  }
   if (!route[2] && method === 'PUT') {
     const body = await readBody();
     if (body.version !== current.version) return problem(409, '配置版本已过期');

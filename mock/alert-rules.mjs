@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { smtpConfigured } from './review-mailer.mjs';
 
 const METRICS = new Set([
   'session_daily_tokens','session_refusal_streak','session_negative_rate',
@@ -120,8 +121,27 @@ async function isSilenced(client, rule, at) {
 }
 
 export async function handleAlertRules({ pathname, method, client, me, readBody, url }) {
-  if (!pathname.startsWith('/api/alerts/rules') && !pathname.startsWith('/api/alerts/incidents') && !pathname.startsWith('/api/alerts/silences') && !pathname.startsWith('/api/alerts/groups')) return null;
+  if (!pathname.startsWith('/api/alerts/rules') && !pathname.startsWith('/api/alerts/incidents') && !pathname.startsWith('/api/alerts/silences') && !pathname.startsWith('/api/alerts/groups') && !pathname.startsWith('/api/alerts/channels')) return null;
   if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可管理告警' } };
+  if (pathname === '/api/alerts/channels/test' && method === 'POST') {
+    const body = await readBody();
+    if (!['in_app','email'].includes(body?.channel)) return { status: 400, data: { error: '请选择站内或邮件渠道' } };
+    const user = (await client.query('SELECT review_email,review_email_enabled FROM users WHERE id=$1', [me.id])).rows[0];
+    if (body.channel === 'email' && (!user?.review_email_enabled || !user.review_email)) return { status: 400, data: { error: '请先在个人设置中启用收件邮箱' } };
+    if (body.channel === 'email' && !smtpConfigured()) return { status: 503, data: { error: 'SMTP 尚未配置' } };
+    const id = crypto.randomUUID(), email = body.channel === 'email' ? user.review_email : null;
+    await client.query(`INSERT INTO app_notifications
+      (id,user_id,kind,entity_id,title,body,target_url,email_to,email_status,email_next_attempt_at,show_in_app)
+      VALUES($1,$2,'alert_channel_test',$1,$3,$4,'/alerts',$5,$6,$7,$8)`,
+    [id,me.id,body.channel === 'email' ? '告警邮件渠道测试' : '告警站内渠道测试',
+      '这是管理员主动发起的告警通知渠道测试，不代表真实告警。',email,email?'pending':'skipped',email?new Date():null,body.channel === 'in_app']);
+    return { status: 201, data: { id, channel: body.channel, status: email ? 'pending' : 'visible' } };
+  }
+  const channelTest = pathname.match(/^\/api\/alerts\/channels\/tests\/([^/]+)$/);
+  if (channelTest && method === 'GET') {
+    const row = (await client.query("SELECT id,email_status,show_in_app,created_at FROM app_notifications WHERE id=$1 AND user_id=$2 AND kind='alert_channel_test'", [channelTest[1],me.id])).rows[0];
+    return row ? { status: 200, data: { id: row.id, status: row.show_in_app ? 'visible' : row.email_status, createdAt: row.created_at } } : { status: 404, data: { error: '测试通知不存在' } };
+  }
   if (pathname === '/api/alerts/groups' && method === 'GET') {
     const limit = Math.min(100,Math.max(1,Math.trunc(Number(url.searchParams.get('limit')) || 20)));
     const offset = Math.min(100000,Math.max(0,Math.trunc(Number(url.searchParams.get('offset')) || 0)));

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { App, Button, Card, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography } from 'antd';
-import { createWebhook, deleteWebhook, listWebhookDeliveries, listWebhooks, updateWebhook, type WebhookConfig, type WebhookDelivery, type WebhookEvent, type WebhookInput } from '../api/outbound-webhooks';
+import { createWebhook, deleteWebhook, listWebhookDeliveries, listWebhooks, testWebhookDelivery, updateWebhook, type WebhookConfig, type WebhookDelivery, type WebhookEvent, type WebhookInput } from '../api/outbound-webhooks';
 
 const eventOptions: { value: WebhookEvent; label: string }[] = [
   { value: 'task.completed', label: '任务完成' },
@@ -67,6 +67,15 @@ export default function WebhookSettings() {
     try { setDeliveries((await listWebhookDeliveries(item.id)).items); }
     catch (error) { message.error(error instanceof Error ? error.message : '获取投递记录失败'); }
   };
+  const testDelivery = (item: WebhookConfig) => Modal.confirm({
+    title: '向此地址发送测试事件？',
+    content: <Space direction="vertical"><Typography.Text>{item.url}</Typography.Text><Typography.Text>将发送签名的测试正文及事件 ID；不会包含真实业务数据或密钥。可随后在投递日志中查看状态。</Typography.Text></Space>,
+    okText: '发送测试',
+    onOk: async () => {
+      try { await testWebhookDelivery(item.id); message.success('测试投递已入队，请在日志中查看结果'); await logs(item); }
+      catch (error) { message.error(error instanceof Error ? error.message : '测试投递失败'); throw error; }
+    },
+  });
   return <Card title="出站 Webhook" extra={<Button type="primary" onClick={() => open(null)}>新增 Webhook</Button>}>
     <Typography.Paragraph type="secondary">系统在业务变更提交后发送签名请求；失败后按 1、2、4 分钟重试三次。接收方可使用 X-Webhook-Timestamp 和原始请求体校验 HMAC-SHA256，按 X-Webhook-Id 去重。</Typography.Paragraph>
     <Table rowKey="id" size="small" dataSource={items} pagination={{ pageSize: 5 }} columns={[
@@ -74,7 +83,7 @@ export default function WebhookSettings() {
       { title: '目标地址', dataIndex: 'url', ellipsis: true },
       { title: '密钥', dataIndex: 'secretMask' },
       { title: '状态', render: (_, item) => <Tag color={item.deletedAt ? 'default' : item.enabled ? 'green' : 'orange'}>{item.deletedAt ? '已删除' : item.enabled ? '启用' : '停用'}</Tag> },
-      { title: '操作', render: (_, item) => <Space>{!item.deletedAt && <Button size="small" onClick={() => open(item)}>编辑</Button>}<Button size="small" onClick={() => void logs(item)}>日志</Button>{!item.deletedAt && <Button size="small" danger onClick={() => remove(item)}>删除</Button>}</Space> },
+      { title: '操作', render: (_, item) => <Space>{!item.deletedAt && <Button size="small" onClick={() => open(item)}>编辑</Button>}{!item.deletedAt && item.enabled && <Button size="small" onClick={() => testDelivery(item)}>测试投递</Button>}<Button size="small" onClick={() => void logs(item)}>日志</Button>{!item.deletedAt && <Button size="small" danger onClick={() => remove(item)}>删除</Button>}</Space> },
     ]} />
     <Modal title={editing ? '编辑 Webhook' : '新增 Webhook'} open={editing !== undefined} onCancel={() => { setEditing(undefined); form.resetFields(); }} footer={null} destroyOnClose>
       <Form form={form} layout="vertical" onFinish={values => void save(values)}>
