@@ -130,9 +130,10 @@ BERTScore 使用独立的 `docker/evaluation-bertscore.Dockerfile`，预装多�
 npm test
 npm run build
 npm run lint
+npm run test:e2e
 ```
 
-测试会在 `TEST_DATABASE_URL` 指向的实例中创建并删除独立临时数据库，不会修改开发库。构建产物位于 `dist/`。字体文件及授权说明位于 `public/fonts/`，用于中文 PDF 导出。
+测试会在 `TEST_DATABASE_URL` 指向的实例中创建并删除独立临时数据库，不会修改开发库。端到端测试还会启动独立的 API 和 5187 端口前端，使用本机 Chrome；CI 使用 Playwright Chromium。测试结束后会停止服务并删除临时数据库。GitHub Actions 在每次 push 和 PR 运行静态检查、最高严重度为 high 的依赖漏洞扫描、Node 测试、构建和端到端测试。构建产物位于 `dist/`。字体文件及授权说明位于 `public/fonts/`，用于中文 PDF 导出。
 
 ## 项目结构
 
@@ -140,5 +141,6 @@ npm run lint
 - `mock/`：本地 API 与一次性旧数据来源。
 - `db/`：版本化 SQL 迁移及本地测试库初始化。
 - `tests/`：Node.js 测试。
+- `e2e/`：隔离数据库的 Playwright 浏览器测试。
 - `scripts/`：开发与数据库命令。
 - `TODOLIST.md`：功能与迭代记录。

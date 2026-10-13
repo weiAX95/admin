@@ -16,3 +16,5 @@ eslintcache
 !.env.sample
 *.log
 *.tsbuildinfo
+playwright-report/
+test-results/
