@@ -177,7 +177,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [093_password_expiry_grace.sql](../db/migrations/093_password_expiry_grace.sql)。当前共 **135 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [094_account_soft_delete.sql](../db/migrations/094_account_soft_delete.sql)。当前共 **135 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -555,6 +555,8 @@ flowchart LR
 
 消息 ID 只要求在**同一会话内**唯一；`session_messages` 的主键为 `(session_id, id)`。[062 迁移](../db/migrations/062_session_token_usage.sql) 在该表增加可空的 assistant 消息输入／输出 token 与模型名，并由数据库检查两个 token 字段同时存在且非负；旧消息保持缺失值。会话用量按明确上报的消息合计，口径见 [会话用量说明](session-token-usage.md)。评分表用 `(session_id, message_id)` 复合外键引用这两个字段。同一管理端账号对同一消息的有效评分由唯一索引限制为一条；删除评分账号时 `reviewer_id` 置空，原评分仍参与汇总。`annotation_tags.tag` 另有 [CHECK 约束](../db/migrations/002_constraints.sql)，只允许“准确、不准确、偏题、幻觉、过于冗长、过于简略、格式错误”七种标签。删除会话会级联删除消息、评分及其标签。`sessions.external_user_id` 不引用 `users.id`，不能把聊天端用户当成管理端评分账号。
 
+[094 迁移](../db/migrations/094_account_soft_delete.sql) 为管理端账号增加软删除时间与删除前启用状态。删除时禁用账号并撤销令牌，外键关联仍保留；管理员可在回收站恢复原账号和原启用状态。自动永久清理尚未接入，以免未经关联清单审查而触发级联删除。
+
 [093 迁移](../db/migrations/093_password_expiry_grace.sql) 为启用密码策略前没有可靠改密时间的旧账号重置 90 天宽限期；之后按最近一条密码历史计算到期，并在上海日历到期前 7／3／1 天生成站内提醒。到期账号只可改密、查看当前账号和退出，独立接口及 WebSocket 也拒绝过期令牌。
 
 [092 迁移](../db/migrations/092_login_lockout.sql) 保存连续错误密码次数和锁定时间。第五次错误登录后锁定 15 分钟，管理员接收去重站内通知；成功登录清空失败状态，账号删除级联清理。
@@ -571,7 +573,7 @@ flowchart LR
 
 | 表 | 当前内容与关键关系 | 对应页面或功能 |
 | --- | --- | --- |
-| `users` | 管理端账号、密码哈希、角色、启用状态及个人复习邮件设置。 | `/login`、`/accounts`、`/notes/reviews` |
+| `users` | 管理端账号、密码哈希、角色、启用状态、可恢复删除时间及个人复习邮件设置。账号进入回收站时保留原 ID 和所有关联，但令牌立即撤销。 | `/login`、`/accounts`、`/notes/reviews` |
 | `password_history` | 当前及历次密码的加盐哈希；`user_id` 外键，删除账号时级联删除。只供后端检查最近 5 次复用，不向页面返回哈希。 | `/accounts` 新建和重置密码、`/settings` 自助改密 |
 | `login_security_state` | 按账号保存连续错误次数与锁定到期时间；`user_id` 外键，删除账号时级联删除。第 5 次错误锁定 15 分钟并产生管理员通知。 | `/login` |
 | `auth_sessions` | 登录令牌哈希、到期与撤销时间；`user_id` 外键，删除账号时级联删除。 | 登录、退出、HTTP／WebSocket 鉴权 |

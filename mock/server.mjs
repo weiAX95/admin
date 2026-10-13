@@ -297,6 +297,7 @@ async function revokeUserSessions(userId) {
 const publicUser = (u) => ({
   id: u.id, username: u.username, name: u.name,
   role: u.role, status: u.status,
+  deletedAt: u.deletedAt || null,
   createdAt: u.createdAt, updatedAt: u.updatedAt,
 });
 
@@ -825,7 +826,7 @@ async function handleRequest(req, res) {
 
     // ---- 账号管理（仅管理员）----
     const isUsersPath =
-      pathname === "/api/users" || /^\/api\/users\/[^/]+$/.test(pathname);
+      pathname === "/api/users" || /^\/api\/users\/[^/]+(?:\/restore)?$/.test(pathname);
     if (isUsersPath) {
       if (me.role !== "admin") {
         return send(res, 403, { error: "需要管理员权限" });
@@ -833,7 +834,8 @@ async function handleRequest(req, res) {
 
       if (pathname === "/api/users") {
         if (method === "GET") {
-          const items = [...db.users]
+          const includeDeleted = url.searchParams.get("deleted") === "true";
+          const items = db.users.filter(user => Boolean(user.deletedAt) === includeDeleted)
             .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1))
             .map(publicUser);
           return send(res, 200, { items });
@@ -868,11 +870,23 @@ async function handleRequest(req, res) {
         return send(res, 405, { error: "method not allowed" });
       }
 
-      const um = pathname.match(/^\/api\/users\/([^/]+)$/);
+      const um = pathname.match(/^\/api\/users\/([^/]+)(?:\/restore)?$/);
       const index = db.users.findIndex((u) => u.id === um[1]);
       if (index === -1) return send(res, 404, { error: "user not found" });
       const target = db.users[index];
-      const adminCount = () => db.users.filter((u) => u.role === "admin").length;
+      const adminCount = () => db.users.filter((u) => u.role === "admin" && !u.deletedAt).length;
+
+      if (pathname.endsWith("/restore") && method === "POST") {
+        if (!target.deletedAt) return send(res, 409, { error: "账号不在回收站" });
+        target.status = target.statusBeforeDelete || "disabled";
+        target.deletedAt = null;
+        target.statusBeforeDelete = null;
+        target.updatedAt = nowIso();
+        await activeClient.query("DELETE FROM login_security_state WHERE user_id=$1", [target.id]);
+        saveDb(db);
+        return send(res, 200, publicUser(target));
+      }
+      if (target.deletedAt) return send(res, 410, { error: "账号已删除，请先恢复" });
 
       if (method === "PUT" || method === "PATCH") {
         const body = await readBody(req);
@@ -920,7 +934,10 @@ async function handleRequest(req, res) {
         if (target.role === "admin" && adminCount() <= 1) {
           return send(res, 400, { error: "不能删除唯一的管理员" });
         }
-        db.users.splice(index, 1);
+        target.statusBeforeDelete = target.status;
+        target.status = "disabled";
+        target.deletedAt = nowIso();
+        target.updatedAt = target.deletedAt;
         await revokeUserSessions(target.id);
         saveDb(db);
         return send(res, 200, { deleted: true, id: target.id });

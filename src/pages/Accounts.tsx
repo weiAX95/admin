@@ -21,6 +21,7 @@ import {
   createAccount,
   deleteAccount,
   listAccounts,
+  restoreAccount,
   updateAccount,
 } from "../api/accounts";
 import { getStoredUser } from "../api/client";
@@ -153,20 +154,21 @@ export default function Accounts() {
   const [items, setItems] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [showDeleted, setShowDeleted] = useState(false);
   const [editing, setEditing] = useState<Account | null>(null);
   const current = getStoredUser<AuthUser>();
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await listAccounts();
+      const res = await listAccounts(showDeleted);
       setItems(res.items);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "加载账号失败");
     } finally {
       setLoading(false);
     }
-  }, [message]);
+  }, [message, showDeleted]);
 
   useEffect(() => {
     void load();
@@ -186,11 +188,18 @@ export default function Accounts() {
   const remove = async (acc: Account) => {
     try {
       await deleteAccount(acc.id);
-      message.success("已删除");
+      message.success("已移入回收站，可恢复");
       void load();
     } catch (err) {
       message.error(err instanceof Error ? err.message : "删除失败");
     }
+  };
+  const restore = async (acc: Account) => {
+    try {
+      await restoreAccount(acc.id);
+      message.success('账号已恢复');
+      void load();
+    } catch (err) { message.error(err instanceof Error ? err.message : '恢复失败'); }
   };
 
   const columns: ColumnsType<Account> = [
@@ -219,8 +228,8 @@ export default function Accounts() {
       dataIndex: "status",
       key: "status",
       width: 100,
-      render: (v: Account["status"]) =>
-        v === "active" ? (
+      render: (v: Account["status"], account) =>
+        account.deletedAt ? <Tag color="default">回收站</Tag> : v === "active" ? (
           <Tag color="success">启用</Tag>
         ) : (
           <Tag color="default">禁用</Tag>
@@ -239,6 +248,7 @@ export default function Accounts() {
       key: "actions",
       width: 200,
       render: (_, a) => {
+        if (a.deletedAt) return <Button type="link" size="small" onClick={() => void restore(a)}>恢复</Button>;
         const isSelf = current?.username === a.username;
         return (
           <Space size={4}>
@@ -261,8 +271,8 @@ export default function Accounts() {
               {a.status === "active" ? "禁用" : "启用"}
             </Button>
             <Popconfirm
-              title="删除该账号？"
-              okText="删除"
+              title="将该账号移入回收站？"
+              okText="移入回收站"
               cancelText="取消"
               disabled={isSelf}
               onConfirm={() => void remove(a)}
@@ -290,6 +300,7 @@ export default function Accounts() {
         >
           新建账号
         </Button>
+        <Button type={showDeleted ? 'primary' : 'default'} onClick={() => setShowDeleted(value => !value)}>{showDeleted ? '返回账号列表' : '查看回收站'}</Button>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           仅管理员可管理账号；不能禁用或删除当前登录账号。
         </Typography.Text>

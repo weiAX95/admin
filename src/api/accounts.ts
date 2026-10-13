@@ -1,7 +1,8 @@
 import type { Account, AccountPayload } from "../types";
 import { http } from "./client";
 
-export const listAccounts = () => http.get<{ items: Account[] }>("/users");
+export const listAccounts = (deleted = false) => http.get<{ items: Account[] }>(`/users${deleted ? '?deleted=true' : ''}`);
+export const restoreAccount = (id: string) => http.post<Account>(`/users/${id}/restore`, {});
 
 export const createAccount = (payload: AccountPayload) =>
   http.post<Account>("/users", payload);

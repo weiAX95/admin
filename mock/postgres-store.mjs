@@ -17,7 +17,7 @@ const snake = name => name.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}
 const spec = (name, table, fields, children = []) => ({ name, table, fields, children });
 const child = (name, table, fields, parentColumn, orderField = "item_order") => ({ name, table, fields, parentColumn, orderField });
 const specs = [
-  spec("users", "users", ["id", "username", ["passwordHash", "password_hash"], "name", "role", "status", "reviewEmail", "reviewEmailEnabled", "timeZone", "createdAt", "updatedAt"]),
+  spec("users", "users", ["id", "username", ["passwordHash", "password_hash"], "name", "role", "status", "deletedAt", "statusBeforeDelete", "reviewEmail", "reviewEmailEnabled", "timeZone", "createdAt", "updatedAt"]),
   spec("tasks", "tasks", ["id", "title", "description", "category", "phase", "status", "priority", "dueDate", "plannedStartDate", "notes", "progress", "manualProgress", "estimatedHours", "ownerId", "version", "activeCycleStartedAt", "legacyCompletionUnknown", "createdAt", "updatedAt", "recurringSeriesId", "recurrenceIndex"], [
     child("checklist", "task_checklist_items", ["id", "text", "done"], "task_id"),
     child("dependencyIds", "task_dependencies", [["value", "dependency_id"]], "task_id"),

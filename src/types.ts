@@ -349,13 +349,14 @@ export interface Account {
   name: string;
   role: AccountRole;
   status: AccountStatus;
+  deletedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 /** 创建/更新账号入参；password 编辑时留空表示不修改 */
 export type AccountPayload = Partial<
-  Omit<Account, "id" | "createdAt" | "updatedAt">
+  Omit<Account, "id" | "createdAt" | "updatedAt" | "deletedAt">
 > & { password?: string };
 
 export interface AuthUser {
