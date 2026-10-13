@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Switch, Typography, Upload } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { getGlobalSettings, getPreferences, saveGlobalSettings, savePreferences, type GlobalSettings, type Preferences } from '../api/settings';
-import { getStoredUser, getToken } from '../api/client';
+import { getStoredUser, getToken, setAuth } from '../api/client';
+import { changePassword } from '../api/auth';
 import type { AuthUser } from '../types';
 import { useSettings } from '../components/SettingsProvider';
 import ModelConnectionsSettings from '../components/ModelConnectionsSettings';
@@ -25,6 +26,7 @@ export default function Settings() {
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [globalForm] = Form.useForm<GlobalSettings>();
   const [personalForm] = Form.useForm<Preferences>();
+  const [passwordForm] = Form.useForm<{ currentPassword: string; newPassword: string; confirmPassword: string }>();
   const logoPreview = Form.useWatch('logoUrl', globalForm);
   const load = async () => {
     const [g, p] = await Promise.all([admin ? getGlobalSettings() : Promise.resolve(null), getPreferences()]);
@@ -116,6 +118,24 @@ export default function Settings() {
           <Col xs={24}><Form.Item label="主色"><Space wrap className="settings-color-presets">{primaryPresets.map(color => <button key={color} type="button" className="settings-color-preset" style={{ background: color }} aria-label={`选择主色 ${color}`} aria-pressed={personal?.primaryColor.toLowerCase() === color} disabled={saving} onClick={() => void applyAppearance('primaryColor', color)} />)}<input aria-label="自定义主色" type="color" value={personal?.primaryColor || '#9582ff'} disabled={saving} onChange={event => void applyAppearance('primaryColor', event.target.value)} /></Space></Form.Item></Col>
         </Row>
         <Button type="primary" htmlType="submit" loading={saving}>保存个人偏好</Button>
+      </Form>
+    </Card>
+    <Card title="修改密码">
+      <Form form={passwordForm} layout="vertical" onFinish={async values => {
+        if (values.newPassword !== values.confirmPassword) { message.error('两次输入的新密码不一致'); return; }
+        setSaving(true);
+        try {
+          const session = await changePassword(values.currentPassword, values.newPassword);
+          setAuth(session.token, session.user);
+          passwordForm.resetFields();
+          message.success('密码已更新，其他设备已退出登录');
+        } catch (error) { message.error(error instanceof Error ? error.message : '修改密码失败'); }
+        finally { setSaving(false); }
+      }} style={{ maxWidth: 440 }}>
+        <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}><Input.Password autoComplete="current-password" /></Form.Item>
+        <Form.Item name="newPassword" label="新密码" rules={[{ required: true, message: '请输入新密码' }, { validator: async (_, value: string) => { if (value && !(value.length >= 8 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value))) throw new Error('至少 8 位，包含大小写字母和数字'); } }]}><Input.Password autoComplete="new-password" /></Form.Item>
+        <Form.Item name="confirmPassword" label="确认新密码" rules={[{ required: true, message: '请再次输入新密码' }]}><Input.Password autoComplete="new-password" /></Form.Item>
+        <Button type="primary" htmlType="submit" loading={saving}>更新密码</Button>
       </Form>
     </Card>
     <Card title="更新日志" extra={<Typography.Text type="secondary">当前版本 v{versionInfo?.currentVersion || '—'}</Typography.Text>}>

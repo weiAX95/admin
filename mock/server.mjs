@@ -663,6 +663,25 @@ async function handleRequest(req, res) {
     if (method === "GET" && pathname === "/api/auth/me") {
       return send(res, 200, publicUser(me));
     }
+    if (method === "POST" && pathname === "/api/auth/password") {
+      const body = await readBody(req);
+      if (!verifyPassword(body.currentPassword, me.passwordHash)) return send(res, 400, { error: "当前密码不正确" });
+      const passwordError = passwordPolicyError(body.newPassword);
+      if (passwordError) return send(res, 400, { error: passwordError });
+      const recentPasswords = (await activeClient.query("SELECT password_hash FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 5", [me.id])).rows;
+      if (recentPasswords.some(row => verifyPassword(body.newPassword, row.password_hash))) return send(res, 400, { error: "不能重复使用最近 5 次密码" });
+      me.passwordHash = hashPassword(body.newPassword);
+      me.updatedAt = nowIso();
+      saveDb(db);
+      await activeClient.query("INSERT INTO password_history(user_id,password_hash) VALUES($1,$2)", [me.id, me.passwordHash]);
+      const previousTokens = new Set((await activeClient.query("SELECT token_hash FROM auth_sessions WHERE user_id=$1 AND revoked_at IS NULL", [me.id])).rows.map(row => row.token_hash));
+      await revokeUserSessions(me.id);
+      for (const [ws, liveToken] of liveClients) if (previousTokens.has(sha256(liveToken))) { ws.close(1008, "authentication expired"); liveClients.delete(ws); }
+      const token = crypto.randomBytes(32).toString("hex");
+      const { sessionHours } = await getGlobalSettings(activeClient);
+      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3 * interval '1 hour'))", [sha256(token), me.id, sessionHours]);
+      return send(res, 200, { token, user: publicUser(me) });
+    }
     if (method === "POST" && pathname === "/api/auth/logout") {
       const token = (req.headers.authorization || "").replace(/^Bearer /, "");
       await activeClient.query("UPDATE auth_sessions SET revoked_at=now() WHERE token_hash=$1", [sha256(token)]);
