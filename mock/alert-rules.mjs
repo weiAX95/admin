@@ -11,20 +11,45 @@ const LEVELS = new Set(['info','warning','critical']);
 const CHANNELS = new Set(['in_app','email']);
 
 function validateRule(body) {
-  const name = String(body?.name || '').trim();
+  const name = typeof body?.name === 'string' ? body.name.trim() : '';
   const metric = body?.metric;
   const scopeType = typeof metric === 'string' && metric.startsWith('model_') ? 'model' : 'global';
   const scopeId = scopeType === 'model' ? String(body?.scopeId || '*') : '*';
-  const threshold = Number(body?.threshold);
-  const durationSeconds = Number(body?.durationSeconds ?? 0);
+  const threshold = body?.threshold;
+  const durationSeconds = body?.durationSeconds ?? 0;
   const channels = body?.channels ?? ['in_app'];
   if (!name || name.length > 120 || !METRICS.has(metric) || !OPERATORS.has(body?.operator)
-    || !Number.isFinite(threshold) || !Number.isInteger(durationSeconds) || durationSeconds < 0 || durationSeconds > 86400
-    || !LEVELS.has(body?.level) || !scopeId || !Array.isArray(channels)
+    || typeof threshold !== 'number' || !Number.isFinite(threshold) || !Number.isInteger(durationSeconds) || durationSeconds < 0 || durationSeconds > 86400
+    || !LEVELS.has(body?.level) || !scopeId || (body?.enabled !== undefined && typeof body.enabled !== 'boolean') || !Array.isArray(channels)
     || new Set(channels).size !== channels.length || channels.some(channel => !CHANNELS.has(channel))) {
     return { error: '请填写有效的名称、指标、比较符、阈值、持续秒数、级别和通知渠道' };
   }
   return { name, metric, scopeType, scopeId, operator: body.operator, threshold, durationSeconds, level: body.level, channels, enabled: Boolean(body.enabled) };
+}
+
+async function prepareImport(client, body) {
+  if (body?.schemaVersion !== 1 || !Array.isArray(body.rules) || body.rules.length < 1 || body.rules.length > 200 || !['skip','replace'].includes(body.mode)) {
+    return { error: '导入文件须为版本 1，包含 1–200 条规则，并选择跳过或覆盖同名规则' };
+  }
+  const existing = (await client.query('SELECT id,name,template_key,version FROM alert_rules')).rows;
+  const names = new Set();
+  const rows = [];
+  for (const [index, raw] of body.rules.entries()) {
+    const value = validateRule(raw);
+    let error = value.error || null;
+    const templateKey = raw?.templateKey ?? null;
+    if (!error && templateKey !== null && (typeof templateKey !== 'string' || !templateKey)) error = '内置模板标识无效';
+    if (!error && names.has(value.name)) error = '文件中规则名称重复';
+    if (!error) names.add(value.name);
+    const target = templateKey ? existing.find(item => item.template_key === templateKey) : existing.find(item => item.name === value.name);
+    if (!error && templateKey && !target) error = '内置模板不存在';
+    if (!error && target && ((templateKey && target.template_key !== templateKey) || (!templateKey && target.template_key))) error = '规则名称与内置模板冲突';
+    if (!error && existing.some(item => item.name === value.name && item.id !== target?.id)) error = '规则名称已被其他规则使用';
+    if (!error && value.scopeType === 'model' && value.scopeId !== '*'
+      && !(await client.query('SELECT 1 FROM experiment_models WHERE id=$1', [value.scopeId])).rowCount) error = '模型不存在';
+    rows.push({ index, name: raw?.name || '', value, status: error ? 'error' : target ? body.mode === 'skip' ? 'skip' : 'update' : 'create', error, targetId: target?.id || null, version: target?.version || null });
+  }
+  return { rows };
 }
 
 async function closeRuleIncidents(client, ruleId) {
@@ -38,6 +63,41 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
   if (pathname === '/api/alerts/rules' && method === 'GET') {
     const items = (await client.query('SELECT * FROM alert_rules ORDER BY template_key NULLS LAST,name')).rows;
     return { status: 200, data: { items } };
+  }
+  if (pathname === '/api/alerts/rules/import/preview' && method === 'POST') {
+    const prepared = await prepareImport(client, await readBody());
+    if (prepared.error) return { status: 400, data: { error: prepared.error } };
+    return { status: 200, data: { rows: prepared.rows.map(({ value, ...row }) => row) } };
+  }
+  if (pathname === '/api/alerts/rules/import' && method === 'POST') {
+    const body = await readBody();
+    await client.query('SELECT pg_advisory_xact_lock(748211)');
+    const prepared = await prepareImport(client, body);
+    if (prepared.error) return { status: 400, data: { error: prepared.error } };
+    if (prepared.rows.some(row => row.error)) return { status: 400, data: { error: '导入文件有无效规则', rows: prepared.rows.map(({ value, ...row }) => row) } };
+    const expected = body.expected;
+    if (!Array.isArray(expected) || expected.length !== prepared.rows.length || prepared.rows.some((row, index) => expected[index]?.status !== row.status || expected[index]?.targetId !== row.targetId || expected[index]?.version !== row.version)) {
+      return { status: 409, data: { error: '规则在预览后发生变化，请重新预览' } };
+    }
+    const counts = { created: 0, updated: 0, skipped: 0 };
+    for (const row of prepared.rows) {
+      if (row.status === 'skip') { counts.skipped++; continue; }
+      const value = row.value;
+      if (row.status === 'create') {
+        await client.query(`INSERT INTO alert_rules
+          (id,name,metric,scope_type,scope_id,operator,threshold,duration_seconds,level,channels,enabled,created_by)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+        [crypto.randomUUID(),value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.level,value.channels,value.enabled,me.id]);
+        counts.created++;
+      } else {
+        await closeRuleIncidents(client,row.targetId);
+        await client.query(`UPDATE alert_rules SET name=$2,metric=$3,scope_type=$4,scope_id=$5,operator=$6,
+          threshold=$7,duration_seconds=$8,level=$9,channels=$10,enabled=$11,version=version+1,updated_at=now()
+          WHERE id=$1`, [row.targetId,value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.level,value.channels,value.enabled]);
+        counts.updated++;
+      }
+    }
+    return { status: 200, data: counts };
   }
   if (pathname === '/api/alerts/rules' && method === 'POST') {
     const value = validateRule(await readBody());

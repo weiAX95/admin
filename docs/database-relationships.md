@@ -107,6 +107,8 @@ flowchart LR
 
 [083_alert_rules.sql](../db/migrations/083_alert_rules.sql) 建立 `alert_rules`、`alert_rule_state` 和 `alert_incidents`。规则包括指标、比较符、阈值、持续秒数、级别、站内／邮件渠道和启用状态；八个内置规则默认关闭。采样完成后按规则和实际模型范围判断，连续越界到达持续时间时仅创建一条活跃事件和首发通知；恢复时结束事件。修改或停用规则会结束旧事件并清空连续越界状态。`alert_rules.created_by` 和 `alert_incidents.acknowledged_by` 指向账号且删除时置空；`alert_rule_state.rule_id` 删除时级联；`alert_incidents.rule_id` 删除时置空以保留历史。规则与样本按指标及模型原始 ID 在代码中对应，**没有跨表 SQL 外键**。管理员在 `/alerts` 管理规则、查看样本与事件、确认触发事件；指派与完整处置流程仍待实现。
 
+规则导出是版本 1 的 JSON 快照，只包含选中规则的配置和内置模板键，不包含事件、通知或账号信息。导入先预览每条规则将新增、跳过、覆盖或被拒绝；管理员选择同名处理方式后确认。后端在同一事务中复核模型引用、名称冲突和预览时的目标版本，任何无效行或并发变化都拒绝整批写入。覆盖内置规则按固定模板键匹配，不生成同名副本；历史事件继续保留。
+
 ```mermaid
 flowchart LR
   Sessions[(session_messages / session_quality_flags / message_annotations)] -. "分钟聚合，无 FK" .-> Samples[(alert_metric_samples)]

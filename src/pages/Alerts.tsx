@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { App, Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Select, Space, Switch, Table, Tabs, Tag, Typography } from 'antd';
-import type { AlertIncident, AlertMetricSample, AlertRule, AlertRuleInput } from '../api/alerts';
-import { acknowledgeAlertIncident, createAlertRule, deleteAlertRule, listAlertIncidents, listAlertMetricSamples, listAlertRules, updateAlertRule } from '../api/alerts';
+import { App, Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd';
+import type { AlertImportRow, AlertIncident, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput } from '../api/alerts';
+import { acknowledgeAlertIncident, createAlertRule, deleteAlertRule, importAlertRules, listAlertIncidents, listAlertMetricSamples, listAlertRules, previewAlertRuleImport, updateAlertRule } from '../api/alerts';
 import { getPlatformConfig } from '../api/experiment-platform';
 
 const metrics = [
@@ -28,12 +28,17 @@ export default function Alerts() {
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [selectedIds, setSelectedIds] = useState<React.Key[]>([]);
+  const [archive, setArchive] = useState<AlertRuleArchive | null>(null);
+  const [importRows, setImportRows] = useState<AlertImportRow[]>([]);
+  const [importMode, setImportMode] = useState<'skip' | 'replace'>('skip');
+  const [importBusy, setImportBusy] = useState(false);
   const selectedMetric = Form.useWatch('metric', form);
 
   const refresh = useCallback(async () => {
     try {
       const [ruleResult, incidentResult] = await Promise.all([listAlertRules(), listAlertIncidents()]);
-      setRules(ruleResult.items); setIncidents(incidentResult.items); setError('');
+      setRules(ruleResult.items); setSelectedIds(current => current.filter(id => ruleResult.items.some(rule => rule.id === id))); setIncidents(incidentResult.items); setError('');
     } catch (cause) { setError(cause instanceof Error ? cause.message : '告警信息加载失败'); }
   }, []);
   const refreshSamples = useCallback(async (selected: string) => {
@@ -75,12 +80,45 @@ export default function Alerts() {
     catch (cause) { message.error(cause instanceof Error ? cause.message : '确认失败'); }
     finally { setBusyId(null); }
   };
+  const exportSelected = () => {
+    const selected = rules.filter(rule => selectedIds.includes(rule.id));
+    const content: AlertRuleArchive = { schemaVersion: 1, rules: selected.map(rule => ({
+      templateKey: rule.template_key, name: rule.name, metric: rule.metric, scopeId: rule.scope_id,
+      operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds,
+      level: rule.level, channels: rule.channels, enabled: rule.enabled,
+    })) };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(content, null, 2)], { type: 'application/json' }));
+    const link = document.createElement('a'); link.href = url; link.download = 'alert-rules.json'; link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+  const previewArchive = async (value: AlertRuleArchive, mode: 'skip' | 'replace') => {
+    setImportBusy(true);
+    try { setImportRows((await previewAlertRuleImport(value, mode)).rows); setArchive(value); }
+    catch (cause) { setImportRows([]); message.error(cause instanceof Error ? cause.message : '规则预览失败'); }
+    finally { setImportBusy(false); }
+  };
+  const selectArchive = async (file: File) => {
+    if (file.size > 1024 * 1024) { message.error('规则文件不能超过 1 MB'); return false; }
+    try { await previewArchive(JSON.parse(await file.text()) as AlertRuleArchive, importMode); }
+    catch { message.error('规则文件不是有效 JSON'); }
+    return false;
+  };
+  const confirmImport = async () => {
+    if (!archive || importRows.some(row => row.error)) return;
+    setImportBusy(true);
+    try {
+      const result = await importAlertRules(archive, importMode, importRows);
+      message.success(`新增 ${result.created}、更新 ${result.updated}、跳过 ${result.skipped}`);
+      setArchive(null); setImportRows([]); setSelectedIds([]); await refresh();
+    } catch (cause) { message.error(cause instanceof Error ? cause.message : '导入失败，请重新预览'); }
+    finally { setImportBusy(false); }
+  };
 
-  return <Card title="告警规则与事件" extra={<Space><Button onClick={() => { void refresh(); void refreshSamples(metric); }}>刷新</Button><Button type="primary" onClick={openCreate}>创建规则</Button></Space>}>
+  return <Card title="告警规则与事件" extra={<Space><Button onClick={() => { void refresh(); void refreshSamples(metric); }}>刷新</Button><Button disabled={!selectedIds.length} onClick={exportSelected}>导出所选</Button><Upload accept=".json,application/json" showUploadList={false} beforeUpload={file => { void selectArchive(file); return false; }}><Button>导入 JSON</Button></Upload><Button type="primary" onClick={openCreate}>创建规则</Button></Space>}>
     <Typography.Paragraph type="secondary">内置规则默认关闭。启用后，服务每分钟从实际数据采样并判断；无数据时不会将比率视为零。告警首次触发后写入事件并通知管理员。</Typography.Paragraph>
     {error && <Alert type="error" showIcon message={error} action={<Button size="small" onClick={() => void refresh()}>重试</Button>} style={{ marginBottom: 16 }} />}
     <Tabs items={[
-      { key: 'rules', label: `规则 ${rules.length}`, children: <Table<AlertRule> rowKey="id" dataSource={rules} pagination={{ pageSize: 10 }} locale={{ emptyText: <Empty description="暂无规则"><Button onClick={openCreate}>创建规则</Button></Empty> }} columns={[
+      { key: 'rules', label: `规则 ${rules.length}`, children: <Table<AlertRule> rowKey="id" dataSource={rules} rowSelection={{ selectedRowKeys: selectedIds, onChange: setSelectedIds }} pagination={{ pageSize: 10 }} locale={{ emptyText: <Empty description="暂无规则"><Button onClick={openCreate}>创建规则</Button></Empty> }} columns={[
         { title: '名称', dataIndex: 'name', render: (name: string, rule) => <Space><strong>{name}</strong>{rule.template_key && <Tag>内置</Tag>}</Space> },
         { title: '指标', dataIndex: 'metric', render: metricLabel },
         { title: '条件', render: (_, rule) => `${rule.operator} ${rule.threshold}，持续 ${rule.duration_seconds} 秒` },
@@ -114,5 +152,9 @@ export default function Alerts() {
         <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
       </Form>
     </Drawer>
+    <Modal title="预览导入规则" open={Boolean(archive)} onCancel={() => { setArchive(null); setImportRows([]); }} onOk={() => void confirmImport()} okText="确认导入" okButtonProps={{ disabled: importRows.length === 0 || importRows.some(row => row.error), loading: importBusy }} width={760}>
+      <Space style={{ marginBottom: 12 }}>同名规则<Select aria-label="同名规则处理" value={importMode} style={{ width: 160 }} options={[{value:'skip',label:'跳过已有'},{value:'replace',label:'覆盖已有'}]} onChange={mode => { setImportMode(mode); if (archive) void previewArchive(archive,mode); }} /></Space>
+      <Table<AlertImportRow> rowKey="index" size="small" dataSource={importRows} pagination={{ pageSize: 8 }} columns={[{title:'规则名称',dataIndex:'name'},{title:'处理',dataIndex:'status',render:(value:string)=>value==='error'?<Tag color="red">无效</Tag>:value==='create'?'新增':value==='update'?'覆盖':'跳过'},{title:'原因',dataIndex:'error',render:(value:string|null)=>value||'—'}]} />
+    </Modal>
   </Card>;
 }
