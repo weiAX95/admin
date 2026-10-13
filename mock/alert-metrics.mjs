@@ -51,6 +51,11 @@ export async function collectAlertMetrics(pool, now = new Date()) {
       add('model_p99_ms', model.p99, model.total, 'model', model.id);
       add('model_qps', Number(model.total) / 300, model.total, 'model', model.id);
     }
+    const rateRejections = (await client.query(`SELECT m.id,count(r.id)::integer AS rejected
+      FROM experiment_models m LEFT JOIN model_rate_rejections r ON r.model_id=m.id
+        AND r.created_at >= $1 AND r.created_at < $2
+      GROUP BY m.id`, [fiveMinutesAgo,sampledAt])).rows;
+    for (const model of rateRejections) add('model_rate_rejections_5m',model.rejected,model.rejected,'model',model.id);
 
     const evaluation = (await client.query(`
       SELECT count(*) FILTER (WHERE rm.passed IS NOT NULL)::integer AS scored,

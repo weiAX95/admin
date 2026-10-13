@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { notifyUser } from './app-notifications.mjs';
 
 const windowStart = () => new Date(Math.floor(Date.now() / 60000) * 60000).toISOString();
@@ -46,6 +47,15 @@ export async function checkModelRate(client, requests) {
     items.push({ modelId, minute, calls, tokens, request, limit });
   }
   return { status: 200, items };
+}
+
+export async function recordModelRateRejection(client, result, sourceModule, userId) {
+  if (result.status !== 429 || !['experiments','projects'].includes(sourceModule)) return;
+  await client.query(`INSERT INTO model_rate_rejections
+    (id,model_id,user_id,source_module,used_requests,used_tokens,requested_requests,requested_tokens)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+  [crypto.randomUUID(),result.data.modelId,userId,sourceModule,result.data.usedRequests,
+    result.data.usedTokens,result.data.requestedRequests,result.data.requestedTokens]);
 }
 
 export async function reserveModelRate(client, runRequests, checked) {

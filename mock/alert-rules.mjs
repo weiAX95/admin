@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 
 const METRICS = new Set([
   'session_daily_tokens','session_refusal_streak','session_negative_rate',
-  'model_5xx_rate','model_p50_ms','model_p95_ms','model_p99_ms','model_qps',
+  'model_5xx_rate','model_p50_ms','model_p95_ms','model_p99_ms','model_qps','model_rate_rejections_5m',
   'evaluation_pass_rate','evaluation_average_score',
   'governance_daily_cost_usd','governance_budget_used_percent',
 ]);

@@ -4,7 +4,7 @@ import { completeWithProvider } from './provider-adapters.mjs';
 import { modelConnectionAvailable } from './model-connections.mjs';
 import { modelUsable, supportedProvider } from './model-governance.mjs';
 import { checkTokenReservations, reserveRunTokens } from './model-quotas.mjs';
-import { checkModelRate, reserveModelRate } from './model-rate-limits.mjs';
+import { checkModelRate, recordModelRateRejection, reserveModelRate } from './model-rate-limits.mjs';
 import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvidence, mergeProjectModuleReports, parseProjectRequirements, selectProjectEvidence, validateProjectReport } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
 import { relatedAcceptedSuggestions } from './project-suggestion-similarity.mjs';
@@ -286,7 +286,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       const quota = await checkTokenReservations(connection,me,[{ modelId: model.id, tokens: budget.reservedTokens, needsContext: false }]);
       if (quota.status !== 200) { await connection.query('ROLLBACK'); return quota; }
       const rate = await checkModelRate(connection,[{ modelId: model.id, calls: budget.calls, tokens: budget.reservedTokens }]);
-      if (rate.status !== 200) { await connection.query('ROLLBACK'); return rate; }
+      if (rate.status !== 200) { await connection.query('ROLLBACK'); await recordModelRateRejection(connection,rate,'projects',me.id); return rate; }
       const runId = `${analysisId}:${locked.attempts + 1}`;
       await reserveRunTokens(connection,me,[{ runId, modelId: model.id, tokens: budget.reservedTokens }],quota);
       await reserveModelRate(connection,[{ runId, modelId: model.id, calls: budget.calls, tokens: budget.reservedTokens }],rate);
@@ -335,7 +335,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     const quota = await checkTokenReservations(connection,me,[{ modelId: model.id, tokens: budget.reservedTokens, needsContext: false }]);
     if (quota.status !== 200) { await connection.query('ROLLBACK'); return quota; }
     const rate = await checkModelRate(connection,[{ modelId: model.id, calls: budget.calls, tokens: budget.reservedTokens }]);
-    if (rate.status !== 200) { await connection.query('ROLLBACK'); return rate; }
+    if (rate.status !== 200) { await connection.query('ROLLBACK'); await recordModelRateRejection(connection,rate,'projects',me.id); return rate; }
     created = (await connection.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,baseline_version_id,model_id,provider,api_model,connection_id,input_price,output_price,estimated_max_cost_usd,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,'queued') RETURNING *", [id,repositoryId,scan.id,me.id,scan.full_name,scan.branch,scan.commit_sha,repository.goal,repository.requirement_baseline,repository.baseline_version_id,model.id,model.provider,model.api_model,model.connection_id,model.input_usd_per_million,model.output_usd_per_million,estimatedCost])).rows[0];
     await connection.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,1,$2,'queued')", [id,estimatedCost]);
     await reserveRunTokens(connection,me,[{ runId: `${id}:1`, modelId: model.id, tokens: budget.reservedTokens }],quota);

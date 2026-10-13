@@ -6,7 +6,7 @@ import {mediaCost,preflightMedia,preflightOutput,validateModelCapabilities} from
 import {modelConnectionAvailable} from './model-connections.mjs';
 import {modelUsable,supportedProvider,validateRegistry} from './model-governance.mjs';
 import {checkTokenReservations,reserveRunTokens} from './model-quotas.mjs';
-import {checkModelRate,reserveModelRate} from './model-rate-limits.mjs';
+import {checkModelRate,recordModelRateRejection,reserveModelRate} from './model-rate-limits.mjs';
 import {notifyModelReferenceOwners,failQueuedModelRuns} from './model-retirement.mjs';
 import { caseInputFingerprint } from './evaluation-datasets.mjs';
 import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
@@ -170,7 +170,7 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   const quotaCheck=await checkTokenReservations(client,me,quotaRequests,{dryRun:Boolean(body.dryRun)});
   if(quotaCheck.status!==200)return quotaCheck;
   const rateCheck=await checkModelRate(client,quotaRequests);
-  if(rateCheck.status!==200)return rateCheck;
+  if(rateCheck.status!==200){if(!body.dryRun)await recordModelRateRejection(client,rateCheck,'experiments',me.id);return rateCheck;}
   if (body.dryRun) return ok({ runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate, remainingBudgetUsd: settings.daily_budget_usd - spent });
   const batchId = uuid();
   const runReservations=[];

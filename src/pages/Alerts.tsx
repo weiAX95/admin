@@ -10,6 +10,7 @@ const metrics = [
   ['session_negative_rate','近 1 小时负面标注率 %'], ['model_5xx_rate','模型 5xx 错误率 %'],
   ['model_p50_ms','模型 P50 延迟 ms'], ['model_p95_ms','模型 P95 延迟 ms'],
   ['model_p99_ms','模型 P99 延迟 ms'], ['model_qps','模型 QPS'],
+  ['model_rate_rejections_5m','模型近 5 分钟限流拒绝次数'],
   ['evaluation_pass_rate','近 1 小时评测通过率 %'], ['evaluation_average_score','近 1 小时评测均分'],
   ['governance_daily_cost_usd','今日模型成本 USD'], ['governance_budget_used_percent','月预算使用率 %'],
 ] as const;
