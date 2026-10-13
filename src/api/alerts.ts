@@ -12,7 +12,7 @@ export interface AlertIncident {
   scope_id: string; level: AlertRule['level'];
   status: 'firing' | 'acknowledged' | 'resolved'; trigger_value: number;
   trigger_count: number; opened_at: string; acknowledged_at: string | null;
-  resolved_at: string | null;
+  resolved_at: string | null; escalated_at: string | null;
 }
 export interface AlertMetricSample {
   metric: string; scope_type: string; scope_id: string;

@@ -105,7 +105,7 @@ flowchart LR
 
 [082_alert_metric_samples.sql](../db/migrations/082_alert_metric_samples.sql) 新增 `alert_metric_samples`。API 每分钟聚合会话用量、拒答和负面标注、模型最近五分钟 HTTP 错误率／延迟分位数／QPS、最近一小时评测通过率和均分，以及上海日历日成本与月预算使用率，写入以指标、范围和分钟为键的样本，保留 30 天。无调用或无评分的比率不写成 0；日用量与日成本可以为 0。`scope_id` 对模型仅保存原始 ID，**没有外键**，模型删除后样本可在保留期内继续用于历史分析。管理员可经 `/api/alerts/metrics` 读取样本；规则计算见下一段。
 
-[083_alert_rules.sql](../db/migrations/083_alert_rules.sql) 建立 `alert_rules`、`alert_rule_state` 和 `alert_incidents`。规则包括指标、比较符、阈值、持续秒数、级别、站内／邮件渠道和启用状态；八个内置规则默认关闭。采样完成后按规则和实际模型范围判断，连续越界到达持续时间时仅创建一条活跃事件和首发通知；恢复时结束事件。修改或停用规则会结束旧事件并清空连续越界状态。`alert_rules.created_by` 和 `alert_incidents.acknowledged_by` 指向账号且删除时置空；`alert_rule_state.rule_id` 删除时级联；`alert_incidents.rule_id` 删除时置空以保留历史。规则与样本按指标及模型原始 ID 在代码中对应，**没有跨表 SQL 外键**。管理员在 `/alerts` 管理规则、查看样本与事件、确认触发事件；指派与完整处置流程仍待实现。
+[083_alert_rules.sql](../db/migrations/083_alert_rules.sql) 建立 `alert_rules`、`alert_rule_state` 和 `alert_incidents`。规则包括指标、比较符、阈值、持续秒数、级别、站内／邮件渠道和启用状态；八个内置规则默认关闭。采样完成后按规则和实际模型范围判断，连续越界到达持续时间时仅创建一条活跃事件和首发通知；恢复时结束事件。[084_alert_escalation.sql](../db/migrations/084_alert_escalation.sql) 为事件增加升级时间；仍处于触发状态的 Warning 在 30 分钟未确认后升级为 Critical，并另发站内及可选邮件通知。修改或停用规则会结束旧事件并清空连续越界状态。`alert_rules.created_by` 和 `alert_incidents.acknowledged_by` 指向账号且删除时置空；`alert_rule_state.rule_id` 删除时级联；`alert_incidents.rule_id` 删除时置空以保留历史。规则与样本按指标及模型原始 ID 在代码中对应，**没有跨表 SQL 外键**。管理员在 `/alerts` 管理规则、查看样本与事件、确认触发事件；指派与完整处置流程仍待实现。
 
 规则导出是版本 1 的 JSON 快照，只包含选中规则的配置和内置模板键，不包含事件、通知或账号信息。导入先预览每条规则将新增、跳过、覆盖或被拒绝；管理员选择同名处理方式后确认。后端在同一事务中复核模型引用、名称冲突和预览时的目标版本，任何无效行或并发变化都拒绝整批写入。覆盖内置规则按固定模板键匹配，不生成同名副本；历史事件继续保留。
 
@@ -141,7 +141,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [083_alert_rules.sql](../db/migrations/083_alert_rules.sql)。当前共 **128 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [084_alert_escalation.sql](../db/migrations/084_alert_escalation.sql)。当前共 **128 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 

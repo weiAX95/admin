@@ -224,9 +224,21 @@ async function notifyIncident(client, rule, incident, value) {
   }
 }
 
+async function notifyEscalation(client, incident) {
+  const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
+  for (const admin of admins) {
+    const email = admin.review_email_enabled ? admin.review_email : null;
+    await client.query(`INSERT INTO app_notifications
+      (id,user_id,kind,entity_id,title,body,target_url,email_to,email_status,email_next_attempt_at)
+      VALUES($1,$2,'alert_rule_escalation',$3,$4,$5,'/alerts',$6,$7,$8)
+      ON CONFLICT(user_id,kind,entity_id) DO NOTHING`,
+    [crypto.randomUUID(),admin.id,incident.id,`严重告警：${incident.rule_name}`,`告警持续超过 30 分钟仍未确认，已升级为 Critical。当前值 ${incident.trigger_value}。`,email,email?'pending':'skipped',email?new Date():null]);
+  }
+}
+
 export async function evaluateAlertRules(pool, now = new Date()) {
   const client = await pool.connect();
-  let opened = 0;
+  let changed = 0;
   try {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(748210)');
@@ -249,10 +261,11 @@ export async function evaluateAlertRules(pool, now = new Date()) {
         let active = (await client.query("SELECT id FROM alert_incidents WHERE rule_id=$1 AND scope_id=$2 AND status IN ('firing','acknowledged') FOR UPDATE", [rule.id,sample.scope_id])).rows[0];
         if (active && !priorRecent) {
           await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=$2,resolution_note='采样中断，重新计时' WHERE id=$1", [active.id,sample.sampled_at]);
+          changed++;
           active = null;
         }
         if (!breached) {
-          if (active) await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=$2,resolution_note='指标恢复正常' WHERE id=$1", [active.id,sample.sampled_at]);
+          if (active) { await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=$2,resolution_note='指标恢复正常' WHERE id=$1", [active.id,sample.sampled_at]); changed++; }
           continue;
         }
         if (active) { await client.query('UPDATE alert_incidents SET trigger_value=$2,trigger_count=trigger_count+1 WHERE id=$1', [active.id,sample.value]); continue; }
@@ -262,11 +275,16 @@ export async function evaluateAlertRules(pool, now = new Date()) {
           VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
         [crypto.randomUUID(),rule.id,rule.name,rule.metric,sample.scope_id,rule.level,sample.value,sample.sampled_at])).rows[0];
         await notifyIncident(client,rule,incident,sample.value);
-        opened++;
+        changed++;
       }
     }
+    const escalated = (await client.query(`UPDATE alert_incidents SET level='critical',escalated_at=$1
+      WHERE status='firing' AND level='warning' AND escalated_at IS NULL
+        AND opened_at <= $1::timestamptz - interval '30 minutes' RETURNING *`, [now])).rows;
+    for (const incident of escalated) await notifyEscalation(client,incident);
+    changed += escalated.length;
     await client.query('COMMIT');
-    return opened;
+    return changed;
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }

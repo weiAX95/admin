@@ -141,7 +141,7 @@ export default function Alerts() {
       { key: 'incidents', label: `告警事件 ${incidents.length}`, children: <Table<AlertIncident> rowKey="id" dataSource={incidents} pagination={{ pageSize: 10 }} locale={{ emptyText: <Empty description="暂无告警事件" /> }} columns={[
         { title: '触发时间', dataIndex: 'opened_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '规则', dataIndex: 'rule_name' }, { title: '范围', dataIndex: 'scope_id' },
-        { title: '级别', dataIndex: 'level', render: (level: AlertIncident['level']) => <Tag color={levelColor[level]}>{level}</Tag> },
+        { title: '级别', render: (_, item) => <Space><Tag color={levelColor[item.level]}>{item.level}</Tag>{item.escalated_at && <Tag color="red">30 分钟未确认升级</Tag>}</Space> },
         { title: '状态', dataIndex: 'status', render: (value: string) => <Tag>{value}</Tag> },
         { title: '当前值', dataIndex: 'trigger_value' }, { title: '触发次数', dataIndex: 'trigger_count' },
         { title: '操作', render: (_, item) => item.status === 'firing' ? <Button size="small" loading={busyId === item.id} onClick={() => void acknowledge(item)}>确认</Button> : null },
