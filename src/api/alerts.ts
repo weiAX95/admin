@@ -5,7 +5,7 @@ export interface AlertRule {
   scope_type: 'global' | 'model'; scope_id: string;
   operator: '>' | '<' | '=' | '>=' | '<='; threshold: number;
   duration_seconds: number; repeat_minutes: number; level: 'info' | 'warning' | 'critical';
-  channels: string[]; enabled: boolean; version: number; updated_at: string;
+  channels: string[]; tags: string[]; enabled: boolean; version: number; updated_at: string;
 }
 export interface AlertIncident {
   id: string; rule_id: string | null; rule_name: string; metric: string;
@@ -27,8 +27,21 @@ export interface AlertMetricSample {
 export interface AlertRuleInput {
   name: string; metric: string; scopeId: string; operator: AlertRule['operator'];
   threshold: number; durationSeconds: number; repeatMinutes: number; level: AlertRule['level'];
-  channels: string[]; enabled: boolean;
+  channels: string[]; tags: string[]; enabled: boolean;
 }
+
+export interface AlertSilence {
+  id: string; name: string; scope_type: 'all' | 'module' | 'tag'; scope_value: string | null;
+  timezone: string; start_minute: number; end_minute: number; enabled: boolean; version: number;
+}
+export interface AlertSilenceInput {
+  name: string; scopeType: AlertSilence['scope_type']; scopeValue: string | null;
+  timezone: string; startMinute: number; endMinute: number; enabled: boolean;
+}
+export const listAlertSilences = () => http.get<{ items: AlertSilence[] }>('/alerts/silences');
+export const createAlertSilence = (input: AlertSilenceInput) => http.post<{ item: AlertSilence }>('/alerts/silences', input);
+export const updateAlertSilence = (id: string, version: number, input: AlertSilenceInput) => http.put<{ item: AlertSilence }>(`/alerts/silences/${id}`, { version, ...input });
+export const deleteAlertSilence = (id: string, version: number) => http.del(`/alerts/silences/${id}`, { version });
 
 export const listAlertRules = () => http.get<{ items: AlertRule[] }>('/alerts/rules');
 export const createAlertRule = (input: AlertRuleInput) => http.post<{ item: AlertRule }>('/alerts/rules', input);

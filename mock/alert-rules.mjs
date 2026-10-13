@@ -19,14 +19,16 @@ function validateRule(body) {
   const durationSeconds = body?.durationSeconds ?? 0;
   const repeatMinutes = body?.repeatMinutes ?? 30;
   const channels = body?.channels ?? ['in_app'];
+  const tags = body?.tags ?? [];
   if (!name || name.length > 120 || !METRICS.has(metric) || !OPERATORS.has(body?.operator)
     || typeof threshold !== 'number' || !Number.isFinite(threshold) || !Number.isInteger(durationSeconds) || durationSeconds < 0 || durationSeconds > 86400
     || !Number.isInteger(repeatMinutes) || repeatMinutes < 1 || repeatMinutes > 1440
     || !LEVELS.has(body?.level) || !scopeId || (body?.enabled !== undefined && typeof body.enabled !== 'boolean') || !Array.isArray(channels)
-    || new Set(channels).size !== channels.length || channels.some(channel => !CHANNELS.has(channel))) {
+    || new Set(channels).size !== channels.length || channels.some(channel => !CHANNELS.has(channel))
+    || !Array.isArray(tags) || tags.length > 20 || tags.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 32)) {
     return { error: '请填写有效的名称、指标、比较符、阈值、持续秒数、级别和通知渠道' };
   }
-  return { name, metric, scopeType, scopeId, operator: body.operator, threshold, durationSeconds, repeatMinutes, level: body.level, channels, enabled: Boolean(body.enabled) };
+  return { name, metric, scopeType, scopeId, operator: body.operator, threshold, durationSeconds, repeatMinutes, level: body.level, channels, tags: [...new Set(tags.map(tag => tag.trim()))], enabled: Boolean(body.enabled) };
 }
 
 async function prepareImport(client, body) {
@@ -65,9 +67,72 @@ async function recordIncidentEvent(client, incidentId, eventType, actorId = null
     VALUES($1,$2,$3,$4,$5,$6)`, [crypto.randomUUID(),incidentId,actorId,eventType,detail,occurredAt]);
 }
 
+function validateSilence(body) {
+  const name = typeof body?.name === 'string' ? body.name.trim() : '';
+  const scopeType = body?.scopeType;
+  const scopeValue = scopeType === 'all' ? null : typeof body?.scopeValue === 'string' ? body.scopeValue.trim() : '';
+  const timezone = body?.timezone || 'Asia/Shanghai';
+  try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }); }
+  catch { return { error: '无效时区' }; }
+  if (!name || name.length > 120 || !['all','module','tag'].includes(scopeType)
+    || (scopeType === 'module' && !['session','model','evaluation','governance'].includes(scopeValue))
+    || (scopeType === 'tag' && (!scopeValue || scopeValue.length > 32))
+    || !Number.isInteger(body?.startMinute) || body.startMinute < 0 || body.startMinute > 1439
+    || !Number.isInteger(body?.endMinute) || body.endMinute < 0 || body.endMinute > 1439
+    || body.startMinute === body.endMinute || typeof body?.enabled !== 'boolean') {
+    return { error: '请填写有效的静默名称、范围和每日起止时间' };
+  }
+  return { name, scopeType, scopeValue, timezone, startMinute: body.startMinute, endMinute: body.endMinute, enabled: body.enabled };
+}
+
+async function isSilenced(client, rule, at) {
+  if (rule.level !== 'warning') return false;
+  const silences = (await client.query('SELECT * FROM alert_silences WHERE enabled=true')).rows;
+  return silences.some(silence => {
+    const module = rule.metric.split('_')[0];
+    if (silence.scope_type === 'module' && silence.scope_value !== module) return false;
+    if (silence.scope_type === 'tag' && !(rule.tags || []).includes(silence.scope_value)) return false;
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: silence.timezone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .formatToParts(at).map(part => [part.type,part.value]));
+    const minute = Number(parts.hour) * 60 + Number(parts.minute);
+    return silence.start_minute < silence.end_minute
+      ? minute >= silence.start_minute && minute < silence.end_minute
+      : minute >= silence.start_minute || minute < silence.end_minute;
+  });
+}
+
 export async function handleAlertRules({ pathname, method, client, me, readBody, url }) {
-  if (!pathname.startsWith('/api/alerts/rules') && !pathname.startsWith('/api/alerts/incidents')) return null;
+  if (!pathname.startsWith('/api/alerts/rules') && !pathname.startsWith('/api/alerts/incidents') && !pathname.startsWith('/api/alerts/silences')) return null;
   if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可管理告警' } };
+  if (pathname === '/api/alerts/silences' && method === 'GET') {
+    return { status: 200, data: { items: (await client.query('SELECT * FROM alert_silences ORDER BY name,id')).rows } };
+  }
+  if (pathname === '/api/alerts/silences' && method === 'POST') {
+    const value = validateSilence(await readBody());
+    if (value.error) return { status: 400, data: { error: value.error } };
+    const item = (await client.query(`INSERT INTO alert_silences
+      (id,name,scope_type,scope_value,timezone,start_minute,end_minute,enabled,created_by)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+    [crypto.randomUUID(),value.name,value.scopeType,value.scopeValue,value.timezone,value.startMinute,value.endMinute,value.enabled,me.id])).rows[0];
+    return { status: 201, data: { item } };
+  }
+  const silencePath = pathname.match(/^\/api\/alerts\/silences\/([^/]+)$/);
+  if (silencePath && ['PUT','DELETE'].includes(method)) {
+    const existing = (await client.query('SELECT * FROM alert_silences WHERE id=$1 FOR UPDATE', [silencePath[1]])).rows[0];
+    if (!existing) return { status: 404, data: { error: '静默规则不存在' } };
+    const body = await readBody();
+    if (!Number.isSafeInteger(body?.version) || body.version !== existing.version) return { status: 409, data: { error: '静默规则已变更，请刷新重试' } };
+    if (method === 'DELETE') {
+      await client.query('DELETE FROM alert_silences WHERE id=$1', [existing.id]);
+      return { status: 200, data: { deleted: true } };
+    }
+    const value = validateSilence(body);
+    if (value.error) return { status: 400, data: { error: value.error } };
+    const item = (await client.query(`UPDATE alert_silences SET name=$2,scope_type=$3,scope_value=$4,
+      timezone=$5,start_minute=$6,end_minute=$7,enabled=$8,version=version+1,updated_at=now()
+      WHERE id=$1 RETURNING *`, [existing.id,value.name,value.scopeType,value.scopeValue,value.timezone,value.startMinute,value.endMinute,value.enabled])).rows[0];
+    return { status: 200, data: { item } };
+  }
   if (pathname === '/api/alerts/rules' && method === 'GET') {
     const items = (await client.query('SELECT * FROM alert_rules ORDER BY template_key NULLS LAST,name')).rows;
     return { status: 200, data: { items } };
@@ -132,15 +197,15 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
       const value = row.value;
       if (row.status === 'create') {
         await client.query(`INSERT INTO alert_rules
-          (id,name,metric,scope_type,scope_id,operator,threshold,duration_seconds,repeat_minutes,level,channels,enabled,created_by)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-        [crypto.randomUUID(),value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.level,value.channels,value.enabled,me.id]);
+          (id,name,metric,scope_type,scope_id,operator,threshold,duration_seconds,repeat_minutes,level,channels,tags,enabled,created_by)
+          VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [crypto.randomUUID(),value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.level,value.channels,value.tags,value.enabled,me.id]);
         counts.created++;
       } else {
         await closeRuleIncidents(client,row.targetId);
         await client.query(`UPDATE alert_rules SET name=$2,metric=$3,scope_type=$4,scope_id=$5,operator=$6,
-          threshold=$7,duration_seconds=$8,repeat_minutes=$9,level=$10,channels=$11,enabled=$12,version=version+1,updated_at=now()
-          WHERE id=$1`, [row.targetId,value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.level,value.channels,value.enabled]);
+          threshold=$7,duration_seconds=$8,repeat_minutes=$9,level=$10,channels=$11,tags=$12,enabled=$13,version=version+1,updated_at=now()
+          WHERE id=$1`, [row.targetId,value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.level,value.channels,value.tags,value.enabled]);
         counts.updated++;
       }
     }
@@ -154,9 +219,9 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
     if (duplicate.rowCount) return { status: 409, data: { error: '同名告警规则已存在' } };
     if (value.scopeType === 'model' && value.scopeId !== '*' && !(await client.query('SELECT 1 FROM experiment_models WHERE id=$1', [value.scopeId])).rowCount) return { status: 400, data: { error: '模型不存在' } };
     const item = (await client.query(`INSERT INTO alert_rules
-      (id,name,metric,scope_type,scope_id,operator,threshold,duration_seconds,repeat_minutes,level,channels,enabled,created_by)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
-    [crypto.randomUUID(),value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.level,value.channels,value.enabled,me.id])).rows[0];
+      (id,name,metric,scope_type,scope_id,operator,threshold,duration_seconds,repeat_minutes,level,channels,tags,enabled,created_by)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+    [crypto.randomUUID(),value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.level,value.channels,value.tags,value.enabled,me.id])).rows[0];
     return { status: 201, data: { item } };
   }
   const match = pathname.match(/^\/api\/alerts\/rules\/([^/]+)$/);
@@ -179,9 +244,9 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
     if (duplicate.rowCount) return { status: 409, data: { error: '同名告警规则已存在' } };
     await closeRuleIncidents(client, existing.id);
     const item = (await client.query(`UPDATE alert_rules SET name=$2,metric=$3,scope_type=$4,scope_id=$5,
-      operator=$6,threshold=$7,duration_seconds=$8,repeat_minutes=$9,level=$10,channels=$11,enabled=$12,
+      operator=$6,threshold=$7,duration_seconds=$8,repeat_minutes=$9,level=$10,channels=$11,tags=$12,enabled=$13,
       version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,
-    [existing.id,value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.level,value.channels,value.enabled])).rows[0];
+    [existing.id,value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.level,value.channels,value.tags,value.enabled])).rows[0];
     return { status: 200, data: { item } };
   }
   if (pathname === '/api/alerts/incidents' && method === 'GET') {
@@ -288,6 +353,7 @@ function shanghaiDay(value) {
 
 async function notifyIncident(client, rule, incident, value) {
   if (rule.level === 'info' || !rule.channels.length) return;
+  if (await isSilenced(client,rule,incident.opened_at)) return;
   const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
   for (const admin of admins) {
     const email = rule.channels.includes('email') && admin.review_email_enabled ? admin.review_email : null;
@@ -312,6 +378,7 @@ async function notifyEscalation(client, incident) {
 }
 
 async function notifyReminder(client, incident) {
+  if (await isSilenced(client,incident,incident.last_reminded_at)) return;
   const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
   const reminderKey = `${incident.id}:reminder:${new Date(incident.last_reminded_at).getTime()}`;
   for (const admin of admins) {
@@ -385,7 +452,7 @@ export async function evaluateAlertRules(pool, now = new Date()) {
       FROM alert_rules rule WHERE incident.rule_id=rule.id AND rule.enabled=true
         AND incident.status='firing' AND incident.level<>'info'
         AND coalesce(incident.last_reminded_at,incident.opened_at) <= $1::timestamptz - rule.repeat_minutes * interval '1 minute'
-      RETURNING incident.*,rule.channels`, [now])).rows;
+      RETURNING incident.*,rule.channels,rule.tags`, [now])).rows;
     for (const incident of reminders) {
       await recordIncidentEvent(client,incident.id,'reminded',null,'未确认告警重复提醒',incident.last_reminded_at);
       await notifyReminder(client,incident);

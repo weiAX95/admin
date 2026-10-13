@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { App, Alert, Button, Card, DatePicker, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd';
-import type { AlertAnalytics as AlertAnalyticsData, AlertAssignee, AlertImportRow, AlertIncident, AlertIncidentEvent, AlertIncidentQuery, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview } from '../api/alerts';
-import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, deleteAlertRule, getAlertAnalytics, importAlertRules, listAlertAssignees, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, updateAlertRule } from '../api/alerts';
+import type { AlertAnalytics as AlertAnalyticsData, AlertAssignee, AlertImportRow, AlertIncident, AlertIncidentEvent, AlertIncidentQuery, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview, AlertSilence, AlertSilenceInput } from '../api/alerts';
+import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, createAlertSilence, deleteAlertRule, deleteAlertSilence, getAlertAnalytics, importAlertRules, listAlertAssignees, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, listAlertSilences, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, updateAlertRule, updateAlertSilence } from '../api/alerts';
 import { getPlatformConfig } from '../api/experiment-platform';
 import AlertAnalytics from '../components/AlertAnalytics';
 
@@ -17,11 +17,16 @@ const metricOptions = metrics.map(([value,label]) => ({ value, label }));
 const metricLabel = (name: string) => metrics.find(([value]) => value === name)?.[1] || name;
 const levelColor = { info: 'blue', warning: 'orange', critical: 'red' };
 const eventLabel = { opened: '触发', escalated: '升级', acknowledged: '确认', assigned: '指派', note: '备注', resolved: '解决', reminded: '重复提醒' };
+const minuteLabel = (value: number) => `${String(Math.floor(value / 60)).padStart(2,'0')}:${String(value % 60).padStart(2,'0')}`;
+const parseMinute = (value: string) => { const match = /^(\d{2}):(\d{2})$/.exec(value); return match ? Number(match[1]) * 60 + Number(match[2]) : -1; };
 
 export default function Alerts() {
   const { message, modal } = App.useApp();
   const [form] = Form.useForm<AlertRuleInput>();
+  const [silenceForm] = Form.useForm<AlertSilenceInput & { startTime: string; endTime: string }>();
   const [rules, setRules] = useState<AlertRule[]>([]);
+  const [silences, setSilences] = useState<AlertSilence[]>([]);
+  const [silenceEditing, setSilenceEditing] = useState<AlertSilence | 'new' | null>(null);
   const [incidents, setIncidents] = useState<AlertIncident[]>([]);
   const [incidentTotal, setIncidentTotal] = useState(0);
   const [incidentQuery, setIncidentQuery] = useState<AlertIncidentQuery>({ limit: 20, offset: 0 });
@@ -49,13 +54,14 @@ export default function Alerts() {
   const [assignees, setAssignees] = useState<AlertAssignee[]>([]);
   const [incidentNote, setIncidentNote] = useState('');
   const selectedMetric = Form.useWatch('metric', form);
+  const silenceScope = Form.useWatch('scopeType', silenceForm);
 
   const refresh = useCallback(async () => {
     const request = ++incidentRequest.current;
     try {
-      const [ruleResult, incidentResult] = await Promise.all([listAlertRules(), listAlertIncidents(incidentQuery)]);
+      const [ruleResult, incidentResult, silenceResult] = await Promise.all([listAlertRules(), listAlertIncidents(incidentQuery), listAlertSilences()]);
       if (request !== incidentRequest.current) return;
-      setRules(ruleResult.items); setSelectedIds(current => current.filter(id => ruleResult.items.some(rule => rule.id === id))); setIncidents(incidentResult.items); setIncidentTotal(incidentResult.total); setError('');
+      setRules(ruleResult.items); setSelectedIds(current => current.filter(id => ruleResult.items.some(rule => rule.id === id))); setIncidents(incidentResult.items); setIncidentTotal(incidentResult.total); setSilences(silenceResult.items); setError('');
     } catch (cause) { if (request === incidentRequest.current) setError(cause instanceof Error ? cause.message : '告警信息加载失败'); }
   }, [incidentQuery]);
   const loadAnalytics = useCallback(async () => {
@@ -73,11 +79,11 @@ export default function Alerts() {
   useEffect(() => { void loadAnalytics(); }, [loadAnalytics]);
   const openCreate = () => {
     setEditing('new');
-    form.setFieldsValue({ name: '', metric: 'model_5xx_rate', scopeId: '*', operator: '>', threshold: 5, durationSeconds: 0, repeatMinutes: 30, level: 'warning', channels: ['in_app'], enabled: false });
+    form.setFieldsValue({ name: '', metric: 'model_5xx_rate', scopeId: '*', operator: '>', threshold: 5, durationSeconds: 0, repeatMinutes: 30, level: 'warning', channels: ['in_app'], tags: [], enabled: false });
   };
   const openEdit = (rule: AlertRule) => {
     setEditing(rule);
-    form.setFieldsValue({ name: rule.name, metric: rule.metric, scopeId: rule.scope_id, operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes, level: rule.level, channels: rule.channels, enabled: rule.enabled });
+    form.setFieldsValue({ name: rule.name, metric: rule.metric, scopeId: rule.scope_id, operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes, level: rule.level, channels: rule.channels, tags: rule.tags, enabled: rule.enabled });
   };
   const save = async (input: AlertRuleInput) => {
     setBusy(true);
@@ -128,12 +134,33 @@ export default function Alerts() {
     } catch (cause) { message.error(cause instanceof Error ? cause.message : '处置失败'); }
     finally { setBusyId(null); }
   };
+  const openSilence = (item: AlertSilence | 'new') => {
+    setSilenceEditing(item);
+    silenceForm.setFieldsValue(item === 'new'
+      ? { name: '', scopeType: 'all', scopeValue: null, timezone: 'Asia/Shanghai', startTime: '02:00', endTime: '06:00', enabled: true }
+      : { name: item.name, scopeType: item.scope_type, scopeValue: item.scope_value, timezone: item.timezone, startTime: minuteLabel(item.start_minute), endTime: minuteLabel(item.end_minute), enabled: item.enabled });
+  };
+  const saveSilence = async (value: AlertSilenceInput & { startTime: string; endTime: string }) => {
+    const input: AlertSilenceInput = { name: value.name, scopeType: value.scopeType, scopeValue: value.scopeType === 'all' ? null : value.scopeValue,
+      timezone: value.timezone, startMinute: parseMinute(value.startTime), endMinute: parseMinute(value.endTime), enabled: value.enabled };
+    setBusy(true);
+    try {
+      if (silenceEditing === 'new') await createAlertSilence(input);
+      else if (silenceEditing) await updateAlertSilence(silenceEditing.id,silenceEditing.version,input);
+      setSilenceEditing(null); await refresh(); message.success('静默规则已保存');
+    } catch (cause) { message.error(cause instanceof Error ? cause.message : '静默规则保存失败'); }
+    finally { setBusy(false); }
+  };
+  const removeSilence = (item: AlertSilence) => modal.confirm({ title: `删除静默规则「${item.name}」？`, onOk: async () => {
+    try { await deleteAlertSilence(item.id,item.version); await refresh(); message.success('静默规则已删除'); }
+    catch (cause) { message.error(cause instanceof Error ? cause.message : '删除失败'); }
+  } });
   const exportSelected = () => {
     const selected = rules.filter(rule => selectedIds.includes(rule.id));
     const content: AlertRuleArchive = { schemaVersion: 1, rules: selected.map(rule => ({
       templateKey: rule.template_key, name: rule.name, metric: rule.metric, scopeId: rule.scope_id,
       operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes,
-      level: rule.level, channels: rule.channels, enabled: rule.enabled,
+      level: rule.level, channels: rule.channels, tags: rule.tags, enabled: rule.enabled,
     })) };
     const url = URL.createObjectURL(new Blob([JSON.stringify(content, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = 'alert-rules.json'; link.click();
@@ -184,6 +211,13 @@ export default function Alerts() {
         { title: '启用', render: (_, rule) => <Switch aria-label={`启用 ${rule.name}`} checked={rule.enabled} loading={busyId === rule.id} onChange={enabled => void toggle(rule, enabled)} /> },
         { title: '操作', render: (_, rule) => <Space><Button type="link" onClick={() => openEdit(rule)}>编辑</Button>{!rule.template_key && <Button type="link" danger onClick={() => remove(rule)}>删除</Button>}</Space> },
       ]} /> },
+      { key: 'silences', label: `静默 ${silences.length}`, children: <><Button type="primary" style={{ marginBottom: 12 }} onClick={() => openSilence('new')}>创建静默规则</Button><Table<AlertSilence> rowKey="id" dataSource={silences} pagination={{ pageSize: 10 }} locale={{ emptyText: <Empty description="暂无静默规则" /> }} columns={[
+        { title: '名称', dataIndex: 'name' },
+        { title: '范围', render: (_, item) => item.scope_type === 'all' ? '全部 Warning' : `${item.scope_type === 'module' ? '模块' : '标签'}：${item.scope_value}` },
+        { title: '每日时段', render: (_, item) => `${minuteLabel(item.start_minute)}–${minuteLabel(item.end_minute)} (${item.timezone})` },
+        { title: '状态', dataIndex: 'enabled', render: (value: boolean) => value ? <Tag color="green">启用</Tag> : <Tag>停用</Tag> },
+        { title: '操作', render: (_, item) => <Space><Button type="link" onClick={() => openSilence(item)}>编辑</Button><Button type="link" danger onClick={() => removeSilence(item)}>删除</Button></Space> },
+      ]} /></> },
       { key: 'incidents', label: `告警事件 ${incidentTotal}`, children: <><Space wrap style={{ marginBottom: 12 }}>
         <Select aria-label="按状态筛选告警" placeholder="全部状态" allowClear value={incidentQuery.status} style={{ width: 145 }} options={[{value:'firing',label:'触发中'},{value:'acknowledged',label:'已确认'},{value:'resolved',label:'已解决'}]} onChange={status => setIncidentQuery(query => ({...query,status,offset:0}))} />
         <Select aria-label="按级别筛选告警" placeholder="全部级别" allowClear value={incidentQuery.level} style={{ width: 145 }} options={['info','warning','critical'].map(value => ({value,label:value}))} onChange={level => setIncidentQuery(query => ({...query,level,offset:0}))} />
@@ -212,6 +246,19 @@ export default function Alerts() {
         <Form.Item name="repeatMinutes" label="未确认时重复提醒间隔（分钟）"><InputNumber min={1} max={1440} precision={0} style={{ width: 150 }} /></Form.Item>
         <Form.Item name="level" label="级别"><Select options={[{value:'info',label:'Info · 仅记录'},{value:'warning',label:'Warning · 通知管理员'},{value:'critical',label:'Critical · 高优先级'}]} /></Form.Item>
         <Form.Item name="channels" label="通知渠道"><Select mode="multiple" options={[{value:'in_app',label:'站内通知'},{value:'email',label:'账号已启用的邮件'}]} /></Form.Item>
+        <Form.Item name="tags" label="规则标签（用于静默）"><Select mode="tags" maxCount={20} placeholder="输入标签后回车" /></Form.Item>
+        <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
+      </Form>
+    </Drawer>
+    <Drawer title={silenceEditing === 'new' ? '创建静默规则' : '编辑静默规则'} open={Boolean(silenceEditing)} width={500} onClose={() => setSilenceEditing(null)} extra={<Button type="primary" loading={busy} onClick={() => silenceForm.submit()}>保存</Button>}>
+      <Typography.Paragraph type="secondary">静默时仍记录告警，只暂停 Warning 的首次及重复通知；Critical 继续通知。跨午夜时段也适用。</Typography.Paragraph>
+      <Form form={silenceForm} layout="vertical" onFinish={value => void saveSilence(value)}>
+        <Form.Item name="name" label="名称" rules={[{required:true}]}><Input maxLength={120} /></Form.Item>
+        <Form.Item name="scopeType" label="静默范围"><Select options={[{value:'all',label:'全部 Warning'},{value:'module',label:'指定模块'},{value:'tag',label:'指定标签'}]} onChange={() => silenceForm.setFieldValue('scopeValue',null)} /></Form.Item>
+        {silenceScope === 'module' && <Form.Item name="scopeValue" label="模块" rules={[{required:true}]}><Select options={['session','model','evaluation','governance'].map(value => ({value,label:value}))} /></Form.Item>}
+        {silenceScope === 'tag' && <Form.Item name="scopeValue" label="规则标签" rules={[{required:true}]}><Input maxLength={32} placeholder="与告警规则标签一致" /></Form.Item>}
+        <Form.Item name="timezone" label="时区" rules={[{required:true}]}><Input placeholder="Asia/Shanghai" /></Form.Item>
+        <Space align="start"><Form.Item name="startTime" label="每日开始" rules={[{required:true}]}><Input type="time" /></Form.Item><Form.Item name="endTime" label="每日结束" rules={[{required:true}]}><Input type="time" /></Form.Item></Space>
         <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
       </Form>
     </Drawer>
