@@ -1,46 +1,48 @@
-import { App as AntApp } from "antd";
+import { App as AntApp, Spin } from "antd";
 import SettingsProvider from "./components/SettingsProvider";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { lazy, Suspense } from "react";
 import AdminLayout from "./layouts/AdminLayout";
 import RequireAuth from "./components/RequireAuth";
-import Dashboard from "./pages/Dashboard";
-import Tasks from "./pages/Tasks";
-import TaskDetail from "./pages/TaskDetail";
-import Sessions from "./pages/Sessions";
-import Notes from "./pages/Notes";
-import Experiments from "./pages/Experiments";
-import NoteDetail from "./pages/NoteDetail";
-import NoteGraph from "./pages/NoteGraph";
-import NoteReviews from "./pages/NoteReviews";
-import ExperimentDetail from "./pages/ExperimentDetail";
-import ExperimentCompare from "./pages/ExperimentCompare";
-import ExperimentDatasets from "./pages/ExperimentDatasets";
-import EvaluationReviews from "./pages/EvaluationReviews";
-import EvaluationCandidates from "./pages/EvaluationCandidates";
-import EvaluationLeaderboard from "./pages/EvaluationLeaderboard";
-import EvaluationSchedules from "./pages/EvaluationSchedules";
-import EvaluationMetrics from "./pages/EvaluationMetrics";
-import EvaluationAlerts from "./pages/EvaluationAlerts";
-import ExperimentRegressionReport from "./pages/ExperimentRegressionReport";
-import ExperimentChain from "./pages/ExperimentChain";
-import SharedExperiment from "./pages/SharedExperiment";
-import SharedEvaluationReport from "./pages/SharedEvaluationReport";
-import ExperimentSchedules from "./pages/ExperimentSchedules";
-import Prompts from "./pages/Prompts";
-import PromptDetail from "./pages/PromptDetail";
-import Accounts from "./pages/Accounts";
-import Login from "./pages/Login";
-import Settings from "./pages/Settings";
-import ModelCosts from "./pages/ModelCosts";
-import ModelCallAudit from "./pages/ModelCallAudit";
-import ModelHealth from "./pages/ModelHealth";
-import ProjectAnalysis from "./pages/ProjectAnalysis";
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Tasks = lazy(() => import("./pages/Tasks"));
+const TaskDetail = lazy(() => import("./pages/TaskDetail"));
+const Sessions = lazy(() => import("./pages/Sessions"));
+const Notes = lazy(() => import("./pages/Notes"));
+const Experiments = lazy(() => import("./pages/Experiments"));
+const NoteDetail = lazy(() => import("./pages/NoteDetail"));
+const NoteGraph = lazy(() => import("./pages/NoteGraph"));
+const NoteReviews = lazy(() => import("./pages/NoteReviews"));
+const ExperimentDetail = lazy(() => import("./pages/ExperimentDetail"));
+const ExperimentCompare = lazy(() => import("./pages/ExperimentCompare"));
+const ExperimentDatasets = lazy(() => import("./pages/ExperimentDatasets"));
+const EvaluationReviews = lazy(() => import("./pages/EvaluationReviews"));
+const EvaluationCandidates = lazy(() => import("./pages/EvaluationCandidates"));
+const EvaluationLeaderboard = lazy(() => import("./pages/EvaluationLeaderboard"));
+const EvaluationSchedules = lazy(() => import("./pages/EvaluationSchedules"));
+const EvaluationMetrics = lazy(() => import("./pages/EvaluationMetrics"));
+const EvaluationAlerts = lazy(() => import("./pages/EvaluationAlerts"));
+const ExperimentRegressionReport = lazy(() => import("./pages/ExperimentRegressionReport"));
+const ExperimentChain = lazy(() => import("./pages/ExperimentChain"));
+const SharedExperiment = lazy(() => import("./pages/SharedExperiment"));
+const SharedEvaluationReport = lazy(() => import("./pages/SharedEvaluationReport"));
+const ExperimentSchedules = lazy(() => import("./pages/ExperimentSchedules"));
+const Prompts = lazy(() => import("./pages/Prompts"));
+const PromptDetail = lazy(() => import("./pages/PromptDetail"));
+const Accounts = lazy(() => import("./pages/Accounts"));
+const Login = lazy(() => import("./pages/Login"));
+const Settings = lazy(() => import("./pages/Settings"));
+const ModelCosts = lazy(() => import("./pages/ModelCosts"));
+const ModelCallAudit = lazy(() => import("./pages/ModelCallAudit"));
+const ModelHealth = lazy(() => import("./pages/ModelHealth"));
+const ProjectAnalysis = lazy(() => import("./pages/ProjectAnalysis"));
 
 export default function App() {
   return (
     <SettingsProvider>
       <AntApp>
         <BrowserRouter>
+          <Suspense fallback={<div className="route-loading" role="status"><Spin size="large" tip="页面加载中…"><span className="route-loading-space" /></Spin></div>}>
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/share/experiments/:token" element={<SharedExperiment />} />
@@ -80,6 +82,7 @@ export default function App() {
               </Route>
             </Route>
           </Routes>
+          </Suspense>
         </BrowserRouter>
       </AntApp>
     </SettingsProvider>

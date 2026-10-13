@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Alert, Avatar, Badge, Button, Drawer, Empty, Layout, Menu, Popover, Space, Typography } from "antd";
+import { Suspense, useCallback, useEffect, useState } from "react";
+import { Alert, Avatar, Badge, Button, Drawer, Empty, Layout, Menu, Popover, Space, Spin, Typography } from "antd";
 import {
   BellOutlined, DashboardOutlined, ExperimentOutlined, FileTextOutlined, LogoutOutlined,
   MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined, MessageOutlined,
@@ -167,7 +167,7 @@ export default function AdminLayout() {
               </div>
               <div className="workspace-badge"><span className="status-dot" />学习工作空间</div>
             </div>
-            <Outlet />
+            <Suspense fallback={<div className="route-loading" role="status"><Spin size="large" /> 页面加载中…</div>}><Outlet /></Suspense>
             <footer className="workspace-footer">{brand.systemName} <span>让学习与实践形成闭环</span></footer>
           </div>
         </Content>

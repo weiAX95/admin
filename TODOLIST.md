@@ -868,7 +868,7 @@
   - [ ] 色彩对比度：WCAG AA 标准（文字 4.5:1、图形 3:1）
   - [ ] AC：键盘可完成所有核心操作流程
 - [ ] **13.5 性能优化**
-  - [ ] React.lazy + Suspense 按路由拆包（code splitting）
+  - [x] React.lazy + Suspense 按路由拆包（构建验证：原约 3,032 KB 主包拆为约 747 KB 主包与按需页面包；运行环境性能仍待测）
   - [ ] 表格虚拟滚动（> 500 行用 react-window 或 antd virtual table）
   - [ ] 图片懒加载 + WebP 格式
   - [ ] API 响应缓存（SWR / React Query stale-while-revalidate）
