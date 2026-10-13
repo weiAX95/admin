@@ -187,13 +187,46 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
   if (pathname === '/api/alerts/incidents' && method === 'GET') {
     const status = url.searchParams.get('status');
     const level = url.searchParams.get('level');
+    const from = url.searchParams.get('from');
+    const to = url.searchParams.get('to');
     if (status && !['firing','acknowledged','resolved'].includes(status)) return { status: 400, data: { error: '无效状态' } };
     if (level && !LEVELS.has(level)) return { status: 400, data: { error: '无效级别' } };
+    if ((from && !Number.isFinite(Date.parse(from))) || (to && !Number.isFinite(Date.parse(to))) || (from && to && Date.parse(from) > Date.parse(to))) return { status: 400, data: { error: '无效时间范围' } };
     const limit = Math.min(200, Math.max(1, Math.trunc(Number(url.searchParams.get('limit')) || 50)));
+    const offset = Math.min(100000, Math.max(0, Math.trunc(Number(url.searchParams.get('offset')) || 0)));
     const items = (await client.query(`SELECT * FROM alert_incidents
       WHERE ($1::text IS NULL OR status=$1) AND ($2::text IS NULL OR level=$2)
-      ORDER BY opened_at DESC LIMIT $3`, [status, level, limit])).rows;
-    return { status: 200, data: { items } };
+        AND ($3::timestamptz IS NULL OR opened_at >= $3) AND ($4::timestamptz IS NULL OR opened_at <= $4)
+      ORDER BY opened_at DESC,id DESC LIMIT $5 OFFSET $6`, [status, level, from, to, limit, offset])).rows;
+    const total = Number((await client.query(`SELECT count(*) AS count FROM alert_incidents
+      WHERE ($1::text IS NULL OR status=$1) AND ($2::text IS NULL OR level=$2)
+        AND ($3::timestamptz IS NULL OR opened_at >= $3) AND ($4::timestamptz IS NULL OR opened_at <= $4)`, [status,level,from,to])).rows[0].count);
+    return { status: 200, data: { items, total } };
+  }
+  if (pathname === '/api/alerts/incidents/analytics' && method === 'GET') {
+    const days = Number(url.searchParams.get('days') || 30);
+    const level = url.searchParams.get('level');
+    if (![7,30,90].includes(days) || (level && !LEVELS.has(level))) return { status: 400, data: { error: '无效统计范围' } };
+    const where = "opened_at >= now() - $1 * interval '1 day' AND ($2::text IS NULL OR level=$2)";
+    const params = [days,level];
+    const totals = (await client.query(`SELECT count(*)::integer AS total,
+      round(avg(extract(epoch from acknowledged_at-opened_at)/60)::numeric,2) AS mtta_minutes,
+      round(avg(extract(epoch from resolved_at-opened_at)/60)::numeric,2) AS mttr_minutes
+      FROM alert_incidents WHERE ${where}`, params)).rows[0];
+    const daily = (await client.query(`SELECT (opened_at AT TIME ZONE 'Asia/Shanghai')::date::text AS day,
+      count(*) FILTER (WHERE level='info')::integer AS info,
+      count(*) FILTER (WHERE level='warning')::integer AS warning,
+      count(*) FILTER (WHERE level='critical')::integer AS critical
+      FROM alert_incidents WHERE ${where} GROUP BY day ORDER BY day`, params)).rows;
+    const byModule = (await client.query(`SELECT split_part(metric,'_',1) AS name,count(*)::integer AS count
+      FROM alert_incidents WHERE ${where} GROUP BY name ORDER BY count DESC,name`, params)).rows;
+    const byType = (await client.query(`SELECT metric AS name,count(*)::integer AS count
+      FROM alert_incidents WHERE ${where} GROUP BY metric ORDER BY count DESC,metric`, params)).rows;
+    const byLevel = (await client.query(`SELECT level,count(*)::integer AS total,
+      round(avg(extract(epoch from acknowledged_at-opened_at)/60)::numeric,2) AS mtta_minutes,
+      round(avg(extract(epoch from resolved_at-opened_at)/60)::numeric,2) AS mttr_minutes
+      FROM alert_incidents WHERE ${where} GROUP BY level ORDER BY level`, params)).rows;
+    return { status: 200, data: { totals, daily, byModule, byType, byLevel } };
   }
   const history = pathname.match(/^\/api\/alerts\/incidents\/([^/]+)\/events$/);
   if (history && method === 'GET') {

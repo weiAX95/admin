@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react';
-import { App, Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd';
-import type { AlertAssignee, AlertImportRow, AlertIncident, AlertIncidentEvent, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview } from '../api/alerts';
-import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, deleteAlertRule, importAlertRules, listAlertAssignees, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, updateAlertRule } from '../api/alerts';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { App, Alert, Button, Card, DatePicker, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd';
+import type { AlertAnalytics as AlertAnalyticsData, AlertAssignee, AlertImportRow, AlertIncident, AlertIncidentEvent, AlertIncidentQuery, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview } from '../api/alerts';
+import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, deleteAlertRule, getAlertAnalytics, importAlertRules, listAlertAssignees, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, updateAlertRule } from '../api/alerts';
 import { getPlatformConfig } from '../api/experiment-platform';
+import AlertAnalytics from '../components/AlertAnalytics';
 
 const metrics = [
   ['session_daily_tokens','会话日 token 消耗'], ['session_refusal_streak','连续会话拒答数'],
@@ -22,6 +23,13 @@ export default function Alerts() {
   const [form] = Form.useForm<AlertRuleInput>();
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [incidents, setIncidents] = useState<AlertIncident[]>([]);
+  const [incidentTotal, setIncidentTotal] = useState(0);
+  const [incidentQuery, setIncidentQuery] = useState<AlertIncidentQuery>({ limit: 20, offset: 0 });
+  const [analyticsDays, setAnalyticsDays] = useState<7 | 30 | 90>(30);
+  const [analyticsLevel, setAnalyticsLevel] = useState<string | undefined>();
+  const [analytics, setAnalytics] = useState<AlertAnalyticsData | null>(null);
+  const incidentRequest = useRef(0);
+  const analyticsRequest = useRef(0);
   const [samples, setSamples] = useState<AlertMetricSample[]>([]);
   const [models, setModels] = useState<{ id: string; displayName: string }[]>([]);
   const [metric, setMetric] = useState<string>('model_5xx_rate');
@@ -43,17 +51,26 @@ export default function Alerts() {
   const selectedMetric = Form.useWatch('metric', form);
 
   const refresh = useCallback(async () => {
+    const request = ++incidentRequest.current;
     try {
-      const [ruleResult, incidentResult] = await Promise.all([listAlertRules(), listAlertIncidents()]);
-      setRules(ruleResult.items); setSelectedIds(current => current.filter(id => ruleResult.items.some(rule => rule.id === id))); setIncidents(incidentResult.items); setError('');
-    } catch (cause) { setError(cause instanceof Error ? cause.message : '告警信息加载失败'); }
-  }, []);
+      const [ruleResult, incidentResult] = await Promise.all([listAlertRules(), listAlertIncidents(incidentQuery)]);
+      if (request !== incidentRequest.current) return;
+      setRules(ruleResult.items); setSelectedIds(current => current.filter(id => ruleResult.items.some(rule => rule.id === id))); setIncidents(incidentResult.items); setIncidentTotal(incidentResult.total); setError('');
+    } catch (cause) { if (request === incidentRequest.current) setError(cause instanceof Error ? cause.message : '告警信息加载失败'); }
+  }, [incidentQuery]);
+  const loadAnalytics = useCallback(async () => {
+    const request = ++analyticsRequest.current;
+    try { const result = await getAlertAnalytics(analyticsDays,analyticsLevel); if (request === analyticsRequest.current) setAnalytics(result); }
+    catch (cause) { if (request === analyticsRequest.current) message.error(cause instanceof Error ? cause.message : '告警分析加载失败'); }
+  }, [analyticsDays,analyticsLevel,message]);
   const refreshSamples = useCallback(async (selected: string) => {
     try { setSamples((await listAlertMetricSamples(selected)).items); }
     catch (cause) { message.error(cause instanceof Error ? cause.message : '指标样本加载失败'); }
   }, [message]);
-  useEffect(() => { void refresh(); void getPlatformConfig().then(result => setModels(result.models)).catch(() => undefined); }, [refresh]);
+  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => { void getPlatformConfig().then(result => setModels(result.models)).catch(() => undefined); }, []);
   useEffect(() => { void refreshSamples(metric); }, [metric, refreshSamples]);
+  useEffect(() => { void loadAnalytics(); }, [loadAnalytics]);
   const openCreate = () => {
     setEditing('new');
     form.setFieldsValue({ name: '', metric: 'model_5xx_rate', scopeId: '*', operator: '>', threshold: 5, durationSeconds: 0, repeatMinutes: 30, level: 'warning', channels: ['in_app'], enabled: false });
@@ -83,7 +100,7 @@ export default function Alerts() {
   } });
   const acknowledge = async (incident: AlertIncident) => {
     setBusyId(incident.id);
-    try { await acknowledgeAlertIncident(incident.id); await refresh(); message.success('已确认告警'); }
+    try { await acknowledgeAlertIncident(incident.id); await Promise.all([refresh(),loadAnalytics()]); message.success('已确认告警'); }
     catch (cause) { message.error(cause instanceof Error ? cause.message : '确认失败'); }
     finally { setBusyId(null); }
   };
@@ -103,9 +120,10 @@ export default function Alerts() {
       else if (action === 'note') await addAlertIncidentNote(selectedIncident.id, incidentNote);
       else if (action === 'resolve') await resolveAlertIncident(selectedIncident.id, incidentNote);
       setIncidentNote('');
-      const [history, latest] = await Promise.all([listAlertIncidentEvents(selectedIncident.id), listAlertIncidents()]);
-      setIncidentEvents(history.items); setIncidents(latest.items);
+      const [history, latest] = await Promise.all([listAlertIncidentEvents(selectedIncident.id), listAlertIncidents(incidentQuery)]);
+      setIncidentEvents(history.items); setIncidents(latest.items); setIncidentTotal(latest.total);
       setSelectedIncident(latest.items.find(item => item.id === selectedIncident.id) || null);
+      void loadAnalytics();
       message.success(action === 'resolve' ? '告警已解决' : action === 'assign' ? '已指派处理人' : '处置备注已保存');
     } catch (cause) { message.error(cause instanceof Error ? cause.message : '处置失败'); }
     finally { setBusyId(null); }
@@ -153,7 +171,7 @@ export default function Alerts() {
     finally { setPreviewBusy(false); }
   };
 
-  return <Card title="告警规则与事件" extra={<Space><Button onClick={() => { void refresh(); void refreshSamples(metric); }}>刷新</Button><Button disabled={!selectedIds.length} onClick={exportSelected}>导出所选</Button><Upload accept=".json,application/json" showUploadList={false} beforeUpload={file => { void selectArchive(file); return false; }}><Button>导入 JSON</Button></Upload><Button type="primary" onClick={openCreate}>创建规则</Button></Space>}>
+  return <Card title="告警规则与事件" extra={<Space><Button onClick={() => { void refresh(); void refreshSamples(metric); void loadAnalytics(); }}>刷新</Button><Button disabled={!selectedIds.length} onClick={exportSelected}>导出所选</Button><Upload accept=".json,application/json" showUploadList={false} beforeUpload={file => { void selectArchive(file); return false; }}><Button>导入 JSON</Button></Upload><Button type="primary" onClick={openCreate}>创建规则</Button></Space>}>
     <Typography.Paragraph type="secondary">内置规则默认关闭。启用后，服务每分钟从实际数据采样并判断；无数据时不会将比率视为零。告警首次触发后写入事件并通知管理员。</Typography.Paragraph>
     {error && <Alert type="error" showIcon message={error} action={<Button size="small" onClick={() => void refresh()}>重试</Button>} style={{ marginBottom: 16 }} />}
     <Tabs items={[
@@ -166,14 +184,19 @@ export default function Alerts() {
         { title: '启用', render: (_, rule) => <Switch aria-label={`启用 ${rule.name}`} checked={rule.enabled} loading={busyId === rule.id} onChange={enabled => void toggle(rule, enabled)} /> },
         { title: '操作', render: (_, rule) => <Space><Button type="link" onClick={() => openEdit(rule)}>编辑</Button>{!rule.template_key && <Button type="link" danger onClick={() => remove(rule)}>删除</Button>}</Space> },
       ]} /> },
-      { key: 'incidents', label: `告警事件 ${incidents.length}`, children: <Table<AlertIncident> rowKey="id" dataSource={incidents} pagination={{ pageSize: 10 }} locale={{ emptyText: <Empty description="暂无告警事件" /> }} columns={[
+      { key: 'incidents', label: `告警事件 ${incidentTotal}`, children: <><Space wrap style={{ marginBottom: 12 }}>
+        <Select aria-label="按状态筛选告警" placeholder="全部状态" allowClear value={incidentQuery.status} style={{ width: 145 }} options={[{value:'firing',label:'触发中'},{value:'acknowledged',label:'已确认'},{value:'resolved',label:'已解决'}]} onChange={status => setIncidentQuery(query => ({...query,status,offset:0}))} />
+        <Select aria-label="按级别筛选告警" placeholder="全部级别" allowClear value={incidentQuery.level} style={{ width: 145 }} options={['info','warning','critical'].map(value => ({value,label:value}))} onChange={level => setIncidentQuery(query => ({...query,level,offset:0}))} />
+        <DatePicker.RangePicker aria-label="告警时间范围" onChange={dates => setIncidentQuery(query => ({...query,from:dates?.[0]?.startOf('day').toISOString(),to:dates?.[1]?.endOf('day').toISOString(),offset:0}))} />
+      </Space><Table<AlertIncident> rowKey="id" dataSource={incidents} pagination={{ current: Math.floor((incidentQuery.offset || 0) / 20) + 1, pageSize: 20, total: incidentTotal, onChange: page => setIncidentQuery(query => ({...query,offset:(page-1)*20})) }} locale={{ emptyText: <Empty description="暂无告警事件" /> }} columns={[
         { title: '触发时间', dataIndex: 'opened_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '规则', dataIndex: 'rule_name' }, { title: '范围', dataIndex: 'scope_id' },
         { title: '级别', render: (_, item) => <Space><Tag color={levelColor[item.level]}>{item.level}</Tag>{item.escalated_at && <Tag color="red">30 分钟未确认升级</Tag>}</Space> },
         { title: '状态', dataIndex: 'status', render: (value: string) => <Tag>{value}</Tag> },
         { title: '当前值', dataIndex: 'trigger_value' }, { title: '触发次数', dataIndex: 'trigger_count' },
         { title: '操作', render: (_, item) => <Space><Button size="small" onClick={() => void openIncident(item)}>处置记录</Button>{item.status === 'firing' && <Button size="small" loading={busyId === item.id} onClick={() => void acknowledge(item)}>确认</Button>}</Space> },
-      ]} /> },
+      ]} /></> },
+      { key: 'analytics', label: '历史分析', children: <><Space style={{ marginBottom: 12 }}><Select aria-label="分析时间窗口" value={analyticsDays} style={{ width: 140 }} options={[{value:7,label:'近 7 天'},{value:30,label:'近 30 天'},{value:90,label:'近 90 天'}]} onChange={setAnalyticsDays} /><Select aria-label="分析告警级别" placeholder="全部级别" allowClear value={analyticsLevel} style={{ width: 145 }} options={['info','warning','critical'].map(value => ({value,label:value}))} onChange={setAnalyticsLevel} /></Space><AlertAnalytics data={analytics} /></> },
       { key: 'metrics', label: '指标样本', children: <><Select aria-label="查看指标" value={metric} options={metricOptions} onChange={setMetric} style={{ minWidth: 270, marginBottom: 16 }} /><Table<AlertMetricSample> rowKey={item => `${item.metric}:${item.scope_id}:${item.sampled_at}`} dataSource={samples} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="暂无采样数据" /> }} columns={[
         { title: '时间', dataIndex: 'sampled_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '指标', dataIndex: 'metric', render: metricLabel }, { title: '范围', dataIndex: 'scope_id' },

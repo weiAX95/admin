@@ -34,7 +34,18 @@ export const listAlertRules = () => http.get<{ items: AlertRule[] }>('/alerts/ru
 export const createAlertRule = (input: AlertRuleInput) => http.post<{ item: AlertRule }>('/alerts/rules', input);
 export const updateAlertRule = (id: string, version: number, input: Partial<AlertRuleInput>) => http.put<{ item: AlertRule }>(`/alerts/rules/${id}`, { version, ...input });
 export const deleteAlertRule = (id: string, version: number) => http.del(`/alerts/rules/${id}`, { version });
-export const listAlertIncidents = (status?: string, level?: string) => http.get<{ items: AlertIncident[] }>('/alerts/incidents', { status, level });
+export interface AlertIncidentQuery { status?: string; level?: string; from?: string; to?: string; limit?: number; offset?: number }
+export const listAlertIncidents = (query: AlertIncidentQuery = {}) => http.get<{ items: AlertIncident[]; total: number }>('/alerts/incidents', {
+  status: query.status, level: query.level, from: query.from, to: query.to,
+  limit: query.limit?.toString(), offset: query.offset?.toString(),
+});
+export interface AlertAnalytics {
+  totals: { total: number; mtta_minutes: string | null; mttr_minutes: string | null };
+  daily: { day: string; info: number; warning: number; critical: number }[];
+  byModule: { name: string; count: number }[]; byType: { name: string; count: number }[];
+  byLevel: { level: string; total: number; mtta_minutes: string | null; mttr_minutes: string | null }[];
+}
+export const getAlertAnalytics = (days: 7 | 30 | 90, level?: string) => http.get<AlertAnalytics>('/alerts/incidents/analytics', { days: String(days), level });
 export const acknowledgeAlertIncident = (id: string) => http.post<{ item: AlertIncident }>(`/alerts/incidents/${id}/ack`, {});
 export const listAlertAssignees = () => http.get<{ items: AlertAssignee[] }>('/users');
 export const listAlertIncidentEvents = (id: string) => http.get<{ items: AlertIncidentEvent[] }>(`/alerts/incidents/${id}/events`);
