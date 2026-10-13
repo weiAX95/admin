@@ -8,6 +8,7 @@ import {
   Checkbox,
   DatePicker,
   Dropdown,
+  Grid,
   Input,
   Popover,
   Popconfirm,
@@ -113,6 +114,8 @@ function noteExcerpt(notes: string, keyword: string) {
 
 export default function Tasks() {
   const { pageSize } = useSettings();
+  const screens = Grid.useBreakpoint();
+  const narrowScreen = screens.md === false;
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { message, modal } = App.useApp();
@@ -421,6 +424,7 @@ export default function Tasks() {
   ];
 
   const visibleColumns = visibleColumnKeys.map(key => columns.find(column => column.key === key)!).filter(Boolean);
+  const tableColumns = narrowScreen ? visibleColumns.filter(column => column.key === "title") : visibleColumns;
 
   const categoryOptions = useMemo(
     () => categories.map((c) => ({ value: c, label: c })),
@@ -518,7 +522,7 @@ export default function Tasks() {
       {view === "table" ? <Table
         rowKey="id"
         loading={loading}
-        columns={visibleColumns}
+        columns={tableColumns}
         dataSource={sortedItems}
         rowSelection={{
           selectedRowKeys: selectedKeys,
@@ -527,7 +531,18 @@ export default function Tasks() {
           columnTitle: <Checkbox aria-label="全选当前筛选任务" disabled={bulkBusy || !allIds.length} checked={allIds.length > 0 && selectedKeys.length === allIds.length} indeterminate={selectedKeys.length > 0 && selectedKeys.length < allIds.length} onChange={event => setSelectedKeys(event.target.checked ? allIds : [])} />,
           getCheckboxProps: () => ({ disabled: bulkBusy }),
         }}
-        scroll={{ x: 1100 }}
+        scroll={narrowScreen ? undefined : { x: 1100 }}
+        expandable={narrowScreen ? { expandedRowRender: task => <div className="task-mobile-details">
+          <Space wrap size={[6, 6]}><StatusTag status={task.effectiveStatus} /><PriorityTag priority={task.priority} /><Tag>{task.category}</Tag><Tag color="geekblue">{task.phase}</Tag></Space>
+          <div>进度 <Progress percent={task.progress} size="small" /></div>
+          <div>到期：{task.dueDate ? task.dueDate.slice(0, 10) : "未设置"}</div>
+          <Space wrap size={4}>
+            <Button size="small" onClick={() => openEdit(task)}>编辑</Button>
+            <Button size="small" onClick={() => void toggleDone(task)}>{task.status === "done" ? "重开" : "完成"}</Button>
+            <Button size="small" onClick={() => navigate(`/tasks/${task.id}?tab=history`)}>历史</Button>
+            <Popconfirm title="删除该学习任务？" okText="删除" cancelText="取消" onConfirm={() => void remove(task)}><Button size="small" danger>删除</Button></Popconfirm>
+          </Space>
+        </div> } : undefined}
         pagination={{ pageSize, showSizeChanger: false }}
       /> : view === "gantt" ? <Spin spinning={loading}><TaskGantt tasks={sortedItems} onRefresh={() => refresh(query)} /></Spin> : <Spin spinning={loading}><TaskKanban tasks={sortedItems} onRefresh={() => refresh(query)} /></Spin>}
 

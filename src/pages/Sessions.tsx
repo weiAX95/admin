@@ -1,6 +1,6 @@
 import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, App, Button, Card, Empty, Input, Modal, Select, Space, Spin, Switch, Table, Tag, Tooltip, Typography } from "antd";
+import { Alert, App, Button, Card, Empty, Grid, Input, Modal, Select, Space, Spin, Switch, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { annotateSessionMessage, configureSessionClusters, exportSelectedSessions, getSession, listSessionClusters, listSessions, renameSessionCluster, searchSessionMessages } from "../api/sessions";
 import type { SessionCluster, SessionSearchHit } from "../api/sessions";
@@ -19,6 +19,8 @@ import type { AuthUser, LearningTask, MessageAnnotationTag, NotePayload, Session
 
 export default function Sessions() {
   const { pageSize } = useSettings();
+  const screens = Grid.useBreakpoint();
+  const narrowScreen = screens.md === false;
   const [searchParams] = useSearchParams();
   const requestedSessionId = searchParams.get("sessionId");
   const { message } = App.useApp();
@@ -213,7 +215,7 @@ export default function Sessions() {
         <Space style={{ marginTop: 12 }}><Button disabled={searchPage === 1} onClick={() => setSearchPage(value => value - 1)}>上一页</Button><Typography.Text type="secondary">第 {searchPage} 页</Typography.Text><Button disabled={!searchHasMore} onClick={() => setSearchPage(value => value + 1)}>下一页</Button></Space>
       </> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未找到匹配消息" />)}
     </div>}
-    <div id="session-table"><Table rowKey="id" loading={loading} columns={columns} dataSource={items} scroll={{ x: 1000 }} pagination={{ pageSize, showSizeChanger: false, current: page, onChange: setPage }}
+    <div id="session-table"><Table rowKey="id" loading={loading} columns={narrowScreen ? columns.filter(column => column.key === "title") : columns} dataSource={items} scroll={narrowScreen ? undefined : { x: 1000 }} pagination={{ pageSize, showSizeChanger: false, current: page, onChange: setPage }}
       rowSelection={{ selectedRowKeys: selectedIds, preserveSelectedRowKeys: true, onChange: keys => setSelectedIds(keys.map(String)), getCheckboxProps: () => ({ disabled: exporting !== null }) }}
       onRow={row => ({ onClick: () => toggle(row.id), className: "session-clickable-row" })}
       expandable={{ expandedRowRender: expandedRow, expandedRowKeys: expandedId ? [expandedId] : [], showExpandColumn: false, onExpand: (_, row) => toggle(row.id) }} /></div>
