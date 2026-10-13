@@ -302,6 +302,24 @@ const publicUser = (u) => ({
   createdAt: u.createdAt, updatedAt: u.updatedAt,
 });
 
+function pauseAccountRecurrences(accountId, paused) {
+  let changed = false;
+  for (const series of db.recurringSeries) {
+    if (series.ownerId !== accountId) continue;
+    if (paused && series.active) {
+      series.active = false;
+      series.pausedByAccountStatus = true;
+    } else if (!paused && series.pausedByAccountStatus) {
+      series.active = true;
+      series.pausedByAccountStatus = false;
+    } else continue;
+    series.version = (series.version || 1) + 1;
+    series.updatedAt = nowIso();
+    changed = true;
+  }
+  if (changed) scheduleRecurrences(0);
+}
+
 /* ------------------------------ helpers ------------------------------ */
 
 function send(res, status, payload) {
@@ -905,7 +923,7 @@ async function handleRequest(req, res) {
 
     // ---- 账号管理（仅管理员）----
     const isUsersPath =
-      pathname === "/api/users" || /^\/api\/users\/[^/]+(?:\/restore)?$/.test(pathname);
+      pathname === "/api/users" || /^\/api\/users\/[^/]+(?:\/(?:restore|permanent))?$/.test(pathname);
     if (isUsersPath) {
       if (me.role !== "admin") {
         return send(res, 403, { error: "需要管理员权限" });
@@ -952,7 +970,7 @@ async function handleRequest(req, res) {
         return send(res, 405, { error: "method not allowed" });
       }
 
-      const um = pathname.match(/^\/api\/users\/([^/]+)(?:\/restore)?$/);
+      const um = pathname.match(/^\/api\/users\/([^/]+)(?:\/(?:restore|permanent))?$/);
       const index = db.users.findIndex((u) => u.id === um[1]);
       if (index === -1) return send(res, 404, { error: "user not found" });
       const target = db.users[index];
@@ -964,9 +982,21 @@ async function handleRequest(req, res) {
         target.deletedAt = null;
         target.statusBeforeDelete = null;
         target.updatedAt = nowIso();
+        if (target.status === "active") pauseAccountRecurrences(target.id, false);
         await activeClient.query("DELETE FROM login_security_state WHERE user_id=$1", [target.id]);
         saveDb(db);
         return send(res, 200, publicUser(target));
+      }
+      if (pathname.endsWith("/permanent") && method === "POST") {
+        if (!target.deletedAt) return send(res, 409, { error: "请先将账号移入回收站" });
+        const body = await readProjectBody(req);
+        if (body.confirmUsername !== target.username) return send(res, 400, { error: "确认用户名不匹配" });
+        db.recurringSeries = db.recurringSeries.filter(series => series.ownerId !== target.id);
+        db.taskTemplates = db.taskTemplates.filter(template => template.ownerId !== target.id);
+        await activeClient.query("DELETE FROM experiment_schedules WHERE owner_id=$1", [target.id]);
+        db.users.splice(index, 1);
+        saveDb(db);
+        return send(res, 200, { purged: true, id: target.id });
       }
       if (target.deletedAt) return send(res, 410, { error: "账号已删除，请先恢复" });
 
@@ -994,9 +1024,12 @@ async function handleRequest(req, res) {
           }
           target.status = body.status;
           if (body.status === "active" && !target.activatedAt) target.activatedAt = nowIso();
+          pauseAccountRecurrences(target.id, body.status !== "active");
           // 禁用后失效其现有 token
           if (body.status === "disabled") {
             await revokeUserSessions(target.id);
+            await activeClient.query("UPDATE experiment_schedules SET active=false WHERE owner_id=$1", [target.id]);
+            await activeClient.query("UPDATE evaluation_schedules SET active=false WHERE owner_id=$1", [target.id]);
           }
         }
         if (changingPassword) {
@@ -1021,6 +1054,9 @@ async function handleRequest(req, res) {
         target.status = "disabled";
         target.deletedAt = nowIso();
         target.updatedAt = target.deletedAt;
+        pauseAccountRecurrences(target.id, true);
+        await activeClient.query("UPDATE experiment_schedules SET active=false WHERE owner_id=$1", [target.id]);
+        await activeClient.query("UPDATE evaluation_schedules SET active=false WHERE owner_id=$1", [target.id]);
         await revokeUserSessions(target.id);
         saveDb(db);
         return send(res, 200, { deleted: true, id: target.id });

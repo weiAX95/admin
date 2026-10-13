@@ -25,7 +25,7 @@ const specs = [
     child("resources", "task_resources", ["label", "url"], "task_id"),
     child("completionCycles", "task_completion_cycles", ["startedAt", "completedAt"], "task_id"),
   ]),
-  spec("recurringSeries", "recurring_series", ["id", "ownerId", "firstTaskId", "frequency", "interval", "endType", "endCount", "endDate", "anchorDueAt", "nextSequence", "active", "version", "createdAt", "updatedAt", ["snapshotTitle", "snapshot_title"], ["snapshotDescription", "snapshot_description"], ["snapshotCategory", "snapshot_category"], ["snapshotPhase", "snapshot_phase"], ["snapshotPriority", "snapshot_priority"], ["snapshotEstimatedHours", "snapshot_estimated_hours"]], [
+  spec("recurringSeries", "recurring_series", ["id", "ownerId", "firstTaskId", "frequency", "interval", "endType", "endCount", "endDate", "anchorDueAt", "nextSequence", "active", "pausedByAccountStatus", "version", "createdAt", "updatedAt", ["snapshotTitle", "snapshot_title"], ["snapshotDescription", "snapshot_description"], ["snapshotCategory", "snapshot_category"], ["snapshotPhase", "snapshot_phase"], ["snapshotPriority", "snapshot_priority"], ["snapshotEstimatedHours", "snapshot_estimated_hours"]], [
     child("snapshotChecklist", "recurring_snapshot_checklist", ["text"], "series_id"),
     child("snapshotTags", "recurring_snapshot_tags", [["value", "tag"]], "series_id"),
     child("snapshotResources", "recurring_snapshot_resources", ["label", "url"], "series_id"),
@@ -71,7 +71,7 @@ function prepareParent(entity, name) {
   if (name === "experiments") return { ...entity, recordKind: entity.recordKind || "manual", systemPrompt: entity.systemPrompt || "", userPrompt: entity.userPrompt || "", variables: entity.variables || {} };
   if (name !== "recurringSeries") return entity;
   const snapshot = entity.snapshot || {};
-  return { ...entity, snapshotTitle: snapshot.title, snapshotDescription: snapshot.description, snapshotCategory: snapshot.category, snapshotPhase: snapshot.phase, snapshotPriority: snapshot.priority, snapshotEstimatedHours: snapshot.estimatedHours };
+  return { ...entity, pausedByAccountStatus: entity.pausedByAccountStatus ?? false, snapshotTitle: snapshot.title, snapshotDescription: snapshot.description, snapshotCategory: snapshot.category, snapshotPhase: snapshot.phase, snapshotPriority: snapshot.priority, snapshotEstimatedHours: snapshot.estimatedHours };
 }
 function childItems(entity, descriptor, name) {
   if (name === "recurringSeries") {

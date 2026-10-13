@@ -3,6 +3,7 @@ import { http } from "./client";
 
 export const listAccounts = (deleted = false) => http.get<{ items: Account[] }>(`/users${deleted ? '?deleted=true' : ''}`);
 export const restoreAccount = (id: string) => http.post<Account>(`/users/${id}/restore`, {});
+export const purgeAccount = (id: string, confirmUsername: string) => http.post<{ purged: boolean; id: string }>(`/users/${id}/permanent`, { confirmUsername });
 
 export const createAccount = (payload: AccountPayload) =>
   http.post<Account>("/users", payload);

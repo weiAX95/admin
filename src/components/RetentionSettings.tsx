@@ -40,7 +40,7 @@ export default function RetentionSettings() {
     onOk: async () => { setBusyId(item.id); try { await purgeRecycleItem(item); await refresh(); message.success('已永久删除'); } catch (error) { message.error(error instanceof Error ? error.message : '删除失败'); } finally { setBusyId(null); } },
   });
   return <Card title="数据保留策略" loading={!policy}>
-    <Typography.Paragraph type="secondary">清理时间按系统默认时区计算；服务启动后补做当天错过的清理。任务、笔记、实验及提示词删除后进入回收站；保留天数设为 0 时立即永久删除。恢复任务会尝试接回删除时解除的依赖；下游任务的依赖若已被修改，会提示手动处理。恢复实验不会自动重新启用调度或分享。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">清理时间按系统默认时区计算；服务启动后补做当天错过的清理。任务、笔记、实验及提示词删除后进入回收站；保留天数设为 0 时立即永久删除。账号回收站独立保留 30 天。恢复任务会尝试接回删除时解除的依赖；下游任务的依赖若已被修改，会提示手动处理。恢复实验不会自动重新启用调度或分享。</Typography.Paragraph>
     <Form form={form} layout="inline" onFinish={save} style={{ rowGap: 12, marginBottom: 20 }}>
       <Form.Item name="auditDays" label="安全审计保留天数" rules={[{ required: true }]}><InputNumber min={30} max={365} /></Form.Item>
       <Form.Item name="sessionDays" label="会话保留天数" rules={[{ required: true }]}><InputNumber min={7} max={730} /></Form.Item>
@@ -57,6 +57,7 @@ export default function RetentionSettings() {
         { title: '会话', dataIndex: 'sessions_deleted' },
         { title: '未审核候选', dataIndex: 'candidates_deleted' },
         { title: '回收站清理', render: (_, row) => (row.tasks_deleted || 0) + (row.notes_deleted || 0) + (row.experiments_deleted || 0) + (row.prompts_deleted || 0) },
+        { title: '账号清理', dataIndex: 'users_deleted' },
         { title: '清理失败', render: (_, row) => row.purge_failures?.length || 0 },
       ]} />
       <Typography.Text strong>回收站</Typography.Text>

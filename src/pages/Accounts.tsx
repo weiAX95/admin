@@ -21,6 +21,7 @@ import {
   createAccount,
   deleteAccount,
   listAccounts,
+  purgeAccount,
   restoreAccount,
   updateAccount,
 } from "../api/accounts";
@@ -162,7 +163,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
 
 export default function Accounts() {
   const { pageSize } = useSettings();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [items, setItems] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -213,6 +214,13 @@ export default function Accounts() {
       void load();
     } catch (err) { message.error(err instanceof Error ? err.message : '恢复失败'); }
   };
+  const purge = (acc: Account) => {
+    modal.confirm({ title: `永久删除账号「${acc.username}」？`, okText: '永久删除', okType: 'danger',
+      content: '此操作不可恢复；该账号的个人项目仓库、分析、复习记录及登录记录将按数据库外键删除，其他历史中的账号归属可能被清空。',
+      onOk: async () => { try { await purgeAccount(acc.id, acc.username); message.success('账号已永久删除'); await load(); }
+        catch (error) { message.error(error instanceof Error ? error.message : '永久删除失败'); return Promise.reject(error); } },
+    });
+  };
 
   const columns: ColumnsType<Account> = [
     {
@@ -260,7 +268,7 @@ export default function Accounts() {
       key: "actions",
       width: 200,
       render: (_, a) => {
-        if (a.deletedAt) return <Button type="link" size="small" onClick={() => void restore(a)}>恢复</Button>;
+        if (a.deletedAt) return <Space size={4}><Button type="link" size="small" onClick={() => void restore(a)}>恢复</Button><Button type="link" size="small" danger onClick={() => purge(a)}>永久删除</Button></Space>;
         const isSelf = current?.username === a.username;
         return (
           <Space size={4}>
@@ -315,7 +323,7 @@ export default function Accounts() {
         <Button type={showDeleted ? 'primary' : 'default'} onClick={() => setShowDeleted(value => !value)}>{showDeleted ? '返回账号列表' : '查看回收站'}</Button>
         <AccountInvitations />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          仅管理员可管理账号；不能禁用或删除当前登录账号。
+          仅管理员可管理账号；不能禁用或删除当前登录账号。回收站账号满 30 天自动永久清理。
         </Typography.Text>
       </Space>
       <Table
