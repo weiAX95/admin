@@ -59,7 +59,8 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
 };
 
 export default function AdminLayout() {
-  const { brand, refresh } = useSettings();
+  const { brand, preferences, refresh } = useSettings();
+  const menuTheme = preferences?.theme === 'light' ? 'light' : 'dark';
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
@@ -112,12 +113,12 @@ export default function AdminLayout() {
     </div>
   );
   const menu = (
-    <Menu theme="dark" mode="inline" selectedKeys={[selected]} items={menuItems}
+    <Menu theme={menuTheme} mode="inline" selectedKeys={[selected]} items={menuItems}
       onClick={({ key }) => { navigate(key); setMobileOpen(false); }} />
   );
   return (
     <Layout className="admin-shell">
-      <Sider className="admin-sidebar" theme="dark" width={240} collapsedWidth={80}
+      <Sider className="admin-sidebar" theme={menuTheme} width={240} collapsedWidth={80}
         collapsed={collapsed} breakpoint="lg" onBreakpoint={setCollapsed}>
         {brandNode}
         <div className="sidebar-label">工作空间</div>

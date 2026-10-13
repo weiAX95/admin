@@ -6,7 +6,7 @@ import { getToken } from '../api/client';
 import { getPreferences, getPublicSettings, type Preferences, type PublicSettings } from '../api/settings';
 
 const fallback: PublicSettings = { systemName: 'Agent 学习管理端', logoUrl: null, defaultTimezone: 'Asia/Shanghai', defaultLanguage: 'zh-CN', defaultDateFormat: 'YYYY-MM-DD', defaultPageSize: 20 };
-const SettingsContext = createContext<{ brand: PublicSettings; preferences: Preferences | null; refresh: () => Promise<void>; language: 'zh-CN' | 'en-US'; pageSize: number } | null>(null);
+const SettingsContext = createContext<{ brand: PublicSettings; preferences: Preferences | null; previewPreferences: (value: Preferences) => void; refresh: () => Promise<void>; language: 'zh-CN' | 'en-US'; pageSize: number } | null>(null);
 export function useSettings() {
   const value = useContext(SettingsContext);
   if (!value) throw new Error('SettingsProvider missing');
@@ -15,6 +15,7 @@ export function useSettings() {
 export default function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [brand, setBrand] = useState<PublicSettings>(fallback);
   const [preferences, setPreferences] = useState<Preferences | null>(null);
+  const previewPreferences = useCallback((value: Preferences) => setPreferences(value), []);
   const refresh = useCallback(async () => {
     const current = await getPublicSettings();
     setBrand(current);
@@ -30,7 +31,7 @@ export default function SettingsProvider({ children }: { children: React.ReactNo
   const language = preferences?.language || brand.defaultLanguage;
   const light = preferences?.theme === 'light';
   const primary = preferences?.primaryColor || '#9582ff';
-  const context = useMemo(() => ({ brand, preferences, refresh, language, pageSize: brand.defaultPageSize }), [brand, preferences, refresh, language]);
+  const context = useMemo(() => ({ brand, preferences, previewPreferences, refresh, language, pageSize: brand.defaultPageSize }), [brand, preferences, previewPreferences, refresh, language]);
   useEffect(() => {
     document.documentElement.lang = language;
     document.documentElement.dataset.theme = light ? 'light' : 'dark';

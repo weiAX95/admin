@@ -1,5 +1,5 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Card, Empty, Segmented } from "antd";
+import { Card, Empty, Segmented, theme } from "antd";
 import { Chart, CategoryScale, LinearScale, LineController, LineElement, PointElement, Tooltip } from "chart.js";
 import type { TaskTrends } from "../types";
 import { aggregateTaskTrends } from "../utils/taskTrends";
@@ -7,13 +7,15 @@ import type { TrendGranularity } from "../utils/taskTrends";
 
 Chart.register(CategoryScale, LinearScale, LineController, LineElement, PointElement, Tooltip);
 const SERIES = [
-  { label: "完成任务数", color: "#a491ff", axis: "count", dash: [] },
-  { label: "创建任务数", color: "#79b8e8", axis: "count", dash: [5, 3] },
-  { label: "累计平均进度", color: "#7dcca4", axis: "progress", dash: [2, 3] },
+  { label: "完成任务数", axis: "count", dash: [] },
+  { label: "创建任务数", axis: "count", dash: [5, 3] },
+  { label: "累计平均进度", axis: "progress", dash: [2, 3] },
 ];
 const EMPTY_TRENDS: TaskTrends = { items: [], progressHistoryStart: null };
 
 export default function TaskTrendChart({ trends = EMPTY_TRENDS }: { trends?: TaskTrends }) {
+  const { token } = theme.useToken();
+  const colors = [token.colorPrimary, token.colorInfo, token.colorSuccess];
   const [granularity, setGranularity] = useState<TrendGranularity>("day");
   const [visible, setVisible] = useState([true, true, true]);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -34,8 +36,8 @@ export default function TaskTrendChart({ trends = EMPTY_TRENDS }: { trends?: Tas
           label: series.label,
           data: buckets.map(p => index === 0 ? p.completed : index === 1 ? p.created : p.avgProgress),
           yAxisID: series.axis,
-          borderColor: series.color,
-          backgroundColor: series.color,
+          borderColor: colors[index],
+          backgroundColor: colors[index],
           borderDash: series.dash,
           borderWidth: 2,
           pointRadius: buckets.length > 60 ? 0 : 2,
@@ -53,7 +55,7 @@ export default function TaskTrendChart({ trends = EMPTY_TRENDS }: { trends?: Tas
         interaction: { mode: "index", intersect: false },
         plugins: {
           tooltip: {
-            backgroundColor: "#20253a", titleColor: "#eef0ff", bodyColor: "#c5cbde", padding: 12,
+            backgroundColor: token.colorBgElevated, titleColor: token.colorText, bodyColor: token.colorTextSecondary, padding: 12,
             callbacks: {
               title: items => {
                 const bucket = bucketsRef.current[items[0]?.dataIndex ?? 0];
@@ -64,9 +66,9 @@ export default function TaskTrendChart({ trends = EMPTY_TRENDS }: { trends?: Tas
           },
         },
         scales: {
-          x: { grid: { display: false }, border: { color: "#30364c" }, ticks: { color: "#949db6", maxTicksLimit: 6, maxRotation: 0, font: { size: 10 } } },
-          count: { display: visible[0] || visible[1], position: "left", beginAtZero: true, suggestedMax: 1, title: { display: true, text: "任务数", color: "#949db6", font: { size: 10 } }, grid: { color: "#252b40" }, border: { display: false }, ticks: { color: "#949db6", precision: 0, maxTicksLimit: 5 } },
-          progress: { display: visible[2], position: "right", min: 0, max: 100, title: { display: true, text: "进度", color: "#949db6", font: { size: 10 } }, grid: { drawOnChartArea: false }, border: { display: false }, ticks: { color: "#949db6", stepSize: 25, callback: value => `${value}%` } },
+          x: { grid: { display: false }, border: { color: token.colorBorderSecondary }, ticks: { color: token.colorTextSecondary, maxTicksLimit: 6, maxRotation: 0, font: { size: 10 } } },
+          count: { display: visible[0] || visible[1], position: "left", beginAtZero: true, suggestedMax: 1, title: { display: true, text: "任务数", color: token.colorTextSecondary, font: { size: 10 } }, grid: { color: token.colorSplit }, border: { display: false }, ticks: { color: token.colorTextSecondary, precision: 0, maxTicksLimit: 5 } },
+          progress: { display: visible[2], position: "right", min: 0, max: 100, title: { display: true, text: "进度", color: token.colorTextSecondary, font: { size: 10 } }, grid: { drawOnChartArea: false }, border: { display: false }, ticks: { color: token.colorTextSecondary, stepSize: 25, callback: value => `${value}%` } },
         },
       },
     });
@@ -82,11 +84,24 @@ export default function TaskTrendChart({ trends = EMPTY_TRENDS }: { trends?: Tas
       dataset.data = buckets.map(p => index === 0 ? p.completed : index === 1 ? p.created : p.avgProgress);
       dataset.hidden = !visible[index];
       dataset.pointRadius = buckets.length > 60 ? 0 : 2;
+      dataset.borderColor = colors[index];
+      dataset.backgroundColor = colors[index];
     });
+    if (chart.options.plugins?.tooltip) {
+      chart.options.plugins.tooltip.backgroundColor = token.colorBgElevated;
+      chart.options.plugins.tooltip.titleColor = token.colorText;
+      chart.options.plugins.tooltip.bodyColor = token.colorTextSecondary;
+    }
+    for (const scale of Object.values(chart.options.scales || {})) {
+      if (scale?.ticks) scale.ticks.color = token.colorTextSecondary;
+      if (scale?.title) scale.title.color = token.colorTextSecondary;
+    }
+    if (chart.options.scales?.x?.border) chart.options.scales.x.border.color = token.colorBorderSecondary;
+    if (chart.options.scales?.count?.grid) chart.options.scales.count.grid.color = token.colorSplit;
     if (chart.options.scales?.count) chart.options.scales.count.display = visible[0] || visible[1];
     if (chart.options.scales?.progress) chart.options.scales.progress.display = visible[2];
     chart.update("none");
-  }, [buckets, granularity, visible, hasData]);
+  }, [buckets, granularity, visible, hasData, token.colorPrimary, token.colorInfo, token.colorSuccess, token.colorBgElevated, token.colorText, token.colorTextSecondary, token.colorBorderSecondary, token.colorSplit]);
 
   const historyIncomplete = trends.progressHistoryStart && trends.items.some(p => p.date < trends.progressHistoryStart! && p.avgProgress === null);
   return (
@@ -100,7 +115,7 @@ export default function TaskTrendChart({ trends = EMPTY_TRENDS }: { trends?: Tas
           {SERIES.map((series, index) => <button key={series.label} type="button" aria-pressed={visible[index]}
             className={`trend-legend-button ${visible[index] ? "" : "is-hidden"}`}
             onClick={() => setVisible(previous => previous.map((value, i) => i === index ? !value : value))}>
-            <span style={{ background: series.color }} />{series.label}
+            <span style={{ background: colors[index] }} />{series.label}
           </button>)}
         </div>
         <div className="trend-chart-container"><canvas ref={canvasRef} role="img" aria-label={chartDescription}>{chartDescription}</canvas></div>

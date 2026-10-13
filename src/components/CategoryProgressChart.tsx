@@ -1,19 +1,21 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Card, Empty, Select } from "antd";
+import { Card, Empty, Select, theme } from "antd";
 import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip } from "chart.js";
 import { PHASE_OPTIONS, STATUS_META } from "./TaskMeta";
 import { aggregateCategoryProgress, categorySegmentPercent } from "../utils/categoryProgress";
 import type { CategoryStat, TaskStatus } from "../types";
 
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip);
-const SERIES: { status: TaskStatus; color: string }[] = [
-  { status: "done", color: "#7dcca4" },
-  { status: "in_progress", color: "#a491ff" },
-  { status: "todo", color: "#8296bd" },
-  { status: "blocked", color: "#ec929f" },
+const SERIES: { status: TaskStatus }[] = [
+  { status: "done" },
+  { status: "in_progress" },
+  { status: "todo" },
+  { status: "blocked" },
 ];
 
 export default function CategoryProgressChart({ categories }: { categories: CategoryStat[] }) {
+  const { token } = theme.useToken();
+  const colors = [token.colorSuccess, token.colorPrimary, token.colorInfo, token.colorError];
   const [phase, setPhase] = useState("");
   const [hoverDetail, setHoverDetail] = useState("");
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -32,11 +34,11 @@ export default function CategoryProgressChart({ categories }: { categories: Cate
       type: "bar",
       data: {
         labels: grouped.map(category => category.category),
-        datasets: SERIES.map(series => ({
+        datasets: SERIES.map((series, index) => ({
           label: STATUS_META[series.status].label,
           data: grouped.map(category => category.counts[series.status]),
-          backgroundColor: series.color,
-          hoverBackgroundColor: series.color,
+          backgroundColor: colors[index],
+          hoverBackgroundColor: colors[index],
           borderWidth: 0,
           maxBarThickness: 56,
           categoryPercentage: .65,
@@ -51,7 +53,7 @@ export default function CategoryProgressChart({ categories }: { categories: Cate
         interaction: { mode: "nearest", intersect: true },
         plugins: {
           tooltip: {
-            backgroundColor: "#20253a", titleColor: "#eef0ff", bodyColor: "#c5cbde", padding: 12,
+            backgroundColor: token.colorBgElevated, titleColor: token.colorText, bodyColor: token.colorTextSecondary, padding: 12,
             callbacks: {
               label: item => {
                 const category = groupedRef.current[item.dataIndex];
@@ -70,8 +72,8 @@ export default function CategoryProgressChart({ categories }: { categories: Cate
           },
         },
         scales: {
-          x: { stacked: true, grid: { display: false }, border: { color: "#30364c" }, title: { display: true, text: "分类", color: "#949db6", font: { size: 11 } }, ticks: { color: "#b8c0d4", font: { size: 11 }, maxRotation: 0, autoSkip: false, callback: function(value) { const label = this.getLabelForValue(Number(value)); return label.length > 10 ? `${label.slice(0, 9)}…` : label; } } },
-          y: { stacked: true, beginAtZero: true, suggestedMax: 1, border: { display: false }, grid: { color: "#252b40" }, title: { display: true, text: "任务数", color: "#949db6", font: { size: 11 } }, ticks: { color: "#949db6", precision: 0, maxTicksLimit: 6 } },
+          x: { stacked: true, grid: { display: false }, border: { color: token.colorBorderSecondary }, title: { display: true, text: "分类", color: token.colorTextSecondary, font: { size: 11 } }, ticks: { color: token.colorTextSecondary, font: { size: 11 }, maxRotation: 0, autoSkip: false, callback: function(value) { const label = this.getLabelForValue(Number(value)); return label.length > 10 ? `${label.slice(0, 9)}…` : label; } } },
+          y: { stacked: true, beginAtZero: true, suggestedMax: 1, border: { display: false }, grid: { color: token.colorSplit }, title: { display: true, text: "任务数", color: token.colorTextSecondary, font: { size: 11 } }, ticks: { color: token.colorTextSecondary, precision: 0, maxTicksLimit: 6 } },
         },
       },
     });
@@ -86,9 +88,22 @@ export default function CategoryProgressChart({ categories }: { categories: Cate
     chart.data.labels = grouped.map(category => category.category);
     chart.data.datasets.forEach((dataset, index) => {
       dataset.data = grouped.map(category => category.counts[SERIES[index].status]);
+      dataset.backgroundColor = colors[index];
+      dataset.hoverBackgroundColor = colors[index];
     });
+    if (chart.options.plugins?.tooltip) {
+      chart.options.plugins.tooltip.backgroundColor = token.colorBgElevated;
+      chart.options.plugins.tooltip.titleColor = token.colorText;
+      chart.options.plugins.tooltip.bodyColor = token.colorTextSecondary;
+    }
+    for (const scale of Object.values(chart.options.scales || {})) {
+      if (scale?.ticks) scale.ticks.color = token.colorTextSecondary;
+      if (scale?.title) scale.title.color = token.colorTextSecondary;
+    }
+    if (chart.options.scales?.x?.border) chart.options.scales.x.border.color = token.colorBorderSecondary;
+    if (chart.options.scales?.y?.grid) chart.options.scales.y.grid.color = token.colorSplit;
     chart.update("none");
-  }, [grouped, hasData]);
+  }, [grouped, hasData, token.colorSuccess, token.colorPrimary, token.colorInfo, token.colorError, token.colorBgElevated, token.colorText, token.colorTextSecondary, token.colorBorderSecondary, token.colorSplit]);
 
   return (
     <Card title="分类进度" className="category-progress-card" extra={
@@ -97,7 +112,7 @@ export default function CategoryProgressChart({ categories }: { categories: Cate
         onChange={setPhase} />
     }>
       <div className="category-progress-toolbar">
-        <div className="category-progress-legend" aria-label="任务状态图例">{SERIES.map(series => <span key={series.status}><i style={{ background: series.color }} />{STATUS_META[series.status].label}</span>)}</div>
+        <div className="category-progress-legend" aria-label="任务状态图例">{SERIES.map((series, index) => <span key={series.status}><i style={{ background: colors[index] }} />{STATUS_META[series.status].label}</span>)}</div>
         <span className="category-progress-summary">{grouped.length} 个分类 · {total} 个任务</span>
       </div>
       {grouped.length ? <>

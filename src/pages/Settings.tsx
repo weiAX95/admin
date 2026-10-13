@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Typography, Upload } from 'antd';
+import { App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Switch, Typography, Upload } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { getGlobalSettings, getPreferences, saveGlobalSettings, savePreferences, type GlobalSettings, type Preferences } from '../api/settings';
 import { getStoredUser, getToken } from '../api/client';
@@ -14,9 +14,10 @@ import { getVersionInfo, type VersionInfo } from '../api/version-info';
 
 const languageOptions = [{ value: 'zh-CN', label: '简体中文' }, { value: 'en-US', label: 'English' }];
 const dateOptions = ['YYYY-MM-DD', 'MM/DD/YYYY', 'DD/MM/YYYY'].map(value => ({ value, label: value }));
+const primaryPresets = ['#9582ff', '#1677ff', '#13a8a8', '#389e0d', '#d46b08', '#cf1322'];
 export default function Settings() {
   const { message } = App.useApp();
-  const { refresh, brand } = useSettings();
+  const { refresh, brand, previewPreferences } = useSettings();
   const admin = getStoredUser<AuthUser>()?.role === 'admin';
   const [global, setGlobal] = useState<GlobalSettings | null>(null);
   const [personal, setPersonal] = useState<Preferences | null>(null);
@@ -55,6 +56,24 @@ export default function Settings() {
     } catch (error) { message.error(error instanceof Error ? error.message : '保存失败'); }
     finally { setSaving(false); }
   };
+  const applyAppearance = async <K extends 'theme' | 'primaryColor' | 'density'>(key: K, value: Preferences[K]) => {
+    if (!personal || saving || personal[key] === value) return;
+    const previous = personal;
+    const pending = { ...personal, [key]: value };
+    setSaving(true);
+    setPersonal(pending);
+    previewPreferences(pending);
+    try {
+      const next = await savePreferences(pending);
+      setPersonal(next);
+      previewPreferences(next);
+    } catch (error) {
+      const latest = await getPreferences().catch(() => previous);
+      setPersonal(latest);
+      previewPreferences(latest);
+      message.error(error instanceof Error ? error.message : '外观设置保存失败');
+    } finally { setSaving(false); }
+  };
   const uploadLogo = async (file: File) => {
     try {
       const response = await fetch('/api/assets', { method: 'POST', headers: { Authorization: `Bearer ${getToken()}`, 'Content-Type': file.type }, body: file });
@@ -92,9 +111,9 @@ export default function Settings() {
           <Col xs={24} md={12}><Form.Item name="timezone" label="个人时区"><Input placeholder={brand.defaultTimezone} /></Form.Item></Col>
           <Col xs={24} md={12}><Form.Item name="language" label="语言"><Select allowClear placeholder="使用系统默认" options={languageOptions} /></Form.Item></Col>
           <Col xs={24} md={12}><Form.Item name="dateFormat" label="日期格式"><Select allowClear placeholder="使用系统默认" options={dateOptions} /></Form.Item></Col>
-          <Col xs={24} md={12}><Form.Item name="theme" label="主题"><Select options={[{ value: 'dark', label: '暗色' }, { value: 'light', label: '亮色' }]} /></Form.Item></Col>
-          <Col xs={24} md={12}><Form.Item name="primaryColor" label="主色"><Input type="color" style={{ width: 100 }} /></Form.Item></Col>
-          <Col xs={24} md={12}><Form.Item name="density" label="布局密度"><Select options={[{ value: 'comfortable', label: '宽松' }, { value: 'compact', label: '紧凑' }]} /></Form.Item></Col>
+          <Col xs={24} md={12}><Form.Item label="主题"><Space><Switch aria-label="亮色主题" checked={personal?.theme === 'light'} checkedChildren="亮色" unCheckedChildren="暗色" disabled={saving} onChange={checked => void applyAppearance('theme', checked ? 'light' : 'dark')} /><Typography.Text type="secondary">切换后自动保存</Typography.Text></Space></Form.Item></Col>
+          <Col xs={24} md={12}><Form.Item label="布局密度"><Space><Switch aria-label="紧凑布局" checked={personal?.density === 'compact'} checkedChildren="紧凑" unCheckedChildren="宽松" disabled={saving} onChange={checked => void applyAppearance('density', checked ? 'compact' : 'comfortable')} /><Typography.Text type="secondary">切换后自动保存</Typography.Text></Space></Form.Item></Col>
+          <Col xs={24}><Form.Item label="主色"><Space wrap className="settings-color-presets">{primaryPresets.map(color => <button key={color} type="button" className="settings-color-preset" style={{ background: color }} aria-label={`选择主色 ${color}`} aria-pressed={personal?.primaryColor.toLowerCase() === color} disabled={saving} onClick={() => void applyAppearance('primaryColor', color)} />)}<input aria-label="自定义主色" type="color" value={personal?.primaryColor || '#9582ff'} disabled={saving} onChange={event => void applyAppearance('primaryColor', event.target.value)} /></Space></Form.Item></Col>
         </Row>
         <Button type="primary" htmlType="submit" loading={saving}>保存个人偏好</Button>
       </Form>

@@ -41,10 +41,15 @@ test('personal preferences are isolated and reject invalid values or stale write
   const member = await login(base, 'member', 'test');
   const initial = await call(base, member, '/settings/preferences');
   assert.equal(initial.body.version, 0);
-  const saved = await call(base, member, '/settings/preferences', 'PUT', { version: 0, theme: 'light', language: 'en-US', density: 'compact' });
+  const saved = await call(base, member, '/settings/preferences', 'PUT', { version: 0, theme: 'light', language: 'en-US', density: 'compact', primaryColor: '#13a8a8' });
   assert.equal(saved.status, 200);
   assert.equal(saved.body.theme, 'light');
+  assert.equal(saved.body.primaryColor, '#13a8a8');
+  assert.equal(saved.body.density, 'compact');
   assert.equal((await call(base, member, '/settings/preferences', 'PUT', { version: 0, theme: 'dark' })).status, 409);
-  assert.equal((await call(base, admin, '/settings/preferences')).body.theme, 'dark');
+  const adminPreferences = (await call(base, admin, '/settings/preferences')).body;
+  assert.equal(adminPreferences.theme, 'dark');
+  assert.notEqual(adminPreferences.primaryColor, '#13a8a8');
+  assert.equal(adminPreferences.density, 'comfortable');
   assert.equal((await call(base, member, '/settings/preferences', 'PUT', { version: saved.body.version, timezone: 'Invalid/Place' })).status, 400);
 });
