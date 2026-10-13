@@ -352,6 +352,7 @@ export interface Account {
   status: AccountStatus;
   activationMode?: ActivationMode;
   activatedAt?: string | null;
+  maxDevices?: number;
   deletedAt?: string | null;
   createdAt: string;
   updatedAt: string;

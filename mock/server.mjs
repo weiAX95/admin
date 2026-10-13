@@ -293,11 +293,28 @@ async function revokeUserSessions(userId) {
   await activeClient.query("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL", [userId]);
 }
 
+async function recordLoginAttempt(req, account, username, deviceHash, succeeded, reason) {
+  await activeClient.query(`INSERT INTO account_login_history(id,user_id,username,ip_address,user_agent,device_hash,succeeded,reason)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [newId(), account?.id || null, String(username || '').slice(0, 30), req.socket.remoteAddress || 'unknown', String(req.headers['user-agent'] || '').slice(0, 500), deviceHash, succeeded, reason]);
+}
+
+async function enforceDeviceLimit(account) {
+  const groups = (await activeClient.query(`SELECT COALESCE(device_hash,token_hash) AS device_key,MAX(created_at) AS newest
+    FROM auth_sessions WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>now()
+    GROUP BY COALESCE(device_hash,token_hash) ORDER BY newest DESC,device_key DESC`, [account.id])).rows;
+  const overflow = groups.slice(account.maxDevices || 3).map(row => row.device_key);
+  if (!overflow.length) return;
+  const oldTokens = (await activeClient.query(`UPDATE auth_sessions SET revoked_at=now()
+    WHERE user_id=$1 AND revoked_at IS NULL AND COALESCE(device_hash,token_hash)=ANY($2::text[]) RETURNING token_hash`, [account.id, overflow])).rows;
+  const revoked = new Set(oldTokens.map(row => row.token_hash));
+  for (const [ws, liveToken] of liveClients) if (revoked.has(sha256(liveToken))) { ws.close(1008, 'device limit reached'); liveClients.delete(ws); }
+}
+
 /** 对外返回账号时剔除密码字段 */
 const publicUser = (u) => ({
   id: u.id, username: u.username, name: u.name,
   role: u.role, status: u.status,
-  activationMode: u.activationMode || "immediate", activatedAt: u.activatedAt || null,
+  activationMode: u.activationMode || "immediate", activatedAt: u.activatedAt || null, maxDevices: u.maxDevices || 3,
   deletedAt: u.deletedAt || null,
   createdAt: u.createdAt, updatedAt: u.updatedAt,
 });
@@ -593,10 +610,13 @@ async function handleRequest(req, res) {
     // ---- 登录（免鉴权）----
     if (method === "POST" && pathname === "/api/auth/login") {
       const body = await readBody(req);
+      const fingerprint = typeof body.deviceFingerprint === 'string' && /^[a-f0-9]{64}$/i.test(body.deviceFingerprint) ? body.deviceFingerprint.toLowerCase() : null;
+      const deviceHint = fingerprint ? sha256(`${fingerprint}:${String(req.headers['user-agent'] || '')}`) : null;
       const account = db.users.find((u) => u.username === body.username);
       if (account) {
         const security = (await activeClient.query("SELECT failed_attempts,locked_until FROM login_security_state WHERE user_id=$1", [account.id])).rows[0];
         if (security?.locked_until && new Date(security.locked_until).getTime() > Date.now()) {
+          await recordLoginAttempt(req, account, body.username, deviceHint, false, 'locked');
           return send(res, 429, { error: "登录尝试过多，请在锁定结束后重试", lockedUntil: security.locked_until });
         }
       }
@@ -611,9 +631,11 @@ async function handleRequest(req, res) {
             for (const admin of db.users.filter(user => user.role === "admin" && user.status === "active")) {
               await notifyUser(activeClient, admin.id, "account_login_locked", `${account.id}:${new Date(lockedUntil).toISOString()}`, "账号登录已锁定", `账号 ${account.username} 连续 5 次登录失败，已锁定 15 分钟。`, "/accounts");
             }
+            await recordLoginAttempt(req, account, body.username, deviceHint, false, 'locked');
             return send(res, 429, { error: "登录尝试过多，请在锁定结束后重试", lockedUntil });
           }
         }
+        await recordLoginAttempt(req, account, body.username, deviceHint, false, 'invalid_credentials');
         return send(res, 401, { error: "用户名或密码错误" });
       }
       if (account.status === "pending" && account.activationMode === "first_login") {
@@ -623,14 +645,18 @@ async function handleRequest(req, res) {
         saveDb(db);
       }
       if (account.status !== "active") {
+        await recordLoginAttempt(req, account, body.username, deviceHint, false, account.status);
         return send(res, 403, { error: account.status === "pending" ? "账号等待管理员激活" : "账号已停用，请联系管理员" });
       }
       await activeClient.query("DELETE FROM login_security_state WHERE user_id=$1", [account.id]);
       const passwordChangedAt = (await activeClient.query("SELECT changed_at FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 1", [account.id])).rows[0]?.changed_at;
       const passwordChangeRequired = Boolean(passwordChangedAt && new Date(passwordChangedAt).getTime() <= Date.now() - 90 * 24 * 60 * 60 * 1000);
       const token = crypto.randomBytes(32).toString("hex");
+      const deviceHash = deviceHint || sha256(token);
       const { sessionHours } = await getGlobalSettings(activeClient);
-      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3 * interval '1 hour'))", [sha256(token), account.id, sessionHours]);
+      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at,device_hash) VALUES($1,$2,now()+($3 * interval '1 hour'),$4)", [sha256(token), account.id, sessionHours, deviceHash]);
+      await enforceDeviceLimit(account);
+      await recordLoginAttempt(req, account, body.username, deviceHash, true, 'success');
       return send(res, 200, { token, user: { ...publicUser(account), passwordChangeRequired } });
     }
 
@@ -735,6 +761,12 @@ async function handleRequest(req, res) {
     if (method === "GET" && pathname === "/api/auth/me") {
       return send(res, 200, { ...publicUser(me), passwordChangeRequired });
     }
+    if (method === "GET" && pathname === "/api/auth/login-history") {
+      const items = (await activeClient.query(`SELECT id,ip_address,user_agent,succeeded,reason,created_at
+        FROM account_login_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT 20`, [me.id])).rows;
+      return send(res, 200, { items: items.map(item => ({ id: item.id, ipAddress: item.ip_address,
+        userAgent: item.user_agent, succeeded: item.succeeded, reason: item.reason, createdAt: item.created_at })) });
+    }
     if (method === "POST" && pathname === "/api/auth/password") {
       const body = await readBody(req);
       if (!verifyPassword(body.currentPassword, me.passwordHash)) return send(res, 400, { error: "当前密码不正确" });
@@ -746,12 +778,15 @@ async function handleRequest(req, res) {
       me.updatedAt = nowIso();
       saveDb(db);
       await activeClient.query("INSERT INTO password_history(user_id,password_hash) VALUES($1,$2)", [me.id, me.passwordHash]);
-      const previousTokens = new Set((await activeClient.query("SELECT token_hash FROM auth_sessions WHERE user_id=$1 AND revoked_at IS NULL", [me.id])).rows.map(row => row.token_hash));
+      const token = crypto.randomBytes(32).toString("hex");
+      const previousSessions = (await activeClient.query("SELECT token_hash,device_hash FROM auth_sessions WHERE user_id=$1 AND revoked_at IS NULL", [me.id])).rows;
+      const previousTokens = new Set(previousSessions.map(row => row.token_hash));
+      const currentTokenHash = sha256((req.headers.authorization || '').replace(/^Bearer /, ''));
+      const currentDeviceHash = previousSessions.find(row => row.token_hash === currentTokenHash)?.device_hash || sha256(token);
       await revokeUserSessions(me.id);
       for (const [ws, liveToken] of liveClients) if (previousTokens.has(sha256(liveToken))) { ws.close(1008, "authentication expired"); liveClients.delete(ws); }
-      const token = crypto.randomBytes(32).toString("hex");
       const { sessionHours } = await getGlobalSettings(activeClient);
-      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3 * interval '1 hour'))", [sha256(token), me.id, sessionHours]);
+      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at,device_hash) VALUES($1,$2,now()+($3 * interval '1 hour'),$4)", [sha256(token), me.id, sessionHours, currentDeviceHash]);
       return send(res, 200, { token, user: publicUser(me) });
     }
     if (method === "POST" && pathname === "/api/auth/logout") {
@@ -945,6 +980,7 @@ async function handleRequest(req, res) {
           if (!pwd) return send(res, 400, { error: "password 为必填项" });
           const passwordError = passwordPolicyError(pwd);
           if (passwordError) return send(res, 400, { error: passwordError });
+          if (body.maxDevices !== undefined && (!Number.isInteger(body.maxDevices) || body.maxDevices < 1 || body.maxDevices > 10)) return send(res, 400, { error: "同时登录设备数需为 1–10" });
           if (db.users.some((u) => u.username === uname)) {
             return send(res, 409, { error: "用户名已存在" });
           }
@@ -955,6 +991,7 @@ async function handleRequest(req, res) {
             name: String(body.name || "").trim() || uname,
             role: body.role === "admin" ? "admin" : "member",
             activationMode,
+            maxDevices: body.maxDevices ?? 3,
             status: body.status === "disabled" ? "disabled" : activationMode === "immediate" ? "active" : "pending",
             activatedAt: body.status === "disabled" || activationMode !== "immediate" ? null : t,
             createdAt: t, updatedAt: t,
@@ -1002,6 +1039,7 @@ async function handleRequest(req, res) {
 
       if (method === "PUT" || method === "PATCH") {
         const body = await readBody(req);
+        if (body.maxDevices !== undefined && (!Number.isInteger(body.maxDevices) || body.maxDevices < 1 || body.maxDevices > 10)) return send(res, 400, { error: "同时登录设备数需为 1–10" });
         const changingPassword = typeof body.password === "string" && body.password.length > 0;
         if (changingPassword) {
           const passwordError = passwordPolicyError(body.password);
@@ -1011,6 +1049,9 @@ async function handleRequest(req, res) {
         }
         if (typeof body.name === "string" && body.name.trim()) {
           target.name = body.name.trim();
+        }
+        if (body.maxDevices !== undefined) {
+          target.maxDevices = body.maxDevices;
         }
         if (body.role === "admin" || body.role === "member") {
           if (target.role === "admin" && body.role !== "admin" && adminCount() <= 1) {
@@ -1040,6 +1081,7 @@ async function handleRequest(req, res) {
         target.updatedAt = nowIso();
         db.users[index] = target;
         saveDb(db);
+        if (body.maxDevices !== undefined) await enforceDeviceLimit(target);
         return send(res, 200, publicUser(target));
       }
 

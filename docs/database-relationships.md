@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量、成本、上报归属与质量标记见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)、[063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)、[064_session_ingest_ownership.sql](../db/migrations/064_session_ingest_ownership.sql) 、[065_session_quality_flags.sql](../db/migrations/065_session_quality_flags.sql) 、[066_session_clusters.sql](../db/migrations/066_session_clusters.sql) 和 [067_session_cluster_counters.sql](../db/migrations/067_session_cluster_counters.sql)；分析调用恢复见 [068_project_analysis_call_recovery.sql](../db/migrations/068_project_analysis_call_recovery.sql)。迁移后数据库共有 136 张表。
+> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量、成本、上报归属与质量标记见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)、[063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)、[064_session_ingest_ownership.sql](../db/migrations/064_session_ingest_ownership.sql) 、[065_session_quality_flags.sql](../db/migrations/065_session_quality_flags.sql) 、[066_session_clusters.sql](../db/migrations/066_session_clusters.sql) 和 [067_session_cluster_counters.sql](../db/migrations/067_session_cluster_counters.sql)；分析调用恢复见 [068_project_analysis_call_recovery.sql](../db/migrations/068_project_analysis_call_recovery.sql)。迁移后数据库共有 137 张表。
 
 > [069_project_ownership_integrity.sql](../db/migrations/069_project_ownership_integrity.sql) 为项目分析增加复合外键，防止仓库、扫描、分析、建议决定在数据库层交叉归属；表数量不变。迁移遇到历史关联不一致时会报错，需先核对来源，不会自动改写旧记录。
 
@@ -547,6 +547,7 @@ flowchart LR
   Models["experiment_models"] -->|"FK model_id · ON DELETE SET NULL"| SessionPrices
   Messages -->|"复合 FK (session_id, message_id)"| Annotations["message_annotations"]
   Users -->|"FK user_id"| Tokens["auth_sessions"]
+  Users -->|"FK user_id · ON DELETE SET NULL"| LoginHistory["account_login_history"]
   Users -->|"FK user_id · ON DELETE CASCADE"| PasswordHistory["password_history"]
   Users -->|"FK user_id · ON DELETE CASCADE"| LoginSecurity["login_security_state"]
   Users -->|"FK created_by · ON DELETE SET NULL"| Invitations["account_invitations"]
@@ -559,13 +560,15 @@ flowchart LR
 
 [098 迁移](../db/migrations/098_account_recurring_pause.sql) 为重复序列增加由账号状态触发的暂停标记，区分自动暂停与用户手动停止；账号恢复启用时只恢复自动暂停的序列。账号永久删除时显式清理无账号外键的重复序列和任务模板，防止后台继续生成归属已不存在账号的任务。
 
+[099 迁移](../db/migrations/099_account_login_history.sql) 为账号增加同时登录设备数上限，为令牌增加设备哈希，并新增登录记录表。登录记录保存连接 IP、User-Agent、设备分组哈希、结果与原因；删除账号时 `user_id` 置空，历史记录仍保留到审计保留期结束。设备哈希来自浏览器环境提示，可被伪造，不能用于身份验证；登录 IP 目前取 API 连接地址，尚未配置可信代理解析。
+
 [097 迁移](../db/migrations/097_account_purge_count.sql) 给每日清理记录增加永久删除账号数。账号保留期固定 30 天，不跟随核心内容回收天数变化；逐账号使用保存点，删除失败会留在回收站并记入 `purge_failures`，下次清理重试。
 
 [096 迁移](../db/migrations/096_invitation_deleted_account.sql) 允许已用邀请的注册账号在未来永久删除后将 `consumed_user_id` 置空，同时保留邀请的已使用时间，不伪称该账号仍存在。
 
 [095 迁移](../db/migrations/095_account_invitations.sql) 增加待激活状态和三种激活方式，并建立一次性邀请表。邀请只保存 UUID 令牌的 SHA-256 哈希；注册时在同一事务内创建账号、首条密码历史及复习计划，并标记邀请已使用。首次登录激活在密码校验成功后完成，手动激活由管理员操作。
 
-[094 迁移](../db/migrations/094_account_soft_delete.sql) 为管理端账号增加软删除时间与删除前启用状态。删除时禁用账号并撤销令牌，外键关联仍保留；管理员可在回收站恢复原账号和原启用状态。满 30 天后自动永久删除，或由管理员二次确认立即删除；项目仓库、项目分析、复习进度及登录记录等采用级联删除，实验、提示词、会话和审核历史中的可空账号引用被置空。
+[094 迁移](../db/migrations/094_account_soft_delete.sql) 为管理端账号增加软删除时间与删除前启用状态。删除时禁用账号并撤销令牌，外键关联仍保留；管理员可在回收站恢复原账号和原启用状态。满 30 天后自动永久删除，或由管理员二次确认立即删除；项目仓库、项目分析及复习进度等采用级联删除；登录历史、实验、提示词、会话和审核历史中的可空账号引用被置空。
 
 `tasks.owner_id` 等早期应用级 ID 没有账号外键，账号永久删除时仍按历史值保留，任务只对管理员可见；它们不应被误认为数据库级联删除。任务模板和重复序列由清理器显式删除，已有重复任务本体保留。需要连同任务内容删除时应单独走任务回收站流程。停用或软删除账号时，活跃重复序列由应用标记为暂停；账号恢复启用后只恢复这些自动暂停的序列，原本手动停止的序列继续停止。实验及评测调度暂停后需手动恢复。
 
@@ -585,11 +588,12 @@ flowchart LR
 
 | 表 | 当前内容与关键关系 | 对应页面或功能 |
 | --- | --- | --- |
-| `users` | 管理端账号、密码哈希、角色、待激活／启用／停用状态、激活方式与时间、可恢复删除时间及个人复习邮件设置。账号进入回收站时保留原 ID 和所有关联，但令牌立即撤销。 | `/login`、`/accounts`、`/notes/reviews` |
+| `users` | 管理端账号、密码哈希、角色、待激活／启用／停用状态、激活方式与时间、同时登录设备上限、可恢复删除时间及个人复习邮件设置。账号进入回收站时保留原 ID 和所有关联，但令牌立即撤销。 | `/login`、`/accounts`、`/notes/reviews` |
 | `account_invitations` | 一次性邀请的令牌哈希、目标用户名、角色、激活方式、期限、使用与撤销时间；创建人和注册后账号均为可置空外键。明文令牌只在创建响应出现。 | `/accounts` 邀请管理、`/register` 注册 |
 | `password_history` | 当前及历次密码的加盐哈希；`user_id` 外键，删除账号时级联删除。只供后端检查最近 5 次复用，不向页面返回哈希。 | `/accounts` 新建和重置密码、`/settings` 自助改密 |
 | `login_security_state` | 按账号保存连续错误次数与锁定到期时间；`user_id` 外键，删除账号时级联删除。第 5 次错误锁定 15 分钟并产生管理员通知。 | `/login` |
-| `auth_sessions` | 登录令牌哈希、到期与撤销时间；`user_id` 外键，删除账号时级联删除。 | 登录、退出、HTTP／WebSocket 鉴权 |
+| `auth_sessions` | 登录令牌哈希、设备分组哈希、到期与撤销时间；`user_id` 外键，删除账号时级联删除。 | 登录、退出、设备上限、HTTP／WebSocket 鉴权 |
+| `account_login_history` | 登录成功／失败记录及连接 IP、User-Agent、原因；`user_id` 外键，删除账号时置空，随后按审计保留期清理。 | `/login`、个人设置最近登录记录 |
 | `sessions` | 聊天端上报的会话；`external_user_id` 是外部用户标识，`ingested_by` 是管理端上报账号的可空外键。 | `/sessions` |
 | `session_cluster_settings` | 单行 K、IDF、已归类文档数与重算阈值配置；与聚类为应用层关联。 | 会话聚类设置 |
 | `session_clusters` | 聚类标签、自动标签、中心向量与成员数；`sessions.cluster_id` 指向它，删除组时置空。 | 会话主题筛选 |

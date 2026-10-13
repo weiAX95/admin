@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { login } from "../api/auth";
 import { setAuth } from "../api/client";
 import { useSettings } from "../components/SettingsProvider";
+import { deviceFingerprint } from "../utils/deviceFingerprint";
 
 interface LoginForm { username: string; password: string }
 export default function Login() {
@@ -15,7 +16,7 @@ export default function Login() {
   const onFinish = async (values: LoginForm) => {
     setLoading(true);
     try {
-      const res = await login(values.username, values.password);
+      const res = await login(values.username, values.password, await deviceFingerprint());
       setAuth(res.token, res.user);
       if (!res.user.passwordChangeRequired) await refresh();
       message.success("登录成功");

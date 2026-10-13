@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Switch, Typography, Upload } from 'antd';
+import { App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
 import { getGlobalSettings, getPreferences, saveGlobalSettings, savePreferences, type GlobalSettings, type Preferences } from '../api/settings';
 import { getStoredUser, getToken, setAuth } from '../api/client';
-import { changePassword } from '../api/auth';
+import { changePassword, loginHistory, type LoginHistoryItem } from '../api/auth';
 import type { AuthUser } from '../types';
 import { useSettings } from '../components/SettingsProvider';
 import ModelConnectionsSettings from '../components/ModelConnectionsSettings';
@@ -24,6 +24,7 @@ export default function Settings() {
   const [personal, setPersonal] = useState<Preferences | null>(null);
   const [saving, setSaving] = useState(false);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
+  const [loginRows, setLoginRows] = useState<LoginHistoryItem[]>([]);
   const [globalForm] = Form.useForm<GlobalSettings>();
   const [personalForm] = Form.useForm<Preferences>();
   const [passwordForm] = Form.useForm<{ currentPassword: string; newPassword: string; confirmPassword: string }>();
@@ -36,6 +37,7 @@ export default function Settings() {
   };
   useEffect(() => { void load().catch(error => message.error(error.message)); }, []);
   useEffect(() => { void getVersionInfo().then(setVersionInfo).catch(() => undefined); }, []);
+  useEffect(() => { void loginHistory().then(result => setLoginRows(result.items)).catch(() => undefined); }, []);
   const saveGlobal = async (values: GlobalSettings) => {
     if (!global) return;
     setSaving(true);
@@ -137,6 +139,15 @@ export default function Settings() {
         <Form.Item name="confirmPassword" label="确认新密码" rules={[{ required: true, message: '请再次输入新密码' }]}><Input.Password autoComplete="new-password" /></Form.Item>
         <Button type="primary" htmlType="submit" loading={saving}>更新密码</Button>
       </Form>
+    </Card>
+    <Card title="最近登录记录" extra={<Typography.Text type="secondary">最近 20 次</Typography.Text>}>
+      <Table rowKey="id" size="small" dataSource={loginRows} pagination={{ pageSize: 5 }} scroll={{ x: 760 }} columns={[
+        { title: '时间', dataIndex: 'createdAt', render: value => new Date(value as string).toLocaleString('zh-CN', { hour12: false }) },
+        { title: '结果', dataIndex: 'succeeded', render: value => value ? <Tag color="success">成功</Tag> : <Tag color="error">失败</Tag> },
+        { title: '原因', dataIndex: 'reason', render: value => ({ success: '登录成功', invalid_credentials: '凭据错误', locked: '尝试过多', pending: '待激活', disabled: '已停用' }[value as string] || value) },
+        { title: 'IP', dataIndex: 'ipAddress' },
+        { title: '设备', dataIndex: 'userAgent', ellipsis: true, render: value => <Typography.Text ellipsis={{ tooltip: value }}>{value || '未知设备'}</Typography.Text> },
+      ]} />
     </Card>
     <Card title="更新日志" extra={<Typography.Text type="secondary">当前版本 v{versionInfo?.currentVersion || '—'}</Typography.Text>}>
       {versionInfo?.changelog.map(entry => {

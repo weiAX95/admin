@@ -7,6 +7,7 @@ import {
   Drawer,
   Form,
   Input,
+  InputNumber,
   Popconfirm,
   Progress,
   Select,
@@ -73,6 +74,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         role: initial.role,
         status: initial.status,
         activationMode: initial.activationMode || "immediate",
+        maxDevices: initial.maxDevices || 3,
         password: "",
       });
     } else {
@@ -82,6 +84,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         role: "member",
         status: "active",
         activationMode: "immediate",
+        maxDevices: 3,
         password: "",
       });
     }
@@ -155,6 +158,9 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         </Form.Item>}
         <Form.Item name="status" label="状态">
           <Select options={STATUS_OPTIONS} />
+        </Form.Item>
+        <Form.Item name="maxDevices" label="最多同时登录设备" rules={[{ required: true, message: '请选择 1–10 台设备' }]}>
+          <InputNumber min={1} max={10} style={{ width: '100%' }} />
         </Form.Item>
       </Form>
     </Drawer>
