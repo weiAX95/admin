@@ -47,7 +47,7 @@ import { handleEvaluationReviews } from "./evaluation-review-api.mjs";
 import { handleEvaluationSchedules, processDueEvaluationSchedules } from "./evaluation-schedules.mjs";
 import { handleEvaluationReportSharing, handlePublicEvaluationReport, canReadSharedEvaluationMedia } from "./evaluation-report-sharing.mjs";
 import { canReadSharedExperimentAsset, handleExperimentSharing, handlePublicExperimentShare } from "./experiment-sharing.mjs";
-import { deliverAppEmails } from "./app-notifications.mjs";
+import { deliverAppEmails, notifyUser } from "./app-notifications.mjs";
 import { handleExperimentSchedules, processDueExperimentSchedules } from "./experiment-schedules.mjs";
 import { handlePrompts } from "./prompts.mjs";
 import { getGlobalSettings, handleSystemSettings } from "./system-settings.mjs";
@@ -535,12 +535,32 @@ async function handleRequest(req, res) {
     if (method === "POST" && pathname === "/api/auth/login") {
       const body = await readBody(req);
       const account = db.users.find((u) => u.username === body.username);
+      if (account) {
+        const security = (await activeClient.query("SELECT failed_attempts,locked_until FROM login_security_state WHERE user_id=$1", [account.id])).rows[0];
+        if (security?.locked_until && new Date(security.locked_until).getTime() > Date.now()) {
+          return send(res, 429, { error: "登录尝试过多，请在锁定结束后重试", lockedUntil: security.locked_until });
+        }
+      }
       if (!account || !verifyPassword(body.password, account.passwordHash)) {
+        if (account?.status === "active") {
+          const failure = (await activeClient.query(`INSERT INTO login_security_state(user_id,failed_attempts,updated_at)
+            VALUES($1,1,now()) ON CONFLICT(user_id) DO UPDATE SET
+            failed_attempts=CASE WHEN login_security_state.locked_until IS NOT NULL AND login_security_state.locked_until<=now() THEN 1 ELSE login_security_state.failed_attempts+1 END,
+            locked_until=NULL,updated_at=now() RETURNING failed_attempts`, [account.id])).rows[0];
+          if (failure.failed_attempts >= 5) {
+            const lockedUntil = (await activeClient.query("UPDATE login_security_state SET locked_until=now()+interval '15 minutes',failed_attempts=0 WHERE user_id=$1 RETURNING locked_until", [account.id])).rows[0].locked_until;
+            for (const admin of db.users.filter(user => user.role === "admin" && user.status === "active")) {
+              await notifyUser(activeClient, admin.id, "account_login_locked", `${account.id}:${new Date(lockedUntil).toISOString()}`, "账号登录已锁定", `账号 ${account.username} 连续 5 次登录失败，已锁定 15 分钟。`, "/accounts");
+            }
+            return send(res, 429, { error: "登录尝试过多，请在锁定结束后重试", lockedUntil });
+          }
+        }
         return send(res, 401, { error: "用户名或密码错误" });
       }
       if (account.status !== "active") {
         return send(res, 403, { error: "账号已被禁用，请联系管理员" });
       }
+      await activeClient.query("DELETE FROM login_security_state WHERE user_id=$1", [account.id]);
       const token = crypto.randomBytes(32).toString("hex");
       const { sessionHours } = await getGlobalSettings(activeClient);
       await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3 * interval '1 hour'))", [sha256(token), account.id, sessionHours]);
