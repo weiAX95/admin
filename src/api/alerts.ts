@@ -4,7 +4,7 @@ export interface AlertRule {
   id: string; name: string; template_key: string | null; metric: string;
   scope_type: 'global' | 'model'; scope_id: string;
   operator: '>' | '<' | '=' | '>=' | '<='; threshold: number;
-  duration_seconds: number; repeat_minutes: number; level: 'info' | 'warning' | 'critical';
+  duration_seconds: number; repeat_minutes: number; aggregate_minutes: number; level: 'info' | 'warning' | 'critical';
   channels: string[]; tags: string[]; enabled: boolean; version: number; updated_at: string;
 }
 export interface AlertIncident {
@@ -12,8 +12,15 @@ export interface AlertIncident {
   scope_id: string; level: AlertRule['level'];
   status: 'firing' | 'acknowledged' | 'resolved'; trigger_value: number;
   trigger_count: number; opened_at: string; acknowledged_at: string | null;
-  resolved_at: string | null; escalated_at: string | null; assigned_to: string | null;
+  resolved_at: string | null; escalated_at: string | null; assigned_to: string | null; aggregate_group_id: string | null;
 }
+export interface AlertGroup {
+  id: string; rule_id: string | null; rule_name: string; metric: string; scope_id: string;
+  opened_at: string; window_end: string; latest_at: string; incident_count: number;
+  level: AlertRule['level']; status: AlertIncident['status'];
+}
+export const listAlertGroups = (offset = 0, limit = 20) => http.get<{ items: AlertGroup[]; total: number }>('/alerts/groups', { offset: String(offset), limit: String(limit) });
+export const listAlertGroupIncidents = (id: string) => http.get<{ items: AlertIncident[]; total: number }>(`/alerts/groups/${id}/incidents`);
 export interface AlertIncidentEvent {
   id: string; incident_id: string; actor_id: string | null; actor_name: string | null;
   event_type: 'opened' | 'escalated' | 'acknowledged' | 'assigned' | 'note' | 'resolved' | 'reminded';
@@ -26,7 +33,7 @@ export interface AlertMetricSample {
 }
 export interface AlertRuleInput {
   name: string; metric: string; scopeId: string; operator: AlertRule['operator'];
-  threshold: number; durationSeconds: number; repeatMinutes: number; level: AlertRule['level'];
+  threshold: number; durationSeconds: number; repeatMinutes: number; aggregateMinutes: number; level: AlertRule['level'];
   channels: string[]; tags: string[]; enabled: boolean;
 }
 

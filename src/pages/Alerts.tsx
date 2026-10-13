@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { App, Alert, Button, Card, DatePicker, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd';
-import type { AlertAnalytics as AlertAnalyticsData, AlertAssignee, AlertImportRow, AlertIncident, AlertIncidentEvent, AlertIncidentQuery, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview, AlertSilence, AlertSilenceInput } from '../api/alerts';
-import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, createAlertSilence, deleteAlertRule, deleteAlertSilence, getAlertAnalytics, importAlertRules, listAlertAssignees, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, listAlertSilences, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, updateAlertRule, updateAlertSilence } from '../api/alerts';
+import { App, Alert, Button, Card, DatePicker, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd';
+import type { AlertAnalytics as AlertAnalyticsData, AlertAssignee, AlertGroup, AlertImportRow, AlertIncident, AlertIncidentEvent, AlertIncidentQuery, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview, AlertSilence, AlertSilenceInput } from '../api/alerts';
+import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, createAlertSilence, deleteAlertRule, deleteAlertSilence, getAlertAnalytics, importAlertRules, listAlertAssignees, listAlertGroupIncidents, listAlertGroups, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, listAlertSilences, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, updateAlertRule, updateAlertSilence } from '../api/alerts';
 import { getPlatformConfig } from '../api/experiment-platform';
 import AlertAnalytics from '../components/AlertAnalytics';
 
@@ -29,6 +29,11 @@ export default function Alerts() {
   const [silences, setSilences] = useState<AlertSilence[]>([]);
   const [silenceEditing, setSilenceEditing] = useState<AlertSilence | 'new' | null>(null);
   const [incidents, setIncidents] = useState<AlertIncident[]>([]);
+  const [groups, setGroups] = useState<AlertGroup[]>([]);
+  const [groupTotal, setGroupTotal] = useState(0);
+  const [groupPage, setGroupPage] = useState(1);
+  const [groupDetails, setGroupDetails] = useState<Record<string,{ items: AlertIncident[]; total: number }>>({});
+  const [groupLoading, setGroupLoading] = useState<string | null>(null);
   const [incidentTotal, setIncidentTotal] = useState(0);
   const [incidentQuery, setIncidentQuery] = useState<AlertIncidentQuery>({ limit: 20, offset: 0 });
   const [analyticsDays, setAnalyticsDays] = useState<7 | 30 | 90>(30);
@@ -36,6 +41,7 @@ export default function Alerts() {
   const [analytics, setAnalytics] = useState<AlertAnalyticsData | null>(null);
   const incidentRequest = useRef(0);
   const analyticsRequest = useRef(0);
+  const groupRequest = useRef(0);
   const [samples, setSamples] = useState<AlertMetricSample[]>([]);
   const [models, setModels] = useState<{ id: string; displayName: string }[]>([]);
   const [metric, setMetric] = useState<string>('model_5xx_rate');
@@ -74,17 +80,30 @@ export default function Alerts() {
     try { setSamples((await listAlertMetricSamples(selected)).items); }
     catch (cause) { message.error(cause instanceof Error ? cause.message : '指标样本加载失败'); }
   }, [message]);
+  const refreshGroups = useCallback(async () => {
+    const request = ++groupRequest.current;
+    try { const result = await listAlertGroups((groupPage-1)*20); if (request === groupRequest.current) { setGroups(result.items); setGroupTotal(result.total); } }
+    catch (cause) { if (request === groupRequest.current) message.error(cause instanceof Error ? cause.message : '聚合告警加载失败'); }
+  }, [groupPage,message]);
+  const expandGroup = async (expanded: boolean, group: AlertGroup) => {
+    if (!expanded) return;
+    setGroupLoading(group.id);
+    try { const result = await listAlertGroupIncidents(group.id); setGroupDetails(current => ({...current,[group.id]:result})); }
+    catch (cause) { message.error(cause instanceof Error ? cause.message : '聚合明细加载失败'); }
+    finally { setGroupLoading(null); }
+  };
   useEffect(() => { void refresh(); }, [refresh]);
   useEffect(() => { void getPlatformConfig().then(result => setModels(result.models)).catch(() => undefined); }, []);
   useEffect(() => { void refreshSamples(metric); }, [metric, refreshSamples]);
+  useEffect(() => { void refreshGroups(); }, [refreshGroups]);
   useEffect(() => { void loadAnalytics(); }, [loadAnalytics]);
   const openCreate = () => {
     setEditing('new');
-    form.setFieldsValue({ name: '', metric: 'model_5xx_rate', scopeId: '*', operator: '>', threshold: 5, durationSeconds: 0, repeatMinutes: 30, level: 'warning', channels: ['in_app'], tags: [], enabled: false });
+    form.setFieldsValue({ name: '', metric: 'model_5xx_rate', scopeId: '*', operator: '>', threshold: 5, durationSeconds: 0, repeatMinutes: 30, aggregateMinutes: 5, level: 'warning', channels: ['in_app'], tags: [], enabled: false });
   };
   const openEdit = (rule: AlertRule) => {
     setEditing(rule);
-    form.setFieldsValue({ name: rule.name, metric: rule.metric, scopeId: rule.scope_id, operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes, level: rule.level, channels: rule.channels, tags: rule.tags, enabled: rule.enabled });
+    form.setFieldsValue({ name: rule.name, metric: rule.metric, scopeId: rule.scope_id, operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes, aggregateMinutes: rule.aggregate_minutes, level: rule.level, channels: rule.channels, tags: rule.tags, enabled: rule.enabled });
   };
   const save = async (input: AlertRuleInput) => {
     setBusy(true);
@@ -107,7 +126,7 @@ export default function Alerts() {
   } });
   const acknowledge = async (incident: AlertIncident) => {
     setBusyId(incident.id);
-    try { await acknowledgeAlertIncident(incident.id); await Promise.all([refresh(),loadAnalytics()]); message.success('已确认告警'); }
+    try { await acknowledgeAlertIncident(incident.id); await Promise.all([refresh(),refreshGroups(),loadAnalytics()]); message.success('已确认告警'); }
     catch (cause) { message.error(cause instanceof Error ? cause.message : '确认失败'); }
     finally { setBusyId(null); }
   };
@@ -130,7 +149,7 @@ export default function Alerts() {
       const [history, latest] = await Promise.all([listAlertIncidentEvents(selectedIncident.id), listAlertIncidents(incidentQuery)]);
       setIncidentEvents(history.items); setIncidents(latest.items); setIncidentTotal(latest.total);
       setSelectedIncident(latest.items.find(item => item.id === selectedIncident.id) || null);
-      void loadAnalytics();
+      void loadAnalytics(); void refreshGroups();
       message.success(action === 'resolve' ? '告警已解决' : action === 'assign' ? '已指派处理人' : '处置备注已保存');
     } catch (cause) { message.error(cause instanceof Error ? cause.message : '处置失败'); }
     finally { setBusyId(null); }
@@ -160,7 +179,7 @@ export default function Alerts() {
     const selected = rules.filter(rule => selectedIds.includes(rule.id));
     const content: AlertRuleArchive = { schemaVersion: 1, rules: selected.map(rule => ({
       templateKey: rule.template_key, name: rule.name, metric: rule.metric, scopeId: rule.scope_id,
-      operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes,
+      operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes, aggregateMinutes: rule.aggregate_minutes,
       level: rule.level, channels: rule.channels, tags: rule.tags, enabled: rule.enabled,
     })) };
     const url = URL.createObjectURL(new Blob([JSON.stringify(content, null, 2)], { type: 'application/json' }));
@@ -199,14 +218,14 @@ export default function Alerts() {
     finally { setPreviewBusy(false); }
   };
 
-  return <Card title="告警规则与事件" extra={<Space><Button onClick={() => { void refresh(); void refreshSamples(metric); void loadAnalytics(); }}>刷新</Button><Button disabled={!selectedIds.length} onClick={exportSelected}>导出所选</Button><Upload accept=".json,application/json" showUploadList={false} beforeUpload={file => { void selectArchive(file); return false; }}><Button>导入 JSON</Button></Upload><Button type="primary" onClick={openCreate}>创建规则</Button></Space>}>
+  return <Card title="告警规则与事件" extra={<Space><Button onClick={() => { void refresh(); void refreshGroups(); void refreshSamples(metric); void loadAnalytics(); }}>刷新</Button><Button disabled={!selectedIds.length} onClick={exportSelected}>导出所选</Button><Upload accept=".json,application/json" showUploadList={false} beforeUpload={file => { void selectArchive(file); return false; }}><Button>导入 JSON</Button></Upload><Button type="primary" onClick={openCreate}>创建规则</Button></Space>}>
     <Typography.Paragraph type="secondary">内置规则默认关闭。启用后，服务每分钟从实际数据采样并判断；无数据时不会将比率视为零。告警首次触发后写入事件并通知管理员。</Typography.Paragraph>
     {error && <Alert type="error" showIcon message={error} action={<Button size="small" onClick={() => void refresh()}>重试</Button>} style={{ marginBottom: 16 }} />}
     <Tabs items={[
       { key: 'rules', label: `规则 ${rules.length}`, children: <Table<AlertRule> rowKey="id" dataSource={rules} rowSelection={{ selectedRowKeys: selectedIds, onChange: setSelectedIds }} pagination={{ pageSize: 10 }} locale={{ emptyText: <Empty description="暂无规则"><Button onClick={openCreate}>创建规则</Button></Empty> }} columns={[
         { title: '名称', dataIndex: 'name', render: (name: string, rule) => <Space><strong>{name}</strong>{rule.template_key && <Tag>内置</Tag>}</Space> },
         { title: '指标', dataIndex: 'metric', render: metricLabel },
-        { title: '条件', render: (_, rule) => `${rule.operator} ${rule.threshold}，持续 ${rule.duration_seconds} 秒；每 ${rule.repeat_minutes} 分钟提醒` },
+        { title: '条件', render: (_, rule) => `${rule.operator} ${rule.threshold}，持续 ${rule.duration_seconds} 秒；${rule.aggregate_minutes} 分钟聚合；每 ${rule.repeat_minutes} 分钟提醒` },
         { title: '范围', render: (_, rule) => rule.scope_type === 'global' ? '全局' : rule.scope_id === '*' ? '所有模型' : models.find(model => model.id === rule.scope_id)?.displayName || rule.scope_id },
         { title: '级别', dataIndex: 'level', render: (level: AlertRule['level']) => <Tag color={levelColor[level]}>{level}</Tag> },
         { title: '启用', render: (_, rule) => <Switch aria-label={`启用 ${rule.name}`} checked={rule.enabled} loading={busyId === rule.id} onChange={enabled => void toggle(rule, enabled)} /> },
@@ -231,6 +250,21 @@ export default function Alerts() {
         { title: '当前值', dataIndex: 'trigger_value' }, { title: '触发次数', dataIndex: 'trigger_count' },
         { title: '操作', render: (_, item) => <Space><Button size="small" onClick={() => void openIncident(item)}>处置记录</Button>{item.status === 'firing' && <Button size="small" loading={busyId === item.id} onClick={() => void acknowledge(item)}>确认</Button>}</Space> },
       ]} /></> },
+      { key: 'groups', label: `聚合告警 ${groupTotal}`, children: <Table<AlertGroup> rowKey="id" dataSource={groups} pagination={{ current: groupPage, pageSize: 20, total: groupTotal, onChange: setGroupPage }} expandable={{ onExpand: (expanded, group) => void expandGroup(expanded, group), expandedRowRender: group => {
+        const detail = groupDetails[group.id];
+        if (!detail) return <Spin spinning={groupLoading === group.id}><div style={{ minHeight: 52 }}>加载聚合明细…</div></Spin>;
+        return <><Typography.Paragraph type="secondary">窗口内已触发 {detail.total} 次；{detail.total > detail.items.length ? `显示前 ${detail.items.length} 次。` : '以下保留每次事件的独立处置历史。'}</Typography.Paragraph><Table<AlertIncident> size="small" rowKey="id" pagination={{ pageSize: 10 }} dataSource={detail.items} columns={[
+          { title: '触发时间', dataIndex: 'opened_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
+          { title: '状态', dataIndex: 'status' }, { title: '触发值', dataIndex: 'trigger_value' },
+          { title: '操作', render: (_, item) => <Button size="small" onClick={() => void openIncident(item)}>处置记录</Button> },
+        ]} /></>;
+      } }} columns={[
+        { title: '规则', dataIndex: 'rule_name' }, { title: '范围', dataIndex: 'scope_id' },
+        { title: '级别', dataIndex: 'level', render: (value: AlertGroup['level']) => <Tag color={levelColor[value]}>{value}</Tag> },
+        { title: '状态', dataIndex: 'status' },
+        { title: '聚合窗口', render: (_, group) => `${new Date(group.opened_at).toLocaleString('zh-CN')} – ${new Date(group.window_end).toLocaleString('zh-CN')}` },
+        { title: '触发', dataIndex: 'incident_count', render: (count: number) => `已触发 ${count} 次` },
+      ]} /> },
       { key: 'analytics', label: '历史分析', children: <><Space style={{ marginBottom: 12 }}><Select aria-label="分析时间窗口" value={analyticsDays} style={{ width: 140 }} options={[{value:7,label:'近 7 天'},{value:30,label:'近 30 天'},{value:90,label:'近 90 天'}]} onChange={setAnalyticsDays} /><Select aria-label="分析告警级别" placeholder="全部级别" allowClear value={analyticsLevel} style={{ width: 145 }} options={['info','warning','critical'].map(value => ({value,label:value}))} onChange={setAnalyticsLevel} /></Space><AlertAnalytics data={analytics} /></> },
       { key: 'metrics', label: '指标样本', children: <><Select aria-label="查看指标" value={metric} options={metricOptions} onChange={setMetric} style={{ minWidth: 270, marginBottom: 16 }} /><Table<AlertMetricSample> rowKey={item => `${item.metric}:${item.scope_id}:${item.sampled_at}`} dataSource={samples} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="暂无采样数据" /> }} columns={[
         { title: '时间', dataIndex: 'sampled_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
@@ -245,6 +279,7 @@ export default function Alerts() {
         {selectedMetric?.startsWith('model_') && <Form.Item name="scopeId" label="模型范围"><Select options={[{ value: '*', label: '所有模型' }, ...models.map(model => ({ value: model.id, label: model.displayName }))]} /></Form.Item>}
         <Space align="start"><Form.Item name="operator" label="比较符"><Select style={{ width: 90 }} options={['>','<','=','>=','<='].map(value => ({ value, label: value }))} /></Form.Item><Form.Item name="threshold" label="阈值" rules={[{ required: true }]}><InputNumber style={{ width: 150 }} /></Form.Item><Form.Item name="durationSeconds" label="持续秒数"><InputNumber min={0} max={86400} precision={0} style={{ width: 150 }} /></Form.Item></Space>
         <Form.Item name="repeatMinutes" label="未确认时重复提醒间隔（分钟）"><InputNumber min={1} max={1440} precision={0} style={{ width: 150 }} /></Form.Item>
+        <Form.Item name="aggregateMinutes" label="再次触发聚合窗口（分钟）"><InputNumber min={1} max={1440} precision={0} style={{ width: 150 }} /></Form.Item>
         <Form.Item name="level" label="级别"><Select options={[{value:'info',label:'Info · 仅记录'},{value:'warning',label:'Warning · 通知管理员'},{value:'critical',label:'Critical · 高优先级'}]} /></Form.Item>
         <Form.Item name="channels" label="通知渠道"><Select mode="multiple" options={[{value:'in_app',label:'站内通知'},{value:'email',label:'账号已启用的邮件'}]} /></Form.Item>
         <Form.Item name="tags" label="规则标签（用于静默）"><Select mode="tags" maxCount={20} placeholder="输入标签后回车" /></Form.Item>
