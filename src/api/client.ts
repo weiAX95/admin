@@ -39,6 +39,38 @@ export class ApiError extends Error {
   }
 }
 
+export const NETWORK_RETRY_STATE_EVENT = "admin:api-network-retry-state";
+export const NETWORK_RETRY_NOW_EVENT = "admin:api-network-retry-now";
+export type NetworkRetryState = { pending: number; retryAt: number | null };
+
+const pendingRetries = new Map<number, number>();
+let nextRetryId = 0;
+
+export function getNetworkRetryState(): NetworkRetryState {
+  return { pending: pendingRetries.size, retryAt: pendingRetries.size ? Math.min(...pendingRetries.values()) : null };
+}
+
+function announceNetworkRetry() {
+  window.dispatchEvent(new CustomEvent<NetworkRetryState>(NETWORK_RETRY_STATE_EVENT, { detail: getNetworkRetryState() }));
+}
+
+function waitBeforeRetry(seconds: number): Promise<void> {
+  return new Promise(resolve => {
+    const id = ++nextRetryId;
+    const finish = () => {
+      clearTimeout(timer);
+      window.removeEventListener(NETWORK_RETRY_NOW_EVENT, finish);
+      pendingRetries.delete(id);
+      announceNetworkRetry();
+      resolve();
+    };
+    const timer = setTimeout(finish, seconds * 1000);
+    window.addEventListener(NETWORK_RETRY_NOW_EVENT, finish);
+    pendingRetries.set(id, Date.now() + seconds * 1000);
+    announceNetworkRetry();
+  });
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
@@ -47,12 +79,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  let res: Response;
-  try {
-    res = await fetch(`${BASE}${path}`, { ...init, headers });
-  } catch {
-    throw new ApiError(0, "无法连接 mock API，请确认已启动（npm run mock）");
+  let res: Response | undefined;
+  const method = (init?.method || "GET").toUpperCase();
+  for (let attempt = 0; attempt < (method === "GET" ? 3 : 1); attempt++) {
+    try {
+      res = await fetch(`${BASE}${path}`, { ...init, headers });
+      break;
+    } catch (cause) {
+      if (init?.signal?.aborted || (cause instanceof Error && cause.name === "AbortError")) throw cause;
+      if (method === "GET" && attempt < 2) {
+        await waitBeforeRetry(2 ** (attempt + 1));
+        continue;
+      }
+      throw new ApiError(0, "无法连接 API，请检查网络连接或确认本地服务已启动（npm run dev）");
+    }
   }
+
+  if (!res) throw new ApiError(0, "无法连接 API");
 
   const text = await res.text();
   let data: unknown = null;
