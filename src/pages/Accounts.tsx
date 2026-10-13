@@ -8,6 +8,7 @@ import {
   Form,
   Input,
   Popconfirm,
+  Progress,
   Select,
   Space,
   Table,
@@ -33,6 +34,10 @@ const STATUS_OPTIONS = [
   { value: "active", label: "启用" },
   { value: "disabled", label: "禁用" },
 ];
+const meetsPasswordPolicy = (value: string) => value.length >= 8 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value);
+const passwordRule = { validator: async (_: unknown, value: string) => {
+  if (value && !meetsPasswordPolicy(value)) throw new Error("至少 8 位，包含大小写字母和数字");
+} };
 
 interface DrawerProps {
   open: boolean;
@@ -43,8 +48,11 @@ interface DrawerProps {
 
 function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
   const [form] = Form.useForm<AccountPayload>();
+  const password = Form.useWatch("password", form) || "";
   const [saving, setSaving] = useState(false);
   const { message } = App.useApp();
+  const validPassword = meetsPasswordPolicy(password);
+  const strength = !password ? 0 : Math.min(100, 20 + Number(password.length >= 8) * 20 + Number(/[A-Z]/.test(password) && /[a-z]/.test(password)) * 20 + Number(/[0-9]/.test(password)) * 20 + Number(password.length >= 12 || /[^A-Za-z0-9]/.test(password)) * 20);
 
   useEffect(() => {
     if (!open) return;
@@ -116,9 +124,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
           name="password"
           label={initial ? "重置密码" : "密码"}
           rules={
-            initial
-              ? []
-              : [{ required: true, message: "请输入密码" }]
+            initial ? [passwordRule] : [{ required: true, message: "请输入密码" }, passwordRule]
           }
         >
           <Input.Password
@@ -126,6 +132,10 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
             placeholder={initial ? "留空则不修改密码" : "登录密码"}
           />
         </Form.Item>
+        {password && <div aria-live="polite" style={{ marginTop: -18, marginBottom: 20 }}>
+          <Progress percent={strength} showInfo={false} status={validPassword ? "success" : "normal"} size="small" />
+          <Typography.Text type={validPassword ? "success" : "secondary"}>{!validPassword ? "弱" : strength >= 100 ? "强" : "中"} · 至少 8 位，包含大小写字母和数字</Typography.Text>
+        </div>}
         <Form.Item name="role" label="角色">
           <Select options={ROLE_OPTIONS} />
         </Form.Item>

@@ -14,3 +14,11 @@ export function verifyPassword(password, stored) {
   const actual = scryptSync(String(password), Buffer.from(saltHex, "hex"), expected.length);
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
+
+export function passwordPolicyError(password) {
+  if (typeof password !== "string" || password.length < 8) return "密码至少需要 8 个字符";
+  if (!/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) {
+    return "密码必须同时包含大写字母、小写字母和数字";
+  }
+  return null;
+}

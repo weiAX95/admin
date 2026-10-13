@@ -23,7 +23,7 @@ import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
 import crypto from "node:crypto";
 import { pool, loadData, saveData, sha256, assertSchemaCurrent } from "./postgres-store.mjs";
-import { hashPassword, verifyPassword } from "./passwords.mjs";
+import { hashPassword, passwordPolicyError, verifyPassword } from "./passwords.mjs";
 import { recordTaskTrendEvent, recordTaskTrendSnapshot, computeTaskTrends, trendDateKey } from "./task-trends.mjs";
 import { applyTaskProgress, clampProgress as normalizeProgress, normalizeChecklist } from "./task-checklist.mjs";
 import { canUseDependency, projectTasks, validateDependencies, validatePlan } from "./task-dependencies.mjs";
@@ -795,6 +795,8 @@ async function handleRequest(req, res) {
           const pwd = String(body.password || "");
           if (!uname) return send(res, 400, { error: "username 为必填项" });
           if (!pwd) return send(res, 400, { error: "password 为必填项" });
+          const passwordError = passwordPolicyError(pwd);
+          if (passwordError) return send(res, 400, { error: passwordError });
           if (db.users.some((u) => u.username === uname)) {
             return send(res, 409, { error: "用户名已存在" });
           }
@@ -808,7 +810,10 @@ async function handleRequest(req, res) {
           };
           db.users.push(account);
           saveDb(db);
-          afterSave(client => initializeUserReviews(client, account.id));
+          afterSave(async client => {
+            await client.query("INSERT INTO password_history(user_id,password_hash) VALUES($1,$2)", [account.id, account.passwordHash]);
+            await initializeUserReviews(client, account.id);
+          });
           return send(res, 201, publicUser(account));
         }
         return send(res, 405, { error: "method not allowed" });
@@ -842,7 +847,14 @@ async function handleRequest(req, res) {
           }
         }
         if (typeof body.password === "string" && body.password) {
+          const passwordError = passwordPolicyError(body.password);
+          if (passwordError) return send(res, 400, { error: passwordError });
+          const recentPasswords = (await activeClient.query("SELECT password_hash FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 5", [target.id])).rows;
+          if (recentPasswords.some(row => verifyPassword(body.password, row.password_hash))) {
+            return send(res, 400, { error: "不能重复使用最近 5 次密码" });
+          }
           target.passwordHash = hashPassword(body.password);
+          await activeClient.query("INSERT INTO password_history(user_id,password_hash) VALUES($1,$2)", [target.id, target.passwordHash]);
           await revokeUserSessions(target.id);
         }
         target.updatedAt = nowIso();

@@ -42,7 +42,7 @@ export default function Login() {
           <span className="login-panel-kicker">开始你的学习旅程</span>
           <h2 id="login-title">欢迎回来</h2>
           <p className="login-description">登录账号，继续你的学习与探索。</p>
-          <Form<LoginForm> layout="vertical" size="large" initialValues={{ username: "admin", password: "admin123" }} onFinish={onFinish} requiredMark={false}>
+          <Form<LoginForm> layout="vertical" size="large" onFinish={onFinish} requiredMark={false}>
             <Form.Item name="username" label="用户名" rules={[{ required: true, message: "请输入用户名" }]}>
               <Input prefix={<UserOutlined />} placeholder="请输入用户名" autoComplete="username" />
             </Form.Item>
@@ -51,7 +51,6 @@ export default function Login() {
             </Form.Item>
             <Button type="primary" htmlType="submit" loading={loading} block className="login-submit">登录工作空间 <ArrowRightOutlined /></Button>
           </Form>
-          <div className="login-demo"><span>演示账号</span><code>admin / admin123</code></div>
           <p className="login-panel-footer"><LockOutlined /> Agent 学习管理控制台</p>
         </section>
       </div>

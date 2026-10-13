@@ -243,6 +243,9 @@ export async function importJson(client, data, sourceHash) {
   initializeTaskTrends(data);
   const empty = Object.fromEntries([...specs.map(item => [item.name, []]), ["legacyActivityIds", []], ["taskTrendEvents", []], ["taskTrendSnapshots", []]]);
   await saveData(client, empty, data);
+  for (const user of data.users || []) {
+    await client.query("INSERT INTO password_history(user_id,password_hash,changed_at) VALUES($1,$2,$3)", [user.id, user.passwordHash, user.updatedAt || user.createdAt || new Date().toISOString()]);
+  }
   for (const session of data.sessions || []) await saveSessionQuality(client, session);
   // The schema migration runs before a JSON import, so seed review plans for
   // the imported accounts and notes inside this same import transaction.
