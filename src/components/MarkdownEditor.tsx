@@ -4,7 +4,7 @@ import type { Note } from "../types";
 import { uploadAsset } from "../api/assets";
 import MarkdownContent from "./MarkdownContent";
 
-type Props = { value?: string; onChange?: (value: string) => void; placeholder?: string; notes?: Pick<Note, "id" | "title">[]; rows?: number; enableWikiLinks?: boolean };
+type Props = { value?: string; onChange?: (value: string) => void; placeholder?: string; ariaLabel?: string; notes?: Pick<Note, "id" | "title">[]; rows?: number; enableWikiLinks?: boolean };
 const actions = [
   { label: "粗体", before: "**", after: "**", sample: "加粗文字" },
   { label: "斜体", before: "*", after: "*", sample: "斜体文字" },
@@ -16,7 +16,7 @@ const actions = [
   { label: "表格", before: "\n| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |\n", after: "", sample: "" },
 ];
 
-export default function MarkdownEditor({ value = "", onChange, placeholder, notes = [], rows = 12, enableWikiLinks = false }: Props) {
+export default function MarkdownEditor({ value = "", onChange, placeholder, ariaLabel = "Markdown 内容编辑", notes = [], rows = 12, enableWikiLinks = false }: Props) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const latestValue = useRef(value);
@@ -64,7 +64,7 @@ export default function MarkdownEditor({ value = "", onChange, placeholder, note
       <div className="markdown-editor-pane"><div className="markdown-pane-label">编辑</div><textarea ref={textarea} value={value} onChange={event => onChange?.(event.target.value)} onPaste={event => {
         const file = [...event.clipboardData.files].find(item => item.type.startsWith("image/"));
         if (file) { event.preventDefault(); void upload(file); }
-      }} placeholder={placeholder} rows={rows} aria-label="Markdown 内容编辑" /></div>
+      }} placeholder={placeholder} rows={rows} aria-label={ariaLabel} /></div>
       <div className="markdown-preview-pane"><div className="markdown-pane-label">实时预览</div><MarkdownContent content={deferred} notes={notes} enableWikiLinks={enableWikiLinks} /></div>
     </div>
   </div>;

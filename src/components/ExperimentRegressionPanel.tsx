@@ -18,9 +18,10 @@ export default function ExperimentRegressionPanel({ definition, onStarted }: { d
   const [baselines, setBaselines] = useState<{ id: string; experiment_title: string; created_at: string }[]>([]);
   const [variantId, setVariantId] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const baselineRevision = definition.batches.map(batch => `${batch.id}:${batch.status}`).join(',');
   useEffect(() => { void Promise.all([listDatasets(), listMetricVersions()]).then(([a,b]) => { setDatasets(a.items); setMetrics(b.items); }).catch(() => undefined); }, []);
   useEffect(() => { if (!datasetId) { setVersions([]); return; } void getDatasetVersions(datasetId).then(value => { setVersions(value.items); setVersionId(value.items[0]?.id); }); }, [datasetId]);
-  useEffect(() => { if (!versionId || !metricId) return; void listBaselines(versionId, metricId).then(value => setBaselines(value.items)).catch(() => setBaselines([])); }, [versionId, metricId]);
+  useEffect(() => { if (!versionId || !metricId) return; void listBaselines(versionId, metricId).then(value => setBaselines(value.items)).catch(() => setBaselines([])); }, [versionId, metricId, baselineRevision]);
   const run = async (regression: boolean) => {
     if (!versionId || !variantId) { message.warning('请选择数据集版本和变体'); return; }
     if (regression && !baselineId) { message.warning('请选择可比的固定 baseline'); return; }
@@ -35,15 +36,15 @@ export default function ExperimentRegressionPanel({ definition, onStarted }: { d
     } catch (cause) { message.error(cause instanceof Error ? cause.message : '执行失败'); }
     finally { setBusy(false); }
   };
-  return <Card title="版本化数据集评测与回归" extra={<Link to="/experiments/datasets">管理数据集</Link>}>
+  return <Card role="region" aria-label="版本化数据集评测与回归" title="版本化数据集评测与回归" extra={<Link to="/experiments/datasets">管理数据集</Link>}>
     <Typography.Paragraph type="secondary">先运行一次数据集评测作为 baseline，再选同版本数据集、指标和固定 baseline 执行回归。每个 baseline 用例只允许一条有效评分。</Typography.Paragraph>
     <Space wrap size={12}>
-      <Form.Item label="数据集"><Select style={{ width: 180 }} value={datasetId} onChange={value => { setDatasetId(value); setBaselineId(undefined); }} options={datasets.map(item => ({ value: item.id, label: item.name }))} /></Form.Item>
-      <Form.Item label="版本"><Select style={{ width: 120 }} value={versionId} onChange={value => { setVersionId(value); setBaselineId(undefined); }} options={versions.map(item => ({ value: item.id, label: `v${item.version}` }))} /></Form.Item>
-      <Form.Item label="指标版本"><Select style={{ width: 180 }} value={metricId} onChange={value => { setMetricId(value); setBaselineId(undefined); }} options={metrics.map(item => ({ value: item.id, label: `${item.name} v${item.version}` }))} /></Form.Item>
-      <Form.Item label="变体"><Select style={{ width: 180 }} value={variantId} onChange={setVariantId} options={definition.variants.map(item => ({ value: item.id!, label: item.label }))} /></Form.Item>
+      <Form.Item label="数据集" htmlFor="regression-dataset"><Select id="regression-dataset" style={{ width: 180 }} value={datasetId} onChange={value => { setDatasetId(value); setBaselineId(undefined); }} options={datasets.map(item => ({ value: item.id, label: item.name }))} /></Form.Item>
+      <Form.Item label="版本" htmlFor="regression-version"><Select id="regression-version" style={{ width: 120 }} value={versionId} onChange={value => { setVersionId(value); setBaselineId(undefined); }} options={versions.map(item => ({ value: item.id, label: `v${item.version}` }))} /></Form.Item>
+      <Form.Item label="指标版本" htmlFor="regression-metric"><Select id="regression-metric" style={{ width: 180 }} value={metricId} onChange={value => { setMetricId(value); setBaselineId(undefined); }} options={metrics.map(item => ({ value: item.id, label: `${item.name} v${item.version}` }))} /></Form.Item>
+      <Form.Item label="变体" htmlFor="regression-variant"><Select id="regression-variant" style={{ width: 180 }} value={variantId} onChange={setVariantId} options={definition.variants.map(item => ({ value: item.id!, label: item.label }))} /></Form.Item>
     </Space>
     <div><Button loading={busy} disabled={!versionId || !variantId} onClick={() => void run(false)}>建立 baseline 运行</Button></div>
-    <Space wrap style={{ marginTop: 14 }}><Select style={{ width: 340 }} placeholder="固定 baseline" value={baselineId} onChange={setBaselineId} options={baselines.map(item => ({ value: item.id, label: `${item.experiment_title} · ${new Date(item.created_at).toLocaleString('zh-CN')}` }))} /><Button type="primary" loading={busy} disabled={!baselineId || !variantId} onClick={() => void run(true)}>执行回归</Button></Space>
+    <Space wrap style={{ marginTop: 14 }}><Select aria-label="固定 baseline" style={{ width: 340 }} placeholder="固定 baseline" value={baselineId} onChange={setBaselineId} options={baselines.map(item => ({ value: item.id, label: `${item.experiment_title} · ${new Date(item.created_at).toLocaleString('zh-CN')}` }))} /><Button type="primary" loading={busy} disabled={!baselineId || !variantId} onClick={() => void run(true)}>执行回归</Button></Space>
   </Card>;
 }

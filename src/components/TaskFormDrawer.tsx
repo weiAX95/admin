@@ -242,7 +242,7 @@ export default function TaskFormDrawer({ open, initial, onClose, onSaved }: Prop
         </>}
 
         <Form.Item name="description" label="任务描述">
-          <MarkdownEditor rows={10} placeholder="这条学习任务要解决什么？" />
+          <MarkdownEditor rows={10} ariaLabel="任务描述" placeholder="这条学习任务要解决什么？" />
         </Form.Item>
 
         {!initial && <Form.Item name="tags" label="任务标签">
@@ -250,7 +250,7 @@ export default function TaskFormDrawer({ open, initial, onClose, onSaved }: Prop
         </Form.Item>}
 
         <Form.Item name="notes" label="学习笔记">
-          <MarkdownEditor rows={10} placeholder="记录学习过程中的要点与心得" />
+          <MarkdownEditor rows={10} ariaLabel="任务学习笔记" placeholder="记录学习过程中的要点与心得" />
         </Form.Item>
 
         <Form.Item label="学习资料">

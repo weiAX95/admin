@@ -112,13 +112,13 @@ export function ExperimentFormDrawer({ open, initial, tasks, defaultTaskId, onCl
           <Input placeholder="例如：gpt-4o-mini" />
         </Form.Item>
         <Form.Item name="prompt" label="Prompt">
-          <MarkdownEditor rows={10} placeholder="本次实验使用的提示词" />
+          <MarkdownEditor rows={10} ariaLabel="实验 Prompt" placeholder="本次实验使用的提示词" />
         </Form.Item>
         <Form.Item name="params" label="参数">
           <Input placeholder="例如：temperature=0.2, maxSteps=5" />
         </Form.Item>
         <Form.Item name="result" label="结果观察">
-          <MarkdownEditor rows={10} placeholder="实验结果与观察" />
+          <MarkdownEditor rows={10} ariaLabel="实验结果观察" placeholder="实验结果与观察" />
         </Form.Item>
         <Form.Item name="score" label="自评打分（0-5）">
           <InputNumber min={0} max={5} style={{ width: "100%" }} />

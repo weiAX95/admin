@@ -139,7 +139,7 @@ export function NoteFormDrawer({ open, initial, tasks, notes = EMPTY_NOTES, cate
           <Select mode="tags" tokenSeparators={[","]} placeholder="输入标签后回车，可添加多个" options={tagCatalogue.map(tag => ({ value: tag.name, label: tag.count ? `${tag.name} · ${tag.count} 篇` : tag.name }))} />
         </Form.Item>
         <Form.Item name="content" label="内容">
-          <MarkdownEditor rows={16} notes={catalogue} enableWikiLinks placeholder="学习笔记内容，支持 Markdown 和 [[笔记标题]] 引用" />
+          <MarkdownEditor rows={16} ariaLabel="笔记内容" notes={catalogue} enableWikiLinks placeholder="学习笔记内容，支持 Markdown 和 [[笔记标题]] 引用" />
         </Form.Item>
       </Form>
     </Drawer>
