@@ -42,9 +42,22 @@ export class ApiError extends Error {
 export const NETWORK_RETRY_STATE_EVENT = "admin:api-network-retry-state";
 export const NETWORK_RETRY_NOW_EVENT = "admin:api-network-retry-now";
 export type NetworkRetryState = { pending: number; retryAt: number | null };
+export const SERVER_ERROR_STATE_EVENT = "admin:api-server-state";
+export type ServerErrorState = { status: number | null };
 
 const pendingRetries = new Map<number, number>();
 let nextRetryId = 0;
+let serverErrorStatus: number | null = null;
+
+export function getServerErrorState(): ServerErrorState {
+  return { status: serverErrorStatus };
+}
+
+function setServerErrorState(status: number | null) {
+  if (status === null && serverErrorStatus === null) return;
+  serverErrorStatus = status;
+  window.dispatchEvent(new CustomEvent<ServerErrorState>(SERVER_ERROR_STATE_EVENT, { detail: getServerErrorState() }));
+}
 
 export function getNetworkRetryState(): NetworkRetryState {
   return { pending: pendingRetries.size, retryAt: pendingRetries.size ? Math.min(...pendingRetries.values()) : null };
@@ -108,6 +121,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
+    if (res.status >= 500) setServerErrorState(res.status);
     // 登录接口自身的 401 是“密码错误”，不跳转；其余 401 视为登录态失效
     if (res.status === 401 && !path.startsWith("/auth/login")) {
       clearAuth();
@@ -119,6 +133,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       (data as { error?: string } | null)?.error || `请求失败（${res.status}）`;
     throw new ApiError(res.status, msg, data);
   }
+  setServerErrorState(null);
   return data as T;
 }
 

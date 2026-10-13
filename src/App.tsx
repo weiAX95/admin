@@ -7,6 +7,7 @@ import RequireAuth from "./components/RequireAuth";
 import ErrorBoundary from "./components/ErrorBoundary";
 import OfflineBanner from "./components/OfflineBanner";
 import ApiNetworkRetryBanner from "./components/ApiNetworkRetryBanner";
+import ApiServerErrorBanner from "./components/ApiServerErrorBanner";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Tasks = lazy(() => import("./pages/Tasks"));
 const TaskDetail = lazy(() => import("./pages/TaskDetail"));
@@ -48,6 +49,7 @@ export default function App() {
         <BrowserRouter>
           <OfflineBanner />
           <ApiNetworkRetryBanner />
+          <ApiServerErrorBanner />
           <Suspense fallback={<div className="route-loading" role="status"><Spin size="large" tip="页面加载中…"><span className="route-loading-space" /></Spin></div>}>
           <Routes>
             <Route path="/login" element={<Login />} />

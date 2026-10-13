@@ -60,3 +60,19 @@ test('HTTP errors are returned immediately without network retries', async t => 
   await assert.rejects(http.get('/test'), error => error instanceof ApiError && error.status === 503 && error.message === '服务暂不可用');
   assert.equal(calls, 1);
 });
+
+test('server errors announce a refresh prompt and later success clears it', async t => {
+  let calls = 0;
+  browserGlobals(t, async () => {
+    calls++;
+    return calls === 1
+      ? new Response(JSON.stringify({ error: '服务暂不可用' }), { status: 503 })
+      : new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+  const events = [];
+  window.addEventListener('admin:api-server-state', event => events.push(event.detail));
+  await assert.rejects(http.get('/test'), error => error instanceof ApiError && error.status === 503);
+  assert.deepEqual(events.at(-1), { status: 503 });
+  await http.get('/test');
+  assert.deepEqual(events.at(-1), { status: null });
+});

@@ -192,6 +192,7 @@ body { min-width: 320px; -webkit-font-smoothing: antialiased; }
 .render-error button:hover { border-color: var(--accent); }
 .offline-banner { position: sticky; top: 0; z-index: 110; width: 100%; padding: 10px 16px; border-bottom: 1px solid #d8a044; background: #fff3cd; color: #6b4700; text-align: center; font-size: 13px; }
 .api-retry-banner { position: sticky; top: 0; z-index: 109; width: 100%; }
+.api-server-error-banner { position: sticky; top: 0; z-index: 108; width: 100%; }
 .page-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 28px; }
 .page-eyebrow { color: #a597dd; font-size: 10px; font-weight: 600; letter-spacing: 1.8px; }
 .page-heading h2.ant-typography { margin: 10px 0 8px; font-size: 28px; font-weight: 650; letter-spacing: -.5px; }
