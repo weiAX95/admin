@@ -31,6 +31,8 @@ export const deleteAlertRule = (id: string, version: number) => http.del(`/alert
 export const listAlertIncidents = (status?: string, level?: string) => http.get<{ items: AlertIncident[] }>('/alerts/incidents', { status, level });
 export const acknowledgeAlertIncident = (id: string) => http.post<{ item: AlertIncident }>(`/alerts/incidents/${id}/ack`, {});
 export const listAlertMetricSamples = (metric?: string, scopeId = '*') => http.get<{ items: AlertMetricSample[] }>('/alerts/metrics', { metric, scopeId });
+export interface AlertRulePreview { triggers: number; firstTriggerAt: string | null; sampleCount: number; firstSampleAt: string | null; lastSampleAt: string | null; historyComplete: boolean; byDay: { day: string; count: number }[] }
+export const previewAlertRule = (input: AlertRuleInput) => http.post<AlertRulePreview>('/alerts/rules/preview', input);
 
 export interface AlertRuleArchive { schemaVersion: 1; rules: (AlertRuleInput & { templateKey: string | null })[] }
 export interface AlertImportRow { index: number; name: string; status: 'create' | 'update' | 'skip' | 'error'; error: string | null; targetId: string | null; version: number | null }

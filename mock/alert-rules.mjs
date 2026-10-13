@@ -64,6 +64,45 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
     const items = (await client.query('SELECT * FROM alert_rules ORDER BY template_key NULLS LAST,name')).rows;
     return { status: 200, data: { items } };
   }
+  if (pathname === '/api/alerts/rules/preview' && method === 'POST') {
+    const value = validateRule(await readBody());
+    if (value.error) return { status: 400, data: { error: value.error } };
+    if (value.scopeType === 'model' && value.scopeId !== '*'
+      && !(await client.query('SELECT 1 FROM experiment_models WHERE id=$1', [value.scopeId])).rowCount) return { status: 400, data: { error: '模型不存在' } };
+    const lower = new Date(Date.now() - 7 * 24 * 60 * 60_000);
+    let cursorScope = null, cursorAt = null, sampleCount = 0, firstSampleAt = null, lastSampleAt = null;
+    let triggers = 0, firstTriggerAt = null;
+    const days = new Map(), states = new Map();
+    while (true) {
+      const rows = (await client.query(`SELECT scope_id,sampled_at,value FROM alert_metric_samples
+        WHERE metric=$1 AND scope_type=$2 AND ($3='*' OR scope_id=$3) AND sampled_at >= $4
+          AND ($5::text IS NULL OR (scope_id,sampled_at)>($5,$6::timestamptz))
+        ORDER BY scope_id,sampled_at LIMIT 5000`,
+      [value.metric,value.scopeType,value.scopeId,lower,cursorScope,cursorAt])).rows;
+      for (const row of rows) {
+        const at = new Date(row.sampled_at).getTime();
+        const prior = states.get(row.scope_id);
+        const breached = breaches(Number(row.value),value.operator,value.threshold);
+        const firstAt = breached ? prior?.firstAt !== null && prior?.firstAt !== undefined && at-prior.lastAt <= 120_000 ? prior.firstAt : at : null;
+        let active = Boolean(breached && prior?.active && at-prior.lastAt <= 120_000);
+        if (breached && !active && at-firstAt >= value.durationSeconds * 1000) {
+          active = true; triggers++;
+          if (!firstTriggerAt || at < new Date(firstTriggerAt).getTime()) firstTriggerAt = row.sampled_at;
+          const day = shanghaiDay(row.sampled_at);
+          days.set(day,(days.get(day)||0)+1);
+        }
+        states.set(row.scope_id,{ firstAt, lastAt: at, active });
+        sampleCount++;
+        if (!firstSampleAt || at < new Date(firstSampleAt).getTime()) firstSampleAt = row.sampled_at;
+        if (!lastSampleAt || at > new Date(lastSampleAt).getTime()) lastSampleAt = row.sampled_at;
+      }
+      if (rows.length < 5000) break;
+      cursorScope = rows.at(-1).scope_id; cursorAt = rows.at(-1).sampled_at;
+    }
+    return { status: 200, data: { triggers, firstTriggerAt, sampleCount, firstSampleAt, lastSampleAt,
+      byDay: [...days].sort(([left],[right]) => left.localeCompare(right)).map(([day,count]) => ({ day,count })),
+      historyComplete: Boolean(firstSampleAt && new Date(firstSampleAt).getTime() <= lower.getTime() + 120_000) } };
+  }
   if (pathname === '/api/alerts/rules/import/preview' && method === 'POST') {
     const prepared = await prepareImport(client, await readBody());
     if (prepared.error) return { status: 400, data: { error: prepared.error } };
@@ -166,6 +205,12 @@ function breaches(value, operator, threshold) {
   return value <= threshold;
 }
 
+function shanghaiDay(value) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+    .formatToParts(value).map(part => [part.type,part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
 async function notifyIncident(client, rule, incident, value) {
   if (rule.level === 'info' || !rule.channels.length) return;
   const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
@@ -201,7 +246,11 @@ export async function evaluateAlertRules(pool, now = new Date()) {
           VALUES($1,$2,$3,$4) ON CONFLICT(rule_id,scope_id) DO UPDATE
           SET first_breached_at=EXCLUDED.first_breached_at,last_sample_at=EXCLUDED.last_sample_at`,
         [rule.id,sample.scope_id,first,sample.sampled_at]);
-        const active = (await client.query("SELECT id FROM alert_incidents WHERE rule_id=$1 AND scope_id=$2 AND status IN ('firing','acknowledged') FOR UPDATE", [rule.id,sample.scope_id])).rows[0];
+        let active = (await client.query("SELECT id FROM alert_incidents WHERE rule_id=$1 AND scope_id=$2 AND status IN ('firing','acknowledged') FOR UPDATE", [rule.id,sample.scope_id])).rows[0];
+        if (active && !priorRecent) {
+          await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=$2,resolution_note='采样中断，重新计时' WHERE id=$1", [active.id,sample.sampled_at]);
+          active = null;
+        }
         if (!breached) {
           if (active) await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=$2,resolution_note='指标恢复正常' WHERE id=$1", [active.id,sample.sampled_at]);
           continue;
