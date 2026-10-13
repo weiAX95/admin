@@ -141,6 +141,8 @@ export default function RadarChart({ categories }: RadarChartProps) {
     >
       <svg
         viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
+        role="img"
+        aria-label={`任务分类完成率雷达图：${dimensionData.map((d) => `${d.category} ${d.doneCount}/${d.count}，完成率 ${Math.round(d.completionRate * 100)}%`).join('；')}`}
         style={{
           display: "block",
           width: "100%",
@@ -304,7 +306,9 @@ export default function RadarChart({ categories }: RadarChartProps) {
             content={popoverContent}
             overlayStyle={{ maxWidth: 340 }}
           >
-            <div
+            <button
+              type="button"
+              aria-label={`查看${dim}任务详情：已完成 ${d.doneCount}/${d.count}，完成率 ${pct}%`}
               style={{
                 position: "absolute",
                 left: `${leftPct}%`,
@@ -314,6 +318,10 @@ export default function RadarChart({ categories }: RadarChartProps) {
                 textAlign: "center",
                 userSelect: "none",
                 padding: "4px 8px",
+                border: 0,
+                borderRadius: token.borderRadius,
+                background: "transparent",
+                font: "inherit",
               }}
             >
               <div
@@ -346,7 +354,7 @@ export default function RadarChart({ categories }: RadarChartProps) {
                   {d.doneCount}/{d.count}
                 </div>
               )}
-            </div>
+            </button>
           </Popover>
         );
       })}

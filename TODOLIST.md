@@ -863,7 +863,7 @@
   - [ ] AC：新增文本后更新翻译文件
 - [ ] **13.4 无障碍（a11y）**
   - [ ] 所有交互元素：keyboard accessible（Tab/Enter/Esc）
-  - [ ] 图表：`role="img"` + `aria-label` 描述图表内容
+  - [ ] 图表：`role="img"` + `aria-label` 描述图表内容（主要图表已补语义；雷达图详情入口已改为键盘可操作按钮，知识图谱提供键盘查找入口；读屏验收待完成）
   - [ ] 表单：label 关联 input、error 关联 aria-describedby
   - [ ] 色彩对比度：WCAG AA 标准（文字 4.5:1、图形 3:1）
   - [ ] AC：键盘可完成所有核心操作流程

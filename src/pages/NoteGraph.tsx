@@ -115,7 +115,7 @@ export default function NoteGraph() {
   return <Card title="知识图谱" extra={<Link to="/notes">返回笔记列表</Link>}>
     <Space wrap><Tag color="purple">□ 笔记／引用</Tag><Tag color="green">○ 任务／关联</Tag><Tag color="blue">◇ 会话／来源</Tag><Tag color="red">红色虚线：目标缺失</Tag><Typography.Text type="secondary">节点大小反映被引用／关联次数；拖动节点或画布，滚轮缩放。</Typography.Text></Space>
     {graph.nodes.length === 0 ? <Empty description="暂无知识节点" /> : <>
-      <div className="knowledge-graph-wrap"><canvas ref={canvasRef} className="knowledge-graph-canvas" aria-label="知识图谱：笔记、任务和会话节点" />{hover && <div className="knowledge-graph-tooltip" style={{ left: hover.x, top: hover.y }}><strong>{labels[hover.node.type]} · {hover.node.title}</strong><p>{hover.node.summary || "暂无摘要"}</p><small>{hover.node.referenceCount} 条引用或关联{hover.node.missing ? " · 目标不存在" : ""}</small></div>}</div>
+      <div className="knowledge-graph-wrap"><canvas ref={canvasRef} className="knowledge-graph-canvas" role="img" aria-label={`知识图谱：${graph.nodes.length} 个笔记、任务或会话节点，${graph.edges.length} 条关系。下方可通过键盘查找节点并跳转。`} />{hover && <div className="knowledge-graph-tooltip" style={{ left: hover.x, top: hover.y }}><strong>{labels[hover.node.type]} · {hover.node.title}</strong><p>{hover.node.summary || "暂无摘要"}</p><small>{hover.node.referenceCount} 条引用或关联{hover.node.missing ? " · 目标不存在" : ""}</small></div>}</div>
       <Select showSearch aria-label="查找知识节点" placeholder="查找节点并跳转（键盘可用）" style={{ width: "min(420px, 100%)", marginTop: 12 }} value={undefined} options={graph.nodes.filter(node => !node.missing).map(node => ({ value: node.id, label: `${labels[node.type]} · ${node.title}` }))} onChange={id => { const node = graph.nodes.find(item => item.id === id); if (node) navigate(route(node)); }} />
     </>}
   </Card>;
