@@ -15,7 +15,7 @@ const metrics = [
 const metricOptions = metrics.map(([value,label]) => ({ value, label }));
 const metricLabel = (name: string) => metrics.find(([value]) => value === name)?.[1] || name;
 const levelColor = { info: 'blue', warning: 'orange', critical: 'red' };
-const eventLabel = { opened: '触发', escalated: '升级', acknowledged: '确认', assigned: '指派', note: '备注', resolved: '解决' };
+const eventLabel = { opened: '触发', escalated: '升级', acknowledged: '确认', assigned: '指派', note: '备注', resolved: '解决', reminded: '重复提醒' };
 
 export default function Alerts() {
   const { message, modal } = App.useApp();
@@ -56,11 +56,11 @@ export default function Alerts() {
   useEffect(() => { void refreshSamples(metric); }, [metric, refreshSamples]);
   const openCreate = () => {
     setEditing('new');
-    form.setFieldsValue({ name: '', metric: 'model_5xx_rate', scopeId: '*', operator: '>', threshold: 5, durationSeconds: 0, level: 'warning', channels: ['in_app'], enabled: false });
+    form.setFieldsValue({ name: '', metric: 'model_5xx_rate', scopeId: '*', operator: '>', threshold: 5, durationSeconds: 0, repeatMinutes: 30, level: 'warning', channels: ['in_app'], enabled: false });
   };
   const openEdit = (rule: AlertRule) => {
     setEditing(rule);
-    form.setFieldsValue({ name: rule.name, metric: rule.metric, scopeId: rule.scope_id, operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, level: rule.level, channels: rule.channels, enabled: rule.enabled });
+    form.setFieldsValue({ name: rule.name, metric: rule.metric, scopeId: rule.scope_id, operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes, level: rule.level, channels: rule.channels, enabled: rule.enabled });
   };
   const save = async (input: AlertRuleInput) => {
     setBusy(true);
@@ -114,7 +114,7 @@ export default function Alerts() {
     const selected = rules.filter(rule => selectedIds.includes(rule.id));
     const content: AlertRuleArchive = { schemaVersion: 1, rules: selected.map(rule => ({
       templateKey: rule.template_key, name: rule.name, metric: rule.metric, scopeId: rule.scope_id,
-      operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds,
+      operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes,
       level: rule.level, channels: rule.channels, enabled: rule.enabled,
     })) };
     const url = URL.createObjectURL(new Blob([JSON.stringify(content, null, 2)], { type: 'application/json' }));
@@ -160,7 +160,7 @@ export default function Alerts() {
       { key: 'rules', label: `规则 ${rules.length}`, children: <Table<AlertRule> rowKey="id" dataSource={rules} rowSelection={{ selectedRowKeys: selectedIds, onChange: setSelectedIds }} pagination={{ pageSize: 10 }} locale={{ emptyText: <Empty description="暂无规则"><Button onClick={openCreate}>创建规则</Button></Empty> }} columns={[
         { title: '名称', dataIndex: 'name', render: (name: string, rule) => <Space><strong>{name}</strong>{rule.template_key && <Tag>内置</Tag>}</Space> },
         { title: '指标', dataIndex: 'metric', render: metricLabel },
-        { title: '条件', render: (_, rule) => `${rule.operator} ${rule.threshold}，持续 ${rule.duration_seconds} 秒` },
+        { title: '条件', render: (_, rule) => `${rule.operator} ${rule.threshold}，持续 ${rule.duration_seconds} 秒；每 ${rule.repeat_minutes} 分钟提醒` },
         { title: '范围', render: (_, rule) => rule.scope_type === 'global' ? '全局' : rule.scope_id === '*' ? '所有模型' : models.find(model => model.id === rule.scope_id)?.displayName || rule.scope_id },
         { title: '级别', dataIndex: 'level', render: (level: AlertRule['level']) => <Tag color={levelColor[level]}>{level}</Tag> },
         { title: '启用', render: (_, rule) => <Switch aria-label={`启用 ${rule.name}`} checked={rule.enabled} loading={busyId === rule.id} onChange={enabled => void toggle(rule, enabled)} /> },
@@ -186,6 +186,7 @@ export default function Alerts() {
         <Form.Item name="metric" label="指标" rules={[{ required: true }]}><Select options={metricOptions} onChange={() => form.setFieldValue('scopeId', '*')} /></Form.Item>
         {selectedMetric?.startsWith('model_') && <Form.Item name="scopeId" label="模型范围"><Select options={[{ value: '*', label: '所有模型' }, ...models.map(model => ({ value: model.id, label: model.displayName }))]} /></Form.Item>}
         <Space align="start"><Form.Item name="operator" label="比较符"><Select style={{ width: 90 }} options={['>','<','=','>=','<='].map(value => ({ value, label: value }))} /></Form.Item><Form.Item name="threshold" label="阈值" rules={[{ required: true }]}><InputNumber style={{ width: 150 }} /></Form.Item><Form.Item name="durationSeconds" label="持续秒数"><InputNumber min={0} max={86400} precision={0} style={{ width: 150 }} /></Form.Item></Space>
+        <Form.Item name="repeatMinutes" label="未确认时重复提醒间隔（分钟）"><InputNumber min={1} max={1440} precision={0} style={{ width: 150 }} /></Form.Item>
         <Form.Item name="level" label="级别"><Select options={[{value:'info',label:'Info · 仅记录'},{value:'warning',label:'Warning · 通知管理员'},{value:'critical',label:'Critical · 高优先级'}]} /></Form.Item>
         <Form.Item name="channels" label="通知渠道"><Select mode="multiple" options={[{value:'in_app',label:'站内通知'},{value:'email',label:'账号已启用的邮件'}]} /></Form.Item>
         <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>

@@ -4,7 +4,7 @@ export interface AlertRule {
   id: string; name: string; template_key: string | null; metric: string;
   scope_type: 'global' | 'model'; scope_id: string;
   operator: '>' | '<' | '=' | '>=' | '<='; threshold: number;
-  duration_seconds: number; level: 'info' | 'warning' | 'critical';
+  duration_seconds: number; repeat_minutes: number; level: 'info' | 'warning' | 'critical';
   channels: string[]; enabled: boolean; version: number; updated_at: string;
 }
 export interface AlertIncident {
@@ -16,7 +16,7 @@ export interface AlertIncident {
 }
 export interface AlertIncidentEvent {
   id: string; incident_id: string; actor_id: string | null; actor_name: string | null;
-  event_type: 'opened' | 'escalated' | 'acknowledged' | 'assigned' | 'note' | 'resolved';
+  event_type: 'opened' | 'escalated' | 'acknowledged' | 'assigned' | 'note' | 'resolved' | 'reminded';
   detail: string | null; occurred_at: string;
 }
 export interface AlertAssignee { id: string; name: string; username: string; status: string }
@@ -26,7 +26,7 @@ export interface AlertMetricSample {
 }
 export interface AlertRuleInput {
   name: string; metric: string; scopeId: string; operator: AlertRule['operator'];
-  threshold: number; durationSeconds: number; level: AlertRule['level'];
+  threshold: number; durationSeconds: number; repeatMinutes: number; level: AlertRule['level'];
   channels: string[]; enabled: boolean;
 }
 

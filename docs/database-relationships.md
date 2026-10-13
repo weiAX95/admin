@@ -121,6 +121,8 @@ flowchart LR
   Incidents -. "entity_id，无 FK" .-> Notifications[(app_notifications)]
 ```
 
+[086_alert_repeat_notifications.sql](../db/migrations/086_alert_repeat_notifications.sql) 给规则增加 `repeat_minutes`（默认 30，允许 1–1440 分钟），给事件增加最近提醒时间，并把 `reminded` 纳入时间线。只有仍处于 firing 的 Warning／Critical 会重复提醒；确认或解决即停止。升级通知也重置重复提醒计时，避免同一分钟重复发送。
+
 规则导出是版本 1 的 JSON 快照，只包含选中规则的配置和内置模板键，不包含事件、通知或账号信息。导入先预览每条规则将新增、跳过、覆盖或被拒绝；管理员选择同名处理方式后确认。后端在同一事务中复核模型引用、名称冲突和预览时的目标版本，任何无效行或并发变化都拒绝整批写入。覆盖内置规则按固定模板键匹配，不生成同名副本；历史事件继续保留。
 
 规则保存前的预览只读 `alert_metric_samples` 最近 7 天样本，用与实际引擎相同的比较符、持续时间和两分钟采样间隙规则计算预期触发。返回样本覆盖范围、触发次数、首次触发时间及上海日历日分布；缺少完整 7 天历史时明确标记。预览不创建事件或通知，也不推断尚未采集的历史值。
@@ -155,7 +157,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [085_alert_disposition.sql](../db/migrations/085_alert_disposition.sql)。当前共 **129 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [086_alert_repeat_notifications.sql](../db/migrations/086_alert_repeat_notifications.sql)。当前共 **129 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
