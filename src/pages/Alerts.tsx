@@ -298,7 +298,7 @@ export default function Alerts() {
         <Form.Item name="repeatMinutes" label="未确认时重复提醒间隔（分钟）"><InputNumber min={1} max={1440} precision={0} style={{ width: 150 }} /></Form.Item>
         <Form.Item name="aggregateMinutes" label="再次触发聚合窗口（分钟）"><InputNumber min={1} max={1440} precision={0} style={{ width: 150 }} /></Form.Item>
         <Form.Item name="level" label="级别"><Select options={[{value:'info',label:'Info · 仅记录'},{value:'warning',label:'Warning · 通知管理员'},{value:'critical',label:'Critical · 高优先级'}]} /></Form.Item>
-        <Form.Item name="channels" label="通知渠道"><Select mode="multiple" options={[{value:'in_app',label:'站内通知'},{value:'email',label:'账号已启用的邮件'},{value:'webhook',label:'已配置的出站 Webhook'}]} onChange={channels => { if (!channels.includes('webhook')) form.setFieldValue('webhookIds',[]); }} /></Form.Item>
+        <Form.Item name="channels" label="通知渠道" extra="Critical 始终通知站内，并向已启用邮箱的管理员发送邮件；所选 Webhook 另行投递。"><Select mode="multiple" options={[{value:'in_app',label:'站内通知'},{value:'email',label:'账号已启用的邮件'},{value:'webhook',label:'已配置的出站 Webhook'}]} onChange={channels => { if (!channels.includes('webhook')) form.setFieldValue('webhookIds',[]); }} /></Form.Item>
         {selectedChannels?.includes('webhook') && <Form.Item name="webhookIds" label="选择告警 Webhook（可多选）" rules={[{required:true,message:'请至少选择一个告警 Webhook'}]}><Select mode="multiple" options={webhooks.filter(hook => hook.event === 'alert.firing' && !hook.deletedAt).map(hook => ({value:hook.id,label:`${hook.url}${hook.enabled?'':'（已停用）'}`}))} /></Form.Item>}
         <Form.Item name="tags" label="规则标签（用于静默）"><Select mode="tags" maxCount={20} placeholder="输入标签后回车" /></Form.Item>
         <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>

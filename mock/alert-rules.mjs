@@ -442,12 +442,12 @@ async function enqueueAlertWebhooks(client, rule, incident, kind, occurredAt) {
 }
 
 async function notifyIncident(client, rule, incident, value) {
-  if (rule.level === 'info' || !rule.channels.length) return;
+  if (rule.level === 'info') return;
   if (await isSilenced(client,rule,incident.opened_at)) return;
   const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
   for (const admin of admins) {
-    const email = rule.channels.includes('email') && admin.review_email_enabled ? admin.review_email : null;
-    const inApp = rule.channels.includes('in_app');
+    const email = (rule.level === 'critical' || rule.channels.includes('email')) && admin.review_email_enabled ? admin.review_email : null;
+    const inApp = rule.level === 'critical' || rule.channels.includes('in_app');
     if (!inApp && !email) continue;
     await client.query(`INSERT INTO app_notifications
       (id,user_id,kind,entity_id,title,body,target_url,email_to,email_status,email_next_attempt_at,show_in_app)
@@ -479,8 +479,8 @@ async function notifyReminder(client, incident) {
   const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
   const reminderKey = `${incident.id}:reminder:${new Date(incident.last_reminded_at).getTime()}`;
   for (const admin of admins) {
-    const email = incident.channels.includes('email') && admin.review_email_enabled ? admin.review_email : null;
-    const inApp = incident.channels.includes('in_app');
+    const email = (incident.level === 'critical' || incident.channels.includes('email')) && admin.review_email_enabled ? admin.review_email : null;
+    const inApp = incident.level === 'critical' || incident.channels.includes('in_app');
     if (!inApp && !email) continue;
     await client.query(`INSERT INTO app_notifications
       (id,user_id,kind,entity_id,title,body,target_url,email_to,email_status,email_next_attempt_at,show_in_app)
