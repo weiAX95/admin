@@ -26,6 +26,7 @@ import {
 } from "../api/accounts";
 import { getStoredUser } from "../api/client";
 import type { Account, AccountPayload, AuthUser } from "../types";
+import AccountInvitations from "../components/AccountInvitations";
 
 const ROLE_OPTIONS = [
   { value: "admin", label: "管理员" },
@@ -34,6 +35,12 @@ const ROLE_OPTIONS = [
 const STATUS_OPTIONS = [
   { value: "active", label: "启用" },
   { value: "disabled", label: "禁用" },
+  { value: "pending", label: "待激活", disabled: true },
+];
+const ACTIVATION_OPTIONS = [
+  { value: "immediate", label: "立即激活" },
+  { value: "first_login", label: "首次登录后激活" },
+  { value: "manual", label: "管理员手动激活" },
 ];
 const meetsPasswordPolicy = (value: string) => value.length >= 8 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value);
 const passwordRule = { validator: async (_: unknown, value: string) => {
@@ -64,6 +71,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         name: initial.name,
         role: initial.role,
         status: initial.status,
+        activationMode: initial.activationMode || "immediate",
         password: "",
       });
     } else {
@@ -72,6 +80,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         name: "",
         role: "member",
         status: "active",
+        activationMode: "immediate",
         password: "",
       });
     }
@@ -140,6 +149,9 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         <Form.Item name="role" label="角色">
           <Select options={ROLE_OPTIONS} />
         </Form.Item>
+        {!initial && <Form.Item name="activationMode" label="激活方式" extra="首次登录或手动激活时，账号会先处于待激活状态。">
+          <Select options={ACTIVATION_OPTIONS} />
+        </Form.Item>}
         <Form.Item name="status" label="状态">
           <Select options={STATUS_OPTIONS} />
         </Form.Item>
@@ -229,7 +241,7 @@ export default function Accounts() {
       key: "status",
       width: 100,
       render: (v: Account["status"], account) =>
-        account.deletedAt ? <Tag color="default">回收站</Tag> : v === "active" ? (
+        account.deletedAt ? <Tag color="default">回收站</Tag> : v === "pending" ? <Tag color="processing">待激活</Tag> : v === "active" ? (
           <Tag color="success">启用</Tag>
         ) : (
           <Tag color="default">禁用</Tag>
@@ -268,7 +280,7 @@ export default function Accounts() {
               disabled={isSelf}
               onClick={() => void toggleStatus(a)}
             >
-              {a.status === "active" ? "禁用" : "启用"}
+              {a.status === "pending" ? "激活" : a.status === "active" ? "禁用" : "启用"}
             </Button>
             <Popconfirm
               title="将该账号移入回收站？"
@@ -301,6 +313,7 @@ export default function Accounts() {
           新建账号
         </Button>
         <Button type={showDeleted ? 'primary' : 'default'} onClick={() => setShowDeleted(value => !value)}>{showDeleted ? '返回账号列表' : '查看回收站'}</Button>
+        <AccountInvitations />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           仅管理员可管理账号；不能禁用或删除当前登录账号。
         </Typography.Text>

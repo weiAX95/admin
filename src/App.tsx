@@ -35,6 +35,7 @@ const Prompts = lazy(() => import("./pages/Prompts"));
 const PromptDetail = lazy(() => import("./pages/PromptDetail"));
 const Accounts = lazy(() => import("./pages/Accounts"));
 const Login = lazy(() => import("./pages/Login"));
+const Register = lazy(() => import("./pages/Register"));
 const ChangePassword = lazy(() => import("./pages/ChangePassword"));
 const Settings = lazy(() => import("./pages/Settings"));
 const ModelCosts = lazy(() => import("./pages/ModelCosts"));
@@ -55,6 +56,7 @@ export default function App() {
           <Suspense fallback={<div className="route-loading" role="status"><Spin size="large" tip="页面加载中…"><span className="route-loading-space" /></Spin></div>}>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
             <Route path="/change-password" element={<ChangePassword />} />
             <Route path="/share/experiments/:token" element={<SharedExperiment />} />
             <Route path="/share/evaluation-reports/:token" element={<SharedEvaluationReport />} />

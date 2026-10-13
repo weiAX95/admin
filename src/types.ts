@@ -340,7 +340,8 @@ export interface StatsQuery {
 /* ------------------------------ 鉴权 / 账号 ------------------------------ */
 
 export type AccountRole = "admin" | "member";
-export type AccountStatus = "active" | "disabled";
+export type AccountStatus = "active" | "disabled" | "pending";
+export type ActivationMode = "immediate" | "first_login" | "manual";
 
 /** 一个后台账号（对外不含密码） */
 export interface Account {
@@ -349,6 +350,8 @@ export interface Account {
   name: string;
   role: AccountRole;
   status: AccountStatus;
+  activationMode?: ActivationMode;
+  activatedAt?: string | null;
   deletedAt?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -356,7 +359,7 @@ export interface Account {
 
 /** 创建/更新账号入参；password 编辑时留空表示不修改 */
 export type AccountPayload = Partial<
-  Omit<Account, "id" | "createdAt" | "updatedAt" | "deletedAt">
+  Omit<Account, "id" | "createdAt" | "updatedAt" | "deletedAt" | "activatedAt">
 > & { password?: string };
 
 export interface AuthUser {

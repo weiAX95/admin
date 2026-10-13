@@ -297,6 +297,7 @@ async function revokeUserSessions(userId) {
 const publicUser = (u) => ({
   id: u.id, username: u.username, name: u.name,
   role: u.role, status: u.status,
+  activationMode: u.activationMode || "immediate", activatedAt: u.activatedAt || null,
   deletedAt: u.deletedAt || null,
   createdAt: u.createdAt, updatedAt: u.updatedAt,
 });
@@ -312,6 +313,7 @@ function sendImmediate(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type,Authorization",
@@ -535,6 +537,41 @@ async function handleRequest(req, res) {
     if (publicEvaluationReport) return send(res, publicEvaluationReport.status, publicEvaluationReport.data);
     const publicSettings = await handleSystemSettings({ pathname, method, client: activeClient, me: null });
     if (publicSettings) return send(res, publicSettings.status, publicSettings.data);
+    if (method === "POST" && pathname === "/api/auth/invitations/preview") {
+      const body = await readProjectBody(req);
+      const token = String(body.token || "");
+      if (!/^[a-f0-9-]{36}$/i.test(token)) return send(res, 404, { error: "邀请链接无效" });
+      const invitation = (await activeClient.query("SELECT username,display_name,role,activation_mode,expires_at,consumed_at,revoked_at FROM account_invitations WHERE token_hash=$1", [sha256(token)])).rows[0];
+      if (!invitation) return send(res, 404, { error: "邀请链接无效" });
+      if (invitation.consumed_at || invitation.revoked_at || new Date(invitation.expires_at).getTime() <= Date.now()) return send(res, 410, { error: "邀请已使用、撤销或过期" });
+      return send(res, 200, { username: invitation.username, name: invitation.display_name || invitation.username, role: invitation.role, activationMode: invitation.activation_mode, expiresAt: invitation.expires_at });
+    }
+    if (method === "POST" && pathname === "/api/auth/register") {
+      const body = await readProjectBody(req);
+      const token = String(body.token || "");
+      if (!/^[a-f0-9-]{36}$/i.test(token)) return send(res, 404, { error: "邀请链接无效" });
+      const invitation = (await activeClient.query("SELECT * FROM account_invitations WHERE token_hash=$1 FOR UPDATE", [sha256(token)])).rows[0];
+      if (!invitation) return send(res, 404, { error: "邀请链接无效" });
+      if (invitation.consumed_at || invitation.revoked_at || new Date(invitation.expires_at).getTime() <= Date.now()) return send(res, 410, { error: "邀请已使用、撤销或过期" });
+      if (db.users.some(user => user.username === invitation.username)) return send(res, 409, { error: "用户名已被占用，请联系管理员" });
+      const passwordError = passwordPolicyError(body.password);
+      if (passwordError) return send(res, 400, { error: passwordError });
+      const timestamp = nowIso();
+      const account = { id: newId(), username: invitation.username, passwordHash: hashPassword(body.password),
+        name: String(body.name || invitation.display_name || invitation.username).trim().slice(0, 30) || invitation.username,
+        role: invitation.role, activationMode: invitation.activation_mode,
+        status: invitation.activation_mode === "immediate" ? "active" : "pending",
+        activatedAt: invitation.activation_mode === "immediate" ? timestamp : null,
+        createdAt: timestamp, updatedAt: timestamp };
+      db.users.push(account);
+      saveDb(db);
+      afterSave(async client => {
+        await client.query("INSERT INTO password_history(user_id,password_hash) VALUES($1,$2)", [account.id, account.passwordHash]);
+        await initializeUserReviews(client, account.id);
+        await client.query("UPDATE account_invitations SET consumed_at=now(),consumed_user_id=$1 WHERE id=$2", [account.id, invitation.id]);
+      });
+      return send(res, 201, { username: account.username, status: account.status, activationMode: account.activationMode });
+    }
     // ---- 登录（免鉴权）----
     if (method === "POST" && pathname === "/api/auth/login") {
       const body = await readBody(req);
@@ -546,7 +583,7 @@ async function handleRequest(req, res) {
         }
       }
       if (!account || !verifyPassword(body.password, account.passwordHash)) {
-        if (account?.status === "active") {
+        if (account && ["active", "pending"].includes(account.status)) {
           const failure = (await activeClient.query(`INSERT INTO login_security_state(user_id,failed_attempts,updated_at)
             VALUES($1,1,now()) ON CONFLICT(user_id) DO UPDATE SET
             failed_attempts=CASE WHEN login_security_state.locked_until IS NOT NULL AND login_security_state.locked_until<=now() THEN 1 ELSE login_security_state.failed_attempts+1 END,
@@ -561,8 +598,14 @@ async function handleRequest(req, res) {
         }
         return send(res, 401, { error: "用户名或密码错误" });
       }
+      if (account.status === "pending" && account.activationMode === "first_login") {
+        account.status = "active";
+        account.activatedAt = nowIso();
+        account.updatedAt = account.activatedAt;
+        saveDb(db);
+      }
       if (account.status !== "active") {
-        return send(res, 403, { error: "账号已被禁用，请联系管理员" });
+        return send(res, 403, { error: account.status === "pending" ? "账号等待管理员激活" : "账号已停用，请联系管理员" });
       }
       await activeClient.query("DELETE FROM login_security_state WHERE user_id=$1", [account.id]);
       const passwordChangedAt = (await activeClient.query("SELECT changed_at FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 1", [account.id])).rows[0]?.changed_at;
@@ -824,6 +867,42 @@ async function handleRequest(req, res) {
       return send(res, 200, computeStats(windowTasks, { start, end, source: accountData, allTasks }));
     }
 
+    // ---- 一次性账号邀请（仅管理员）----
+    if (pathname === "/api/users/invitations" || /^\/api\/users\/invitations\/[^/]+\/revoke$/.test(pathname)) {
+      if (me.role !== "admin") return send(res, 403, { error: "需要管理员权限" });
+      if (pathname === "/api/users/invitations" && method === "GET") {
+        const items = (await activeClient.query(`SELECT id,username,display_name,role,activation_mode,created_at,expires_at,consumed_at,revoked_at
+          FROM account_invitations ORDER BY created_at DESC LIMIT 100`)).rows;
+        return send(res, 200, { items: items.map(item => ({ id: item.id, username: item.username, name: item.display_name,
+          role: item.role, activationMode: item.activation_mode, createdAt: item.created_at, expiresAt: item.expires_at,
+          consumedAt: item.consumed_at, revokedAt: item.revoked_at })) });
+      }
+      if (pathname === "/api/users/invitations" && method === "POST") {
+        const body = await readProjectBody(req);
+        const username = String(body.username || "").trim();
+        const name = String(body.name || "").trim().slice(0, 30);
+        const role = body.role === "admin" ? "admin" : "member";
+        const activationMode = ["immediate", "first_login", "manual"].includes(body.activationMode) ? body.activationMode : "first_login";
+        const expiresInHours = Number(body.expiresInHours ?? 24);
+        if (!username || username.length > 30) return send(res, 400, { error: "用户名长度需为 1–30 个字符" });
+        if (!Number.isInteger(expiresInHours) || expiresInHours < 1 || expiresInHours > 168) return send(res, 400, { error: "邀请有效期需为 1–168 小时" });
+        if (db.users.some(user => user.username === username)) return send(res, 409, { error: "用户名已存在" });
+        const token = crypto.randomUUID();
+        const id = newId();
+        await activeClient.query("UPDATE account_invitations SET revoked_at=now() WHERE username=$1 AND consumed_at IS NULL AND revoked_at IS NULL", [username]);
+        const created = (await activeClient.query(`INSERT INTO account_invitations(id,token_hash,username,display_name,role,activation_mode,created_by,expires_at)
+          VALUES($1,$2,$3,$4,$5,$6,$7,now()+($8 * interval '1 hour')) RETURNING expires_at`, [id, sha256(token), username, name || null, role, activationMode, me.id, expiresInHours])).rows[0];
+        return send(res, 201, { id, token, username, role, activationMode, expiresAt: created.expires_at });
+      }
+      const revoke = pathname.match(/^\/api\/users\/invitations\/([^/]+)\/revoke$/);
+      if (revoke && method === "POST") {
+        const result = await activeClient.query("UPDATE account_invitations SET revoked_at=now() WHERE id=$1 AND consumed_at IS NULL AND revoked_at IS NULL RETURNING id", [revoke[1]]);
+        if (!result.rowCount) return send(res, 404, { error: "可撤销的邀请不存在" });
+        return send(res, 200, { revoked: true, id: revoke[1] });
+      }
+      return send(res, 405, { error: "method not allowed" });
+    }
+
     // ---- 账号管理（仅管理员）----
     const isUsersPath =
       pathname === "/api/users" || /^\/api\/users\/[^/]+(?:\/restore)?$/.test(pathname);
@@ -852,11 +931,14 @@ async function handleRequest(req, res) {
             return send(res, 409, { error: "用户名已存在" });
           }
           const t = nowIso();
+          const activationMode = ["immediate", "first_login", "manual"].includes(body.activationMode) ? body.activationMode : "immediate";
           const account = {
             id: newId(), username: uname, passwordHash: hashPassword(pwd),
             name: String(body.name || "").trim() || uname,
             role: body.role === "admin" ? "admin" : "member",
-            status: body.status === "disabled" ? "disabled" : "active",
+            activationMode,
+            status: body.status === "disabled" ? "disabled" : activationMode === "immediate" ? "active" : "pending",
+            activatedAt: body.status === "disabled" || activationMode !== "immediate" ? null : t,
             createdAt: t, updatedAt: t,
           };
           db.users.push(account);
@@ -911,6 +993,7 @@ async function handleRequest(req, res) {
             return send(res, 400, { error: "不能禁用当前登录账号" });
           }
           target.status = body.status;
+          if (body.status === "active" && !target.activatedAt) target.activatedAt = nowIso();
           // 禁用后失效其现有 token
           if (body.status === "disabled") {
             await revokeUserSessions(target.id);
