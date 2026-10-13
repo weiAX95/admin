@@ -4,6 +4,8 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { lazy, Suspense } from "react";
 import AdminLayout from "./layouts/AdminLayout";
 import RequireAuth from "./components/RequireAuth";
+import ErrorBoundary from "./components/ErrorBoundary";
+import OfflineBanner from "./components/OfflineBanner";
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Tasks = lazy(() => import("./pages/Tasks"));
 const TaskDetail = lazy(() => import("./pages/TaskDetail"));
@@ -39,9 +41,11 @@ const ProjectAnalysis = lazy(() => import("./pages/ProjectAnalysis"));
 
 export default function App() {
   return (
+    <ErrorBoundary>
     <SettingsProvider>
       <AntApp>
         <BrowserRouter>
+          <OfflineBanner />
           <Suspense fallback={<div className="route-loading" role="status"><Spin size="large" tip="页面加载中…"><span className="route-loading-space" /></Spin></div>}>
           <Routes>
             <Route path="/login" element={<Login />} />
@@ -86,5 +90,6 @@ export default function App() {
         </BrowserRouter>
       </AntApp>
     </SettingsProvider>
+    </ErrorBoundary>
   );
 }

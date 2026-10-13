@@ -182,6 +182,13 @@ body { min-width: 320px; -webkit-font-smoothing: antialiased; }
 .content-inner { width: 100%; max-width: 1600px; margin: 0 auto; }
 .route-loading { display: flex; align-items: center; justify-content: center; gap: 14px; min-height: 180px; color: var(--muted); font-size: 13px; }
 .route-loading-space { display: block; min-width: 180px; min-height: 24px; }
+.render-error { max-width: 560px; margin: 48px auto; padding: 28px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-card); color: var(--text-strong); text-align: center; }
+.render-error strong { font-size: 18px; }
+.render-error p { color: var(--muted); line-height: 1.7; }
+.render-error > div { display: flex; justify-content: center; gap: 10px; }
+.render-error button { border: 1px solid var(--line); border-radius: 7px; padding: 8px 16px; background: var(--panel-muted); color: var(--text-strong); cursor: pointer; }
+.render-error button:hover { border-color: var(--accent); }
+.offline-banner { position: sticky; top: 0; z-index: 110; width: 100%; padding: 10px 16px; border-bottom: 1px solid #d8a044; background: #fff3cd; color: #6b4700; text-align: center; font-size: 13px; }
 .page-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 28px; }
 .page-eyebrow { color: #a597dd; font-size: 10px; font-weight: 600; letter-spacing: 1.8px; }
 .page-heading h2.ant-typography { margin: 10px 0 8px; font-size: 28px; font-weight: 650; letter-spacing: -.5px; }

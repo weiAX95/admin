@@ -875,11 +875,11 @@
   - [ ] Bundle 分析（rollup-plugin-visualizer）+ Tree shaking
   - [ ] AC：首屏加载 < 2s（3G 网络）；列表渲染 1000 行 FPS > 30
 - [ ] **13.6 错误处理 & 边界情况**
-  - [ ] 全局 ErrorBoundary（React 渲染异常兜底 + 错误上报）
+  - [ ] 全局 ErrorBoundary（React 渲染异常兜底 + 错误上报）（代码、上报接口和保留策略测试通过；页面重试待验收）
   - [ ] API 错误统一处理：网络错误（重试按钮 + 倒计时）、50x（刷新提示）、40x（具体错误 message toast）
   - [ ] 空状态：所有列表/图表/面板无数据时展示 Empty 组件 + 操作引导
   - [ ] Loading：所有异步操作有 Skeleton/Spinner 反馈
-  - [ ] 离线检测：`navigator.onLine` 监听，离线时显示黄色 banner「网络已断开」
+  - [ ] 离线检测：`navigator.onLine` 监听，离线时显示黄色 banner「网络已断开」（代码已接入；离线交互待验收）
   - [ ] AC：无「白屏死」情况；所有异步状态（loading/empty/error/success）都有对应 UI
 - [ ] **13.7 E2E 测试**
   - [ ] Playwright / Cypress 覆盖核心流程：

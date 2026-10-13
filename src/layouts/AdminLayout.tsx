@@ -14,6 +14,7 @@ import { listNotifications, markNotificationRead } from "../api/reviews";
 import { useSettings } from "../components/SettingsProvider";
 import { getVersionInfo, type VersionInfo } from "../api/version-info";
 import GlobalSearch from "../components/GlobalSearch";
+import ErrorBoundary from "../components/ErrorBoundary";
 
 const { Header, Sider, Content } = Layout;
 const MENU_ITEMS = [
@@ -167,7 +168,7 @@ export default function AdminLayout() {
               </div>
               <div className="workspace-badge"><span className="status-dot" />学习工作空间</div>
             </div>
-            <Suspense fallback={<div className="route-loading" role="status"><Spin size="large" /> 页面加载中…</div>}><Outlet /></Suspense>
+            <ErrorBoundary key={location.pathname}><Suspense fallback={<div className="route-loading" role="status"><Spin size="large" /> 页面加载中…</div>}><Outlet /></Suspense></ErrorBoundary>
             <footer className="workspace-footer">{brand.systemName} <span>让学习与实践形成闭环</span></footer>
           </div>
         </Content>

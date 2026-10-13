@@ -11,6 +11,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { listActivity } from "./activity.mjs";
 import { searchSessions } from "./session-search.mjs";
 import { searchGlobally } from "./global-search.mjs";
+import { saveClientError } from "./client-errors.mjs";
 import { exportSessions } from "./session-export.mjs";
 import { handleSessionCosts, saveSessionPriceSnapshot } from './session-costs.mjs';
 import { saveSessionQuality } from './session-quality.mjs';
@@ -1830,6 +1831,20 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  if (new URL(req.url, 'http://localhost').pathname === '/api/client-errors') {
+    if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
+    void (async () => {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      const me = await lookupSession(token);
+      if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      if (req.method !== 'POST') return sendImmediate(res, 405, { error: 'method not allowed' });
+      const result = await saveClientError(pool, me, await readProjectBody(req));
+      return sendImmediate(res, result.status, result.data);
+    })().catch(error => {
+      if (!res.headersSent) sendImmediate(res, error.status || 500, { error: error.status ? error.message : '错误报告暂不可用' });
+    });
+    return;
+  }
   if (new URL(req.url, 'http://localhost').pathname === '/api/search') {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
