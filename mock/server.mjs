@@ -24,6 +24,7 @@ import { computeOverdueTasks } from "./overdue.mjs";
 import crypto from "node:crypto";
 import { pool, loadData, saveData, sha256, assertSchemaCurrent } from "./postgres-store.mjs";
 import { hashPassword, passwordPolicyError, verifyPassword } from "./passwords.mjs";
+import { createPasswordExpiryReminders } from "./password-expiry.mjs";
 import { recordTaskTrendEvent, recordTaskTrendSnapshot, computeTaskTrends, trendDateKey } from "./task-trends.mjs";
 import { applyTaskProgress, clampProgress as normalizeProgress, normalizeChecklist } from "./task-checklist.mjs";
 import { canUseDependency, projectTasks, validateDependencies, validatePlan } from "./task-dependencies.mjs";
@@ -281,9 +282,11 @@ function serialized(work) {
   requestTail = current.catch(() => {});
   return current;
 }
-async function lookupSession(token, client = pool) {
+async function lookupSession(token, client = pool, allowExpiredPassword = false) {
   if (typeof token !== "string" || !token) return null;
-  const result = await client.query("SELECT u.id,u.username,u.role FROM auth_sessions a JOIN users u ON u.id=a.user_id WHERE a.token_hash=$1 AND a.revoked_at IS NULL AND a.expires_at>now() AND u.status='active'", [sha256(token)]);
+  const result = await client.query(`SELECT u.id,u.username,u.role FROM auth_sessions a JOIN users u ON u.id=a.user_id
+    WHERE a.token_hash=$1 AND a.revoked_at IS NULL AND a.expires_at>now() AND u.status='active'
+    AND ($2::boolean OR COALESCE((SELECT changed_at FROM password_history WHERE user_id=u.id ORDER BY changed_at DESC,id DESC LIMIT 1),now()) > now()-interval '90 days')`, [sha256(token), allowExpiredPassword]);
   return result.rows[0] || null;
 }
 async function revokeUserSessions(userId) {
@@ -348,7 +351,7 @@ function readProjectBody(req) {
 async function authUser(req) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  return (await lookupSession(token, activeClient))?.username || null;
+  return (await lookupSession(token, activeClient, true))?.username || null;
 }
 
 async function annotationView(client, sessionId, messageId, reviewerId) {
@@ -561,10 +564,12 @@ async function handleRequest(req, res) {
         return send(res, 403, { error: "账号已被禁用，请联系管理员" });
       }
       await activeClient.query("DELETE FROM login_security_state WHERE user_id=$1", [account.id]);
+      const passwordChangedAt = (await activeClient.query("SELECT changed_at FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 1", [account.id])).rows[0]?.changed_at;
+      const passwordChangeRequired = Boolean(passwordChangedAt && new Date(passwordChangedAt).getTime() <= Date.now() - 90 * 24 * 60 * 60 * 1000);
       const token = crypto.randomBytes(32).toString("hex");
       const { sessionHours } = await getGlobalSettings(activeClient);
       await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at) VALUES($1,$2,now()+($3 * interval '1 hour'))", [sha256(token), account.id, sessionHours]);
-      return send(res, 200, { token, user: publicUser(account) });
+      return send(res, 200, { token, user: { ...publicUser(account), passwordChangeRequired } });
     }
 
     // ---- 其余接口需鉴权 ----
@@ -572,6 +577,11 @@ async function handleRequest(req, res) {
     if (!username) return send(res, 401, { error: "未登录或登录已过期" });
     const me = db.users.find((u) => u.username === username) || null;
     if (!me) return send(res, 401, { error: "登录账号不存在，请重新登录" });
+    const latestPassword = (await activeClient.query("SELECT changed_at FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 1", [me.id])).rows[0]?.changed_at;
+    const passwordChangeRequired = Boolean(latestPassword && new Date(latestPassword).getTime() <= Date.now() - 90 * 24 * 60 * 60 * 1000);
+    if (passwordChangeRequired && !["/api/auth/password", "/api/auth/logout", "/api/auth/me"].includes(pathname)) {
+      return send(res, 403, { error: "密码已过期，请先修改密码", code: "password_expired" });
+    }
     const accountTasks = db.tasks.filter(task => canUseDependency(task, me));
     const accountTaskIds = new Set(accountTasks.map(task => task.id));
     const linkedTaskVisible = taskId => !taskId || accountTaskIds.has(taskId);
@@ -661,7 +671,7 @@ async function handleRequest(req, res) {
     }
 
     if (method === "GET" && pathname === "/api/auth/me") {
-      return send(res, 200, publicUser(me));
+      return send(res, 200, { ...publicUser(me), passwordChangeRequired });
     }
     if (method === "POST" && pathname === "/api/auth/password") {
       const body = await readBody(req);
@@ -866,6 +876,13 @@ async function handleRequest(req, res) {
 
       if (method === "PUT" || method === "PATCH") {
         const body = await readBody(req);
+        const changingPassword = typeof body.password === "string" && body.password.length > 0;
+        if (changingPassword) {
+          const passwordError = passwordPolicyError(body.password);
+          if (passwordError) return send(res, 400, { error: passwordError });
+          const recentPasswords = (await activeClient.query("SELECT password_hash FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 5", [target.id])).rows;
+          if (recentPasswords.some(row => verifyPassword(body.password, row.password_hash))) return send(res, 400, { error: "不能重复使用最近 5 次密码" });
+        }
         if (typeof body.name === "string" && body.name.trim()) {
           target.name = body.name.trim();
         }
@@ -885,13 +902,7 @@ async function handleRequest(req, res) {
             await revokeUserSessions(target.id);
           }
         }
-        if (typeof body.password === "string" && body.password) {
-          const passwordError = passwordPolicyError(body.password);
-          if (passwordError) return send(res, 400, { error: passwordError });
-          const recentPasswords = (await activeClient.query("SELECT password_hash FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 5", [target.id])).rows;
-          if (recentPasswords.some(row => verifyPassword(body.password, row.password_hash))) {
-            return send(res, 400, { error: "不能重复使用最近 5 次密码" });
-          }
+        if (changingPassword) {
           target.passwordHash = hashPassword(body.password);
           await activeClient.query("INSERT INTO password_history(user_id,password_hash) VALUES($1,$2)", [target.id, target.passwordHash]);
           await revokeUserSessions(target.id);
@@ -2134,6 +2145,9 @@ try {
     const cleanupExpired = () => { void runRetentionCleanup(pool).catch(error => console.error('[retention] cleanup failed:', error)); };
     cleanupExpired();
     setInterval(cleanupExpired, 60_000).unref();
+    const remindExpiringPasswords = () => { void createPasswordExpiryReminders(pool).then(count => { if (count) notifyLive(); }).catch(error => console.error('[password-expiry] reminder failed:', error)); };
+    remindExpiringPasswords();
+    setInterval(remindExpiringPasswords, 3600_000).unref();
     let webhookRunning = false;
     const runWebhooks = async () => {
       if (webhookRunning) return;

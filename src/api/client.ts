@@ -122,6 +122,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     if (res.status >= 500) setServerErrorState(res.status);
+    if (res.status === 403 && (data as { code?: string } | null)?.code === "password_expired" && window.location.pathname !== "/change-password") {
+      window.location.assign("/change-password");
+    }
     // 登录接口自身的 401 是“密码错误”，不跳转；其余 401 视为登录态失效
     if (res.status === 401 && !path.startsWith("/auth/login")) {
       clearAuth();

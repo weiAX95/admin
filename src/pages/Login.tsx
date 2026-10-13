@@ -19,7 +19,7 @@ export default function Login() {
       setAuth(res.token, res.user);
       await refresh();
       message.success("登录成功");
-      navigate("/", { replace: true });
+      navigate(res.user.passwordChangeRequired ? "/change-password" : "/", { replace: true });
     } catch (err) { message.error(err instanceof Error ? err.message : "登录失败"); }
     finally { setLoading(false); }
   };

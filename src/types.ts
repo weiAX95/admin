@@ -363,6 +363,7 @@ export interface AuthUser {
   username: string;
   name: string;
   role: AccountRole;
+  passwordChangeRequired?: boolean;
 }
 
 export interface LoginResponse {
