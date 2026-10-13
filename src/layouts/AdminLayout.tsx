@@ -120,6 +120,7 @@ export default function AdminLayout() {
   );
   return (
     <Layout className="admin-shell">
+      <a className="skip-to-content" href="#main-content">跳转到主要内容</a>
       <Sider className="admin-sidebar" theme={menuTheme} width={240} collapsedWidth={80}
         collapsed={collapsed} breakpoint="lg" onBreakpoint={setCollapsed}>
         {brandNode}
@@ -153,12 +154,12 @@ export default function AdminLayout() {
             </div>}><Button type="text" aria-label={`站内通知，未读 ${unread} 条`} icon={<Badge count={unread} size="small"><BellOutlined /></Badge>} onClick={refreshNotifications} /></Popover>
             <Avatar size={32} className="account-avatar">{name.slice(0, 1)}</Avatar>
             <div className="account-copy"><strong>{name}</strong><span>{user?.role === "admin" ? "管理员" : "普通成员"}</span></div>
-            <Button type="text" icon={<LogoutOutlined />} onClick={() => { void logout().catch(() => undefined).finally(() => { clearAuth(); navigate("/login", { replace: true }); }); }}>
+            <Button type="text" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => { void logout().catch(() => undefined).finally(() => { clearAuth(); navigate("/login", { replace: true }); }); }}>
               <span className="logout-label">退出</span>
             </Button>
           </Space>
         </Header>
-        <Content className="admin-content">
+        <Content id="main-content" tabIndex={-1} className="admin-content">
           <div className="content-inner">
             {versionInfo?.latest && <Alert type="info" showIcon style={{ marginBottom: 20 }} message={<span>新版本 {versionInfo.latest.version} 可用。<a href={versionInfo.latest.url} target="_blank" rel="noopener noreferrer">查看正式 Release</a></span>} />}
             <div className="page-heading">
