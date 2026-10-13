@@ -53,8 +53,14 @@ async function prepareImport(client, body) {
 }
 
 async function closeRuleIncidents(client, ruleId) {
-  await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=now(),resolution_note='规则已修改或停用' WHERE rule_id=$1 AND status IN ('firing','acknowledged')", [ruleId]);
+  const closed = (await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=now(),resolution_note='规则已修改或停用' WHERE rule_id=$1 AND status IN ('firing','acknowledged') RETURNING id,resolved_at", [ruleId])).rows;
+  for (const item of closed) await recordIncidentEvent(client,item.id,'resolved',null,'规则已修改或停用',item.resolved_at);
   await client.query('DELETE FROM alert_rule_state WHERE rule_id=$1', [ruleId]);
+}
+
+async function recordIncidentEvent(client, incidentId, eventType, actorId = null, detail = null, occurredAt = new Date()) {
+  await client.query(`INSERT INTO alert_incident_events(id,incident_id,actor_id,event_type,detail,occurred_at)
+    VALUES($1,$2,$3,$4,$5,$6)`, [crypto.randomUUID(),incidentId,actorId,eventType,detail,occurredAt]);
 }
 
 export async function handleAlertRules({ pathname, method, client, me, readBody, url }) {
@@ -187,12 +193,46 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
       ORDER BY opened_at DESC LIMIT $3`, [status, level, limit])).rows;
     return { status: 200, data: { items } };
   }
+  const history = pathname.match(/^\/api\/alerts\/incidents\/([^/]+)\/events$/);
+  if (history && method === 'GET') {
+    if (!(await client.query('SELECT 1 FROM alert_incidents WHERE id=$1', [history[1]])).rowCount) return { status: 404, data: { error: '告警不存在' } };
+    const items = (await client.query(`SELECT event.*,u.name AS actor_name FROM alert_incident_events event
+      LEFT JOIN users u ON u.id=event.actor_id WHERE event.incident_id=$1
+      ORDER BY event.occurred_at,event.id`, [history[1]])).rows;
+    return { status: 200, data: { items } };
+  }
   const ack = pathname.match(/^\/api\/alerts\/incidents\/([^/]+)\/ack$/);
   if (ack && method === 'POST') {
     const item = (await client.query(`UPDATE alert_incidents SET status='acknowledged',acknowledged_by=$2,acknowledged_at=now()
       WHERE id=$1 AND status='firing' RETURNING *`, [ack[1],me.id])).rows[0];
     if (!item) return { status: 409, data: { error: '告警已确认、已解决或不存在' } };
+    await recordIncidentEvent(client,item.id,'acknowledged',me.id,null,item.acknowledged_at);
     return { status: 200, data: { item } };
+  }
+  const action = pathname.match(/^\/api\/alerts\/incidents\/([^/]+)\/(assign|notes|resolve)$/);
+  if (action && method === 'POST') {
+    const item = (await client.query('SELECT * FROM alert_incidents WHERE id=$1 FOR UPDATE', [action[1]])).rows[0];
+    if (!item) return { status: 404, data: { error: '告警不存在' } };
+    const body = await readBody();
+    if (action[2] === 'assign') {
+      if (item.status === 'resolved') return { status: 409, data: { error: '已解决的告警不可指派' } };
+      const assigneeId = body?.userId;
+      if (typeof assigneeId !== 'string' || !(await client.query("SELECT 1 FROM users WHERE id=$1 AND status='active'", [assigneeId])).rowCount) return { status: 400, data: { error: '请选择有效的在职处理人' } };
+      if (item.assigned_to === assigneeId) return { status: 200, data: { item } };
+      const updated = (await client.query('UPDATE alert_incidents SET assigned_to=$2 WHERE id=$1 RETURNING *', [item.id,assigneeId])).rows[0];
+      await recordIncidentEvent(client,item.id,'assigned',me.id,assigneeId);
+      return { status: 200, data: { item: updated } };
+    }
+    const note = typeof body?.note === 'string' ? body.note.trim() : '';
+    if (!note || note.length > 2000) return { status: 400, data: { error: '请填写不超过 2000 字的处置说明' } };
+    if (action[2] === 'notes') {
+      await recordIncidentEvent(client,item.id,'note',me.id,note);
+      return { status: 201, data: { saved: true } };
+    }
+    if (item.status === 'resolved') return { status: 409, data: { error: '告警已解决' } };
+    const updated = (await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=now(),resolution_note=$2 WHERE id=$1 RETURNING *", [item.id,note])).rows[0];
+    await recordIncidentEvent(client,item.id,'resolved',me.id,note,updated.resolved_at);
+    return { status: 200, data: { item: updated } };
   }
   return { status: 405, data: { error: '不支持该操作' } };
 }
@@ -261,11 +301,16 @@ export async function evaluateAlertRules(pool, now = new Date()) {
         let active = (await client.query("SELECT id FROM alert_incidents WHERE rule_id=$1 AND scope_id=$2 AND status IN ('firing','acknowledged') FOR UPDATE", [rule.id,sample.scope_id])).rows[0];
         if (active && !priorRecent) {
           await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=$2,resolution_note='采样中断，重新计时' WHERE id=$1", [active.id,sample.sampled_at]);
+          await recordIncidentEvent(client,active.id,'resolved',null,'采样中断，重新计时',sample.sampled_at);
           changed++;
           active = null;
         }
         if (!breached) {
-          if (active) { await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=$2,resolution_note='指标恢复正常' WHERE id=$1", [active.id,sample.sampled_at]); changed++; }
+          if (active) {
+            await client.query("UPDATE alert_incidents SET status='resolved',resolved_at=$2,resolution_note='指标恢复正常' WHERE id=$1", [active.id,sample.sampled_at]);
+            await recordIncidentEvent(client,active.id,'resolved',null,'指标恢复正常',sample.sampled_at);
+            changed++;
+          }
           continue;
         }
         if (active) { await client.query('UPDATE alert_incidents SET trigger_value=$2,trigger_count=trigger_count+1 WHERE id=$1', [active.id,sample.value]); continue; }
@@ -274,6 +319,7 @@ export async function evaluateAlertRules(pool, now = new Date()) {
           (id,rule_id,rule_name,metric,scope_id,level,trigger_value,opened_at)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
         [crypto.randomUUID(),rule.id,rule.name,rule.metric,sample.scope_id,rule.level,sample.value,sample.sampled_at])).rows[0];
+        await recordIncidentEvent(client,incident.id,'opened',null,null,sample.sampled_at);
         await notifyIncident(client,rule,incident,sample.value);
         changed++;
       }
@@ -281,7 +327,10 @@ export async function evaluateAlertRules(pool, now = new Date()) {
     const escalated = (await client.query(`UPDATE alert_incidents SET level='critical',escalated_at=$1
       WHERE status='firing' AND level='warning' AND escalated_at IS NULL
         AND opened_at <= $1::timestamptz - interval '30 minutes' RETURNING *`, [now])).rows;
-    for (const incident of escalated) await notifyEscalation(client,incident);
+    for (const incident of escalated) {
+      await recordIncidentEvent(client,incident.id,'escalated',null,'30 分钟未确认，升级为 Critical',incident.escalated_at);
+      await notifyEscalation(client,incident);
+    }
     changed += escalated.length;
     await client.query('COMMIT');
     return changed;

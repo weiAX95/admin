@@ -12,8 +12,14 @@ export interface AlertIncident {
   scope_id: string; level: AlertRule['level'];
   status: 'firing' | 'acknowledged' | 'resolved'; trigger_value: number;
   trigger_count: number; opened_at: string; acknowledged_at: string | null;
-  resolved_at: string | null; escalated_at: string | null;
+  resolved_at: string | null; escalated_at: string | null; assigned_to: string | null;
 }
+export interface AlertIncidentEvent {
+  id: string; incident_id: string; actor_id: string | null; actor_name: string | null;
+  event_type: 'opened' | 'escalated' | 'acknowledged' | 'assigned' | 'note' | 'resolved';
+  detail: string | null; occurred_at: string;
+}
+export interface AlertAssignee { id: string; name: string; username: string; status: string }
 export interface AlertMetricSample {
   metric: string; scope_type: string; scope_id: string;
   sampled_at: string; value: number; source_count: number;
@@ -30,6 +36,11 @@ export const updateAlertRule = (id: string, version: number, input: Partial<Aler
 export const deleteAlertRule = (id: string, version: number) => http.del(`/alerts/rules/${id}`, { version });
 export const listAlertIncidents = (status?: string, level?: string) => http.get<{ items: AlertIncident[] }>('/alerts/incidents', { status, level });
 export const acknowledgeAlertIncident = (id: string) => http.post<{ item: AlertIncident }>(`/alerts/incidents/${id}/ack`, {});
+export const listAlertAssignees = () => http.get<{ items: AlertAssignee[] }>('/users');
+export const listAlertIncidentEvents = (id: string) => http.get<{ items: AlertIncidentEvent[] }>(`/alerts/incidents/${id}/events`);
+export const assignAlertIncident = (id: string, userId: string) => http.post<{ item: AlertIncident }>(`/alerts/incidents/${id}/assign`, { userId });
+export const addAlertIncidentNote = (id: string, note: string) => http.post(`/alerts/incidents/${id}/notes`, { note });
+export const resolveAlertIncident = (id: string, note: string) => http.post<{ item: AlertIncident }>(`/alerts/incidents/${id}/resolve`, { note });
 export const listAlertMetricSamples = (metric?: string, scopeId = '*') => http.get<{ items: AlertMetricSample[] }>('/alerts/metrics', { metric, scopeId });
 export interface AlertRulePreview { triggers: number; firstTriggerAt: string | null; sampleCount: number; firstSampleAt: string | null; lastSampleAt: string | null; historyComplete: boolean; byDay: { day: string; count: number }[] }
 export const previewAlertRule = (input: AlertRuleInput) => http.post<AlertRulePreview>('/alerts/rules/preview', input);

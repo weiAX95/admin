@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { App, Alert, Button, Card, Drawer, Empty, Form, Input, InputNumber, Modal, Select, Space, Switch, Table, Tabs, Tag, Typography, Upload } from 'antd';
-import type { AlertImportRow, AlertIncident, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview } from '../api/alerts';
-import { acknowledgeAlertIncident, createAlertRule, deleteAlertRule, importAlertRules, listAlertIncidents, listAlertMetricSamples, listAlertRules, previewAlertRule, previewAlertRuleImport, updateAlertRule } from '../api/alerts';
+import type { AlertAssignee, AlertImportRow, AlertIncident, AlertIncidentEvent, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview } from '../api/alerts';
+import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, deleteAlertRule, importAlertRules, listAlertAssignees, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, updateAlertRule } from '../api/alerts';
 import { getPlatformConfig } from '../api/experiment-platform';
 
 const metrics = [
@@ -15,6 +15,7 @@ const metrics = [
 const metricOptions = metrics.map(([value,label]) => ({ value, label }));
 const metricLabel = (name: string) => metrics.find(([value]) => value === name)?.[1] || name;
 const levelColor = { info: 'blue', warning: 'orange', critical: 'red' };
+const eventLabel = { opened: '触发', escalated: '升级', acknowledged: '确认', assigned: '指派', note: '备注', resolved: '解决' };
 
 export default function Alerts() {
   const { message, modal } = App.useApp();
@@ -35,6 +36,10 @@ export default function Alerts() {
   const [importBusy, setImportBusy] = useState(false);
   const [preview, setPreview] = useState<AlertRulePreview | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [selectedIncident, setSelectedIncident] = useState<AlertIncident | null>(null);
+  const [incidentEvents, setIncidentEvents] = useState<AlertIncidentEvent[]>([]);
+  const [assignees, setAssignees] = useState<AlertAssignee[]>([]);
+  const [incidentNote, setIncidentNote] = useState('');
   const selectedMetric = Form.useWatch('metric', form);
 
   const refresh = useCallback(async () => {
@@ -80,6 +85,29 @@ export default function Alerts() {
     setBusyId(incident.id);
     try { await acknowledgeAlertIncident(incident.id); await refresh(); message.success('已确认告警'); }
     catch (cause) { message.error(cause instanceof Error ? cause.message : '确认失败'); }
+    finally { setBusyId(null); }
+  };
+  const openIncident = async (incident: AlertIncident) => {
+    setSelectedIncident(incident);
+    setIncidentEvents([]); setIncidentNote('');
+    try {
+      const [history, users] = await Promise.all([listAlertIncidentEvents(incident.id), listAlertAssignees()]);
+      setIncidentEvents(history.items); setAssignees(users.items.filter(user => user.status === 'active'));
+    } catch (cause) { message.error(cause instanceof Error ? cause.message : '处置记录加载失败'); }
+  };
+  const incidentAction = async (action: 'assign' | 'note' | 'resolve', userId?: string) => {
+    if (!selectedIncident) return;
+    setBusyId(selectedIncident.id);
+    try {
+      if (action === 'assign' && userId) await assignAlertIncident(selectedIncident.id, userId);
+      else if (action === 'note') await addAlertIncidentNote(selectedIncident.id, incidentNote);
+      else if (action === 'resolve') await resolveAlertIncident(selectedIncident.id, incidentNote);
+      setIncidentNote('');
+      const [history, latest] = await Promise.all([listAlertIncidentEvents(selectedIncident.id), listAlertIncidents()]);
+      setIncidentEvents(history.items); setIncidents(latest.items);
+      setSelectedIncident(latest.items.find(item => item.id === selectedIncident.id) || null);
+      message.success(action === 'resolve' ? '告警已解决' : action === 'assign' ? '已指派处理人' : '处置备注已保存');
+    } catch (cause) { message.error(cause instanceof Error ? cause.message : '处置失败'); }
     finally { setBusyId(null); }
   };
   const exportSelected = () => {
@@ -144,7 +172,7 @@ export default function Alerts() {
         { title: '级别', render: (_, item) => <Space><Tag color={levelColor[item.level]}>{item.level}</Tag>{item.escalated_at && <Tag color="red">30 分钟未确认升级</Tag>}</Space> },
         { title: '状态', dataIndex: 'status', render: (value: string) => <Tag>{value}</Tag> },
         { title: '当前值', dataIndex: 'trigger_value' }, { title: '触发次数', dataIndex: 'trigger_count' },
-        { title: '操作', render: (_, item) => item.status === 'firing' ? <Button size="small" loading={busyId === item.id} onClick={() => void acknowledge(item)}>确认</Button> : null },
+        { title: '操作', render: (_, item) => <Space><Button size="small" onClick={() => void openIncident(item)}>处置记录</Button>{item.status === 'firing' && <Button size="small" loading={busyId === item.id} onClick={() => void acknowledge(item)}>确认</Button>}</Space> },
       ]} /> },
       { key: 'metrics', label: '指标样本', children: <><Select aria-label="查看指标" value={metric} options={metricOptions} onChange={setMetric} style={{ minWidth: 270, marginBottom: 16 }} /><Table<AlertMetricSample> rowKey={item => `${item.metric}:${item.scope_id}:${item.sampled_at}`} dataSource={samples} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="暂无采样数据" /> }} columns={[
         { title: '时间', dataIndex: 'sampled_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
@@ -162,6 +190,16 @@ export default function Alerts() {
         <Form.Item name="channels" label="通知渠道"><Select mode="multiple" options={[{value:'in_app',label:'站内通知'},{value:'email',label:'账号已启用的邮件'}]} /></Form.Item>
         <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
       </Form>
+    </Drawer>
+    <Drawer title={selectedIncident ? `告警处置 · ${selectedIncident.rule_name}` : '告警处置'} open={Boolean(selectedIncident)} width={560} onClose={() => setSelectedIncident(null)}>
+      {selectedIncident && <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        <Space><Tag color={levelColor[selectedIncident.level]}>{selectedIncident.level}</Tag><Tag>{selectedIncident.status}</Tag><span>当前值 {selectedIncident.trigger_value}</span></Space>
+        <Space>处理人<Select aria-label="选择告警处理人" disabled={selectedIncident.status === 'resolved'} value={selectedIncident.assigned_to || undefined} placeholder="未指派" style={{ minWidth: 220 }} options={assignees.map(user => ({ value: user.id, label: user.name || user.username }))} onChange={userId => void incidentAction('assign', userId)} /></Space>
+        <Input.TextArea aria-label="处置说明" value={incidentNote} onChange={event => setIncidentNote(event.target.value)} maxLength={2000} showCount rows={3} placeholder="记录排查或解决原因" />
+        <Space><Button loading={busyId === selectedIncident.id} disabled={!incidentNote.trim()} onClick={() => void incidentAction('note')}>添加备注</Button><Button type="primary" loading={busyId === selectedIncident.id} disabled={selectedIncident.status === 'resolved' || !incidentNote.trim()} onClick={() => void incidentAction('resolve')}>解决告警</Button></Space>
+        <Typography.Title level={5}>处置时间线</Typography.Title>
+        {incidentEvents.length ? incidentEvents.map(event => <Card size="small" key={event.id}><Space><Tag>{eventLabel[event.event_type]}</Tag><span>{new Date(event.occurred_at).toLocaleString('zh-CN')}</span><span>{event.actor_name || '系统'}</span></Space>{event.detail && <Typography.Paragraph style={{ marginBottom: 0, marginTop: 8 }}>{event.event_type === 'assigned' ? `处理人：${assignees.find(user => user.id === event.detail)?.name || event.detail}` : event.detail}</Typography.Paragraph>}</Card>) : <Empty description="暂无处置记录" />}
+      </Space>}
     </Drawer>
     <Modal title="规则历史预览" open={Boolean(preview)} onCancel={() => setPreview(null)} footer={<Button onClick={() => setPreview(null)}>关闭</Button>}>
       <Typography.Paragraph>预计触发 {preview?.triggers ?? 0} 次；首次触发：{preview?.firstTriggerAt ? new Date(preview.firstTriggerAt).toLocaleString('zh-CN') : '无'}</Typography.Paragraph>
