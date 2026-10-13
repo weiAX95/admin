@@ -3,6 +3,7 @@ import { App, Alert, Button, Card, DatePicker, Drawer, Empty, Form, Input, Input
 import type { AlertAnalytics as AlertAnalyticsData, AlertAssignee, AlertGroup, AlertImportRow, AlertIncident, AlertIncidentEvent, AlertIncidentQuery, AlertMetricSample, AlertRule, AlertRuleArchive, AlertRuleInput, AlertRulePreview, AlertSilence, AlertSilenceInput } from '../api/alerts';
 import { acknowledgeAlertIncident, addAlertIncidentNote, assignAlertIncident, createAlertRule, createAlertSilence, deleteAlertRule, deleteAlertSilence, getAlertAnalytics, importAlertRules, listAlertAssignees, listAlertGroupIncidents, listAlertGroups, listAlertIncidentEvents, listAlertIncidents, listAlertMetricSamples, listAlertRules, listAlertSilences, previewAlertRule, previewAlertRuleImport, resolveAlertIncident, updateAlertRule, updateAlertSilence } from '../api/alerts';
 import { getPlatformConfig } from '../api/experiment-platform';
+import { listWebhooks, type WebhookConfig } from '../api/outbound-webhooks';
 import AlertAnalytics from '../components/AlertAnalytics';
 
 const metrics = [
@@ -44,6 +45,7 @@ export default function Alerts() {
   const groupRequest = useRef(0);
   const [samples, setSamples] = useState<AlertMetricSample[]>([]);
   const [models, setModels] = useState<{ id: string; displayName: string }[]>([]);
+  const [webhooks, setWebhooks] = useState<WebhookConfig[]>([]);
   const [metric, setMetric] = useState<string>('model_5xx_rate');
   const [editing, setEditing] = useState<AlertRule | 'new' | null>(null);
   const [busy, setBusy] = useState(false);
@@ -61,6 +63,7 @@ export default function Alerts() {
   const [assignees, setAssignees] = useState<AlertAssignee[]>([]);
   const [incidentNote, setIncidentNote] = useState('');
   const selectedMetric = Form.useWatch('metric', form);
+  const selectedChannels = Form.useWatch('channels', form);
   const silenceScope = Form.useWatch('scopeType', silenceForm);
 
   const refresh = useCallback(async () => {
@@ -93,17 +96,17 @@ export default function Alerts() {
     finally { setGroupLoading(null); }
   };
   useEffect(() => { void refresh(); }, [refresh]);
-  useEffect(() => { void getPlatformConfig().then(result => setModels(result.models)).catch(() => undefined); }, []);
+  useEffect(() => { void getPlatformConfig().then(result => setModels(result.models)).catch(() => undefined); void listWebhooks().then(result => setWebhooks(result.items)).catch(() => undefined); }, []);
   useEffect(() => { void refreshSamples(metric); }, [metric, refreshSamples]);
   useEffect(() => { void refreshGroups(); }, [refreshGroups]);
   useEffect(() => { void loadAnalytics(); }, [loadAnalytics]);
   const openCreate = () => {
     setEditing('new');
-    form.setFieldsValue({ name: '', metric: 'model_5xx_rate', scopeId: '*', operator: '>', threshold: 5, durationSeconds: 0, repeatMinutes: 30, aggregateMinutes: 5, level: 'warning', channels: ['in_app'], tags: [], enabled: false });
+    form.setFieldsValue({ name: '', metric: 'model_5xx_rate', scopeId: '*', operator: '>', threshold: 5, durationSeconds: 0, repeatMinutes: 30, aggregateMinutes: 5, level: 'warning', channels: ['in_app'], webhookIds: [], tags: [], enabled: false });
   };
   const openEdit = (rule: AlertRule) => {
     setEditing(rule);
-    form.setFieldsValue({ name: rule.name, metric: rule.metric, scopeId: rule.scope_id, operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes, aggregateMinutes: rule.aggregate_minutes, level: rule.level, channels: rule.channels, tags: rule.tags, enabled: rule.enabled });
+    form.setFieldsValue({ name: rule.name, metric: rule.metric, scopeId: rule.scope_id, operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes, aggregateMinutes: rule.aggregate_minutes, level: rule.level, channels: rule.channels, webhookIds: rule.webhook_ids, tags: rule.tags, enabled: rule.enabled });
   };
   const save = async (input: AlertRuleInput) => {
     setBusy(true);
@@ -180,7 +183,7 @@ export default function Alerts() {
     const content: AlertRuleArchive = { schemaVersion: 1, rules: selected.map(rule => ({
       templateKey: rule.template_key, name: rule.name, metric: rule.metric, scopeId: rule.scope_id,
       operator: rule.operator, threshold: Number(rule.threshold), durationSeconds: rule.duration_seconds, repeatMinutes: rule.repeat_minutes, aggregateMinutes: rule.aggregate_minutes,
-      level: rule.level, channels: rule.channels, tags: rule.tags, enabled: rule.enabled,
+      level: rule.level, channels: rule.channels, webhookIds: rule.webhook_ids, tags: rule.tags, enabled: rule.enabled,
     })) };
     const url = URL.createObjectURL(new Blob([JSON.stringify(content, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a'); link.href = url; link.download = 'alert-rules.json'; link.click();
@@ -281,7 +284,8 @@ export default function Alerts() {
         <Form.Item name="repeatMinutes" label="未确认时重复提醒间隔（分钟）"><InputNumber min={1} max={1440} precision={0} style={{ width: 150 }} /></Form.Item>
         <Form.Item name="aggregateMinutes" label="再次触发聚合窗口（分钟）"><InputNumber min={1} max={1440} precision={0} style={{ width: 150 }} /></Form.Item>
         <Form.Item name="level" label="级别"><Select options={[{value:'info',label:'Info · 仅记录'},{value:'warning',label:'Warning · 通知管理员'},{value:'critical',label:'Critical · 高优先级'}]} /></Form.Item>
-        <Form.Item name="channels" label="通知渠道"><Select mode="multiple" options={[{value:'in_app',label:'站内通知'},{value:'email',label:'账号已启用的邮件'}]} /></Form.Item>
+        <Form.Item name="channels" label="通知渠道"><Select mode="multiple" options={[{value:'in_app',label:'站内通知'},{value:'email',label:'账号已启用的邮件'},{value:'webhook',label:'已配置的出站 Webhook'}]} onChange={channels => { if (!channels.includes('webhook')) form.setFieldValue('webhookIds',[]); }} /></Form.Item>
+        {selectedChannels?.includes('webhook') && <Form.Item name="webhookIds" label="选择告警 Webhook（可多选）" rules={[{required:true,message:'请至少选择一个告警 Webhook'}]}><Select mode="multiple" options={webhooks.filter(hook => hook.event === 'alert.firing' && !hook.deletedAt).map(hook => ({value:hook.id,label:`${hook.url}${hook.enabled?'':'（已停用）'}`}))} /></Form.Item>}
         <Form.Item name="tags" label="规则标签（用于静默）"><Select mode="tags" maxCount={20} placeholder="输入标签后回车" /></Form.Item>
         <Form.Item name="enabled" label="启用" valuePropName="checked"><Switch /></Form.Item>
       </Form>

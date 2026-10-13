@@ -8,7 +8,7 @@ const METRICS = new Set([
 ]);
 const OPERATORS = new Set(['>','<','=','>=','<=']);
 const LEVELS = new Set(['info','warning','critical']);
-const CHANNELS = new Set(['in_app','email']);
+const CHANNELS = new Set(['in_app','email','webhook']);
 
 function validateRule(body) {
   const name = typeof body?.name === 'string' ? body.name.trim() : '';
@@ -20,6 +20,7 @@ function validateRule(body) {
   const repeatMinutes = body?.repeatMinutes ?? 30;
   const aggregateMinutes = body?.aggregateMinutes ?? 5;
   const channels = body?.channels ?? ['in_app'];
+  const webhookIds = body?.webhookIds ?? [];
   const tags = body?.tags ?? [];
   if (!name || name.length > 120 || !METRICS.has(metric) || !OPERATORS.has(body?.operator)
     || typeof threshold !== 'number' || !Number.isFinite(threshold) || !Number.isInteger(durationSeconds) || durationSeconds < 0 || durationSeconds > 86400
@@ -27,10 +28,23 @@ function validateRule(body) {
     || !Number.isInteger(aggregateMinutes) || aggregateMinutes < 1 || aggregateMinutes > 1440
     || !LEVELS.has(body?.level) || !scopeId || (body?.enabled !== undefined && typeof body.enabled !== 'boolean') || !Array.isArray(channels)
     || new Set(channels).size !== channels.length || channels.some(channel => !CHANNELS.has(channel))
+    || !Array.isArray(webhookIds) || webhookIds.length > 20 || new Set(webhookIds).size !== webhookIds.length
+    || webhookIds.some(id => typeof id !== 'string' || !id) || channels.includes('webhook') !== Boolean(webhookIds.length)
     || !Array.isArray(tags) || tags.length > 20 || tags.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 32)) {
     return { error: '请填写有效的名称、指标、比较符、阈值、持续秒数、级别和通知渠道' };
   }
-  return { name, metric, scopeType, scopeId, operator: body.operator, threshold, durationSeconds, repeatMinutes, aggregateMinutes, level: body.level, channels, tags: [...new Set(tags.map(tag => tag.trim()))], enabled: Boolean(body.enabled) };
+  return { name, metric, scopeType, scopeId, operator: body.operator, threshold, durationSeconds, repeatMinutes, aggregateMinutes, level: body.level, channels, webhookIds, tags: [...new Set(tags.map(tag => tag.trim()))], enabled: Boolean(body.enabled) };
+}
+
+async function validWebhookIds(client, ids) {
+  if (!ids.length) return true;
+  const rows = (await client.query("SELECT id FROM outbound_webhooks WHERE id=ANY($1) AND event_type='alert.firing' AND deleted_at IS NULL", [ids])).rows;
+  return rows.length === ids.length;
+}
+
+async function saveRuleWebhooks(client, ruleId, ids) {
+  await client.query('DELETE FROM alert_rule_webhooks WHERE rule_id=$1', [ruleId]);
+  for (const id of ids) await client.query('INSERT INTO alert_rule_webhooks(rule_id,webhook_id) VALUES($1,$2)', [ruleId,id]);
 }
 
 async function prepareImport(client, body) {
@@ -53,6 +67,7 @@ async function prepareImport(client, body) {
     if (!error && existing.some(item => item.name === value.name && item.id !== target?.id)) error = '规则名称已被其他规则使用';
     if (!error && value.scopeType === 'model' && value.scopeId !== '*'
       && !(await client.query('SELECT 1 FROM experiment_models WHERE id=$1', [value.scopeId])).rowCount) error = '模型不存在';
+    if (!error && !(await validWebhookIds(client,value.webhookIds))) error = '告警 Webhook 不存在或已删除';
     rows.push({ index, name: raw?.name || '', value, status: error ? 'error' : target ? body.mode === 'skip' ? 'skip' : 'update' : 'create', error, targetId: target?.id || null, version: target?.version || null });
   }
   return { rows };
@@ -156,7 +171,9 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
     return { status: 200, data: { item } };
   }
   if (pathname === '/api/alerts/rules' && method === 'GET') {
-    const items = (await client.query('SELECT * FROM alert_rules ORDER BY template_key NULLS LAST,name')).rows;
+    const items = (await client.query(`SELECT r.*,COALESCE((SELECT array_agg(webhook_id ORDER BY webhook_id)
+      FROM alert_rule_webhooks WHERE rule_id=r.id),ARRAY[]::text[]) AS webhook_ids
+      FROM alert_rules r ORDER BY template_key NULLS LAST,name`)).rows;
     return { status: 200, data: { items } };
   }
   if (pathname === '/api/alerts/rules/preview' && method === 'POST') {
@@ -164,6 +181,7 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
     if (value.error) return { status: 400, data: { error: value.error } };
     if (value.scopeType === 'model' && value.scopeId !== '*'
       && !(await client.query('SELECT 1 FROM experiment_models WHERE id=$1', [value.scopeId])).rowCount) return { status: 400, data: { error: '模型不存在' } };
+    if (!(await validWebhookIds(client,value.webhookIds))) return { status: 400, data: { error: '告警 Webhook 不存在或已删除' } };
     const lower = new Date(Date.now() - 7 * 24 * 60 * 60_000);
     let cursorScope = null, cursorAt = null, sampleCount = 0, firstSampleAt = null, lastSampleAt = null;
     let triggers = 0, firstTriggerAt = null;
@@ -218,16 +236,19 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
       if (row.status === 'skip') { counts.skipped++; continue; }
       const value = row.value;
       if (row.status === 'create') {
+        const ruleId = crypto.randomUUID();
         await client.query(`INSERT INTO alert_rules
           (id,name,metric,scope_type,scope_id,operator,threshold,duration_seconds,repeat_minutes,aggregate_minutes,level,channels,tags,enabled,created_by)
           VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-        [crypto.randomUUID(),value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.aggregateMinutes,value.level,value.channels,value.tags,value.enabled,me.id]);
+        [ruleId,value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.aggregateMinutes,value.level,value.channels,value.tags,value.enabled,me.id]);
+        await saveRuleWebhooks(client,ruleId,value.webhookIds);
         counts.created++;
       } else {
         await closeRuleIncidents(client,row.targetId);
         await client.query(`UPDATE alert_rules SET name=$2,metric=$3,scope_type=$4,scope_id=$5,operator=$6,
           threshold=$7,duration_seconds=$8,repeat_minutes=$9,aggregate_minutes=$10,level=$11,channels=$12,tags=$13,enabled=$14,version=version+1,updated_at=now()
           WHERE id=$1`, [row.targetId,value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.aggregateMinutes,value.level,value.channels,value.tags,value.enabled]);
+        await saveRuleWebhooks(client,row.targetId,value.webhookIds);
         counts.updated++;
       }
     }
@@ -240,16 +261,20 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
     const duplicate = await client.query('SELECT 1 FROM alert_rules WHERE name=$1', [value.name]);
     if (duplicate.rowCount) return { status: 409, data: { error: '同名告警规则已存在' } };
     if (value.scopeType === 'model' && value.scopeId !== '*' && !(await client.query('SELECT 1 FROM experiment_models WHERE id=$1', [value.scopeId])).rowCount) return { status: 400, data: { error: '模型不存在' } };
+    if (!(await validWebhookIds(client,value.webhookIds))) return { status: 400, data: { error: '告警 Webhook 不存在或已删除' } };
     const item = (await client.query(`INSERT INTO alert_rules
       (id,name,metric,scope_type,scope_id,operator,threshold,duration_seconds,repeat_minutes,aggregate_minutes,level,channels,tags,enabled,created_by)
       VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
     [crypto.randomUUID(),value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.aggregateMinutes,value.level,value.channels,value.tags,value.enabled,me.id])).rows[0];
+    await saveRuleWebhooks(client,item.id,value.webhookIds);
     return { status: 201, data: { item } };
   }
   const match = pathname.match(/^\/api\/alerts\/rules\/([^/]+)$/);
   if (match && ['PUT','DELETE'].includes(method)) {
     await client.query('SELECT pg_advisory_xact_lock(748211)');
-    const existing = (await client.query('SELECT * FROM alert_rules WHERE id=$1 FOR UPDATE', [match[1]])).rows[0];
+    const existing = (await client.query(`SELECT r.*,COALESCE((SELECT array_agg(webhook_id ORDER BY webhook_id)
+      FROM alert_rule_webhooks WHERE rule_id=r.id),ARRAY[]::text[]) AS webhook_ids
+      FROM alert_rules r WHERE r.id=$1 FOR UPDATE OF r`, [match[1]])).rows[0];
     if (!existing) return { status: 404, data: { error: '规则不存在' } };
     const body = await readBody();
     if (!Number.isSafeInteger(body?.version) || body.version !== existing.version) return { status: 409, data: { error: '规则已被修改，请刷新后重试' } };
@@ -259,9 +284,10 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
       await client.query('DELETE FROM alert_rules WHERE id=$1', [existing.id]);
       return { status: 200, data: { deleted: true } };
     }
-    const value = validateRule({ ...existing, scopeId: existing.scope_id, durationSeconds: existing.duration_seconds, repeatMinutes: existing.repeat_minutes, aggregateMinutes: existing.aggregate_minutes, ...body });
+    const value = validateRule({ ...existing, scopeId: existing.scope_id, durationSeconds: existing.duration_seconds, repeatMinutes: existing.repeat_minutes, aggregateMinutes: existing.aggregate_minutes, webhookIds: existing.webhook_ids, ...body });
     if (value.error) return { status: 400, data: { error: value.error } };
     if (value.scopeType === 'model' && value.scopeId !== '*' && !(await client.query('SELECT 1 FROM experiment_models WHERE id=$1', [value.scopeId])).rowCount) return { status: 400, data: { error: '模型不存在' } };
+    if (!(await validWebhookIds(client,value.webhookIds))) return { status: 400, data: { error: '告警 Webhook 不存在或已删除' } };
     const duplicate = await client.query('SELECT 1 FROM alert_rules WHERE name=$1 AND id<>$2', [value.name, existing.id]);
     if (duplicate.rowCount) return { status: 409, data: { error: '同名告警规则已存在' } };
     await closeRuleIncidents(client, existing.id);
@@ -269,6 +295,7 @@ export async function handleAlertRules({ pathname, method, client, me, readBody,
       operator=$6,threshold=$7,duration_seconds=$8,repeat_minutes=$9,aggregate_minutes=$10,level=$11,channels=$12,tags=$13,enabled=$14,
       version=version+1,updated_at=now() WHERE id=$1 RETURNING *`,
     [existing.id,value.name,value.metric,value.scopeType,value.scopeId,value.operator,value.threshold,value.durationSeconds,value.repeatMinutes,value.aggregateMinutes,value.level,value.channels,value.tags,value.enabled])).rows[0];
+    await saveRuleWebhooks(client,existing.id,value.webhookIds);
     return { status: 200, data: { item } };
   }
   if (pathname === '/api/alerts/incidents' && method === 'GET') {
@@ -373,18 +400,42 @@ function shanghaiDay(value) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+async function enqueueAlertWebhooks(client, rule, incident, kind, occurredAt) {
+  if (!rule.channels?.includes('webhook')) return;
+  const ids = rule.webhook_ids || (await client.query('SELECT webhook_id FROM alert_rule_webhooks WHERE rule_id=$1', [rule.id || incident.rule_id])).rows.map(row => row.webhook_id);
+  if (!ids.length) return;
+  const active = (await client.query(`SELECT id FROM outbound_webhooks
+    WHERE id=ANY($1) AND event_type='alert.firing' AND enabled AND deleted_at IS NULL`, [ids])).rows;
+  if (!active.length) return;
+  const eventId = crypto.randomUUID();
+  const sourceKey = `rule:${incident.id}:${kind}:${new Date(occurredAt).toISOString()}`;
+  const payload = { sourceType: 'alert_rule', alertKind: kind, incidentId: incident.id,
+    ruleName: incident.rule_name, metric: incident.metric, scopeId: incident.scope_id,
+    level: incident.level, triggerValue: Number(incident.trigger_value),
+    triggerCount: incident.trigger_count, occurredAt, targetUrl: '/alerts' };
+  const inserted = await client.query(`INSERT INTO outbound_webhook_events
+    (id,event_type,payload,source_key,fanned_out) VALUES($1,'alert.firing',$2,$3,true)
+    ON CONFLICT DO NOTHING RETURNING id`, [eventId,JSON.stringify(payload),sourceKey]);
+  if (!inserted.rowCount) return;
+  for (const hook of active) await client.query(`INSERT INTO outbound_webhook_deliveries(id,webhook_id,event_id)
+    VALUES($1,$2,$3) ON CONFLICT(webhook_id,event_id) DO NOTHING`, [crypto.randomUUID(),hook.id,eventId]);
+}
+
 async function notifyIncident(client, rule, incident, value) {
   if (rule.level === 'info' || !rule.channels.length) return;
   if (await isSilenced(client,rule,incident.opened_at)) return;
   const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
   for (const admin of admins) {
     const email = rule.channels.includes('email') && admin.review_email_enabled ? admin.review_email : null;
+    const inApp = rule.channels.includes('in_app');
+    if (!inApp && !email) continue;
     await client.query(`INSERT INTO app_notifications
-      (id,user_id,kind,entity_id,title,body,target_url,email_to,email_status,email_next_attempt_at)
-      VALUES($1,$2,'alert_rule',$3,$4,$5,'/alerts',$6,$7,$8)
+      (id,user_id,kind,entity_id,title,body,target_url,email_to,email_status,email_next_attempt_at,show_in_app)
+      VALUES($1,$2,'alert_rule',$3,$4,$5,'/alerts',$6,$7,$8,$9)
       ON CONFLICT(user_id,kind,entity_id) DO NOTHING`,
-    [crypto.randomUUID(),admin.id,incident.id,`告警：${rule.name}`,`${rule.metric} / ${incident.scope_id} 当前值 ${value}，阈值 ${rule.operator} ${rule.threshold}。`,email,email?'pending':'skipped',email?new Date():null]);
+    [crypto.randomUUID(),admin.id,incident.id,`告警：${rule.name}`,`${rule.metric} / ${incident.scope_id} 当前值 ${value}，阈值 ${rule.operator} ${rule.threshold}。`,email,email?'pending':'skipped',email?new Date():null,inApp]);
   }
+  await enqueueAlertWebhooks(client,rule,incident,'opened',incident.opened_at);
 }
 
 async function notifyEscalation(client, incident) {
@@ -397,6 +448,10 @@ async function notifyEscalation(client, incident) {
       ON CONFLICT(user_id,kind,entity_id) DO NOTHING`,
     [crypto.randomUUID(),admin.id,incident.id,`严重告警：${incident.rule_name}`,`告警持续超过 30 分钟仍未确认，已升级为 Critical。当前值 ${incident.trigger_value}。`,email,email?'pending':'skipped',email?new Date():null]);
   }
+  if (incident.rule_id) {
+    const rule = (await client.query('SELECT id,channels FROM alert_rules WHERE id=$1', [incident.rule_id])).rows[0];
+    if (rule) await enqueueAlertWebhooks(client,rule,incident,'escalated',incident.escalated_at);
+  }
 }
 
 async function notifyReminder(client, incident) {
@@ -405,13 +460,15 @@ async function notifyReminder(client, incident) {
   const reminderKey = `${incident.id}:reminder:${new Date(incident.last_reminded_at).getTime()}`;
   for (const admin of admins) {
     const email = incident.channels.includes('email') && admin.review_email_enabled ? admin.review_email : null;
-    if (!incident.channels.includes('in_app') && !email) continue;
+    const inApp = incident.channels.includes('in_app');
+    if (!inApp && !email) continue;
     await client.query(`INSERT INTO app_notifications
-      (id,user_id,kind,entity_id,title,body,target_url,email_to,email_status,email_next_attempt_at)
-      VALUES($1,$2,'alert_rule_reminder',$3,$4,$5,'/alerts',$6,$7,$8)
+      (id,user_id,kind,entity_id,title,body,target_url,email_to,email_status,email_next_attempt_at,show_in_app)
+      VALUES($1,$2,'alert_rule_reminder',$3,$4,$5,'/alerts',$6,$7,$8,$9)
       ON CONFLICT(user_id,kind,entity_id) DO NOTHING`,
-    [crypto.randomUUID(),admin.id,reminderKey,`待确认告警：${incident.rule_name}`,`${incident.metric} / ${incident.scope_id} 当前值 ${incident.trigger_value}，请确认并处置。`,email,email?'pending':'skipped',email?new Date():null]);
+    [crypto.randomUUID(),admin.id,reminderKey,`待确认告警：${incident.rule_name}`,`${incident.metric} / ${incident.scope_id} 当前值 ${incident.trigger_value}，请确认并处置。`,email,email?'pending':'skipped',email?new Date():null,inApp]);
   }
+  if (incident.rule_id) await enqueueAlertWebhooks(client,{ id: incident.rule_id, channels: incident.channels },incident,'reminded',incident.last_reminded_at);
 }
 
 export async function evaluateAlertRules(pool, now = new Date()) {
@@ -420,7 +477,9 @@ export async function evaluateAlertRules(pool, now = new Date()) {
   try {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(748210)');
-    const rules = (await client.query('SELECT * FROM alert_rules WHERE enabled=true ORDER BY id')).rows;
+    const rules = (await client.query(`SELECT r.*,COALESCE((SELECT array_agg(webhook_id ORDER BY webhook_id)
+      FROM alert_rule_webhooks WHERE rule_id=r.id),ARRAY[]::text[]) AS webhook_ids
+      FROM alert_rules r WHERE enabled=true ORDER BY id`)).rows;
     for (const rule of rules) {
       const samples = (await client.query(`SELECT DISTINCT ON (scope_id) scope_id,sampled_at,value
         FROM alert_metric_samples WHERE metric=$1 AND scope_type=$2
@@ -465,9 +524,10 @@ export async function evaluateAlertRules(pool, now = new Date()) {
           const aggregate = (await client.query(`UPDATE alert_incident_groups SET incident_count=incident_count+1,latest_at=$2
             WHERE id=$1 RETURNING incident_count`, [group.id,sample.sampled_at])).rows[0];
           await client.query('UPDATE alert_incidents SET aggregate_group_id=$2 WHERE id=$1', [incident.id,group.id]);
-          const notified = (await client.query(`SELECT i.id FROM alert_incidents i
-            JOIN app_notifications n ON n.kind='alert_rule' AND n.entity_id=i.id
-            WHERE i.aggregate_group_id=$1 ORDER BY i.opened_at,i.id LIMIT 1`, [group.id])).rows[0];
+          const notified = (await client.query(`SELECT i.id FROM alert_incidents i WHERE i.aggregate_group_id=$1
+            AND (EXISTS (SELECT 1 FROM app_notifications n WHERE n.kind='alert_rule' AND n.entity_id=i.id)
+              OR EXISTS (SELECT 1 FROM outbound_webhook_events e WHERE e.source_key LIKE 'rule:' || i.id || ':opened:%'))
+            ORDER BY i.opened_at,i.id LIMIT 1`, [group.id])).rows[0];
           if (notified) await client.query(`UPDATE app_notifications SET body=$2 WHERE kind='alert_rule' AND entity_id=$1`,
             [notified.id,`${rule.metric} / ${sample.scope_id} 最近一次值 ${sample.value}，阈值 ${rule.operator} ${rule.threshold}；窗口内已触发 ${aggregate.incident_count} 次。`]);
           else await notifyIncident(client,rule,incident,sample.value);

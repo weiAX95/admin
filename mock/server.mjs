@@ -684,9 +684,9 @@ async function handleRequest(req, res) {
     }
     if (pathname === "/api/notifications" && method === "GET") {
       const items = (await activeClient.query("SELECT r.id,r.note_id AS note_id,n.title,to_char(r.due_on,'YYYY-MM-DD') AS due_on,r.created_at,r.read_at,r.email_status FROM note_review_notifications r JOIN notes n ON n.id=r.note_id AND n.deleted_at IS NULL WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 100", [me.id])).rows;
-      const appItems = (await activeClient.query("SELECT id,kind,title,body,target_url,created_at,read_at,email_status FROM app_notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100", [me.id])).rows;
+      const appItems = (await activeClient.query("SELECT id,kind,title,body,target_url,created_at,read_at,email_status FROM app_notifications WHERE user_id=$1 AND show_in_app=true ORDER BY created_at DESC LIMIT 100", [me.id])).rows;
       const unreadNotes = (await activeClient.query("SELECT count(*)::integer AS count FROM note_review_notifications r JOIN notes n ON n.id=r.note_id AND n.deleted_at IS NULL WHERE r.user_id=$1 AND r.read_at IS NULL", [me.id])).rows[0].count;
-      const unreadApps = (await activeClient.query("SELECT count(*)::integer AS count FROM app_notifications WHERE user_id=$1 AND read_at IS NULL", [me.id])).rows[0].count;
+      const unreadApps = (await activeClient.query("SELECT count(*)::integer AS count FROM app_notifications WHERE user_id=$1 AND show_in_app=true AND read_at IS NULL", [me.id])).rows[0].count;
       const combined = [...items.map(item => ({ id: item.id, kind: "note_review", noteId: item.note_id, title: item.title, dueOn: item.due_on, targetUrl: `/notes/${item.note_id}`, createdAt: item.created_at, readAt: item.read_at, emailStatus: item.email_status })), ...appItems.map(item => ({ id: item.id, kind: item.kind, noteId: null, title: item.title, body: item.body, dueOn: null, targetUrl: item.target_url, createdAt: item.created_at, readAt: item.read_at, emailStatus: item.email_status }))].sort((a,b) => Date.parse(b.createdAt)-Date.parse(a.createdAt)).slice(0,100);
       return send(res, 200, { items: combined, unread: unreadNotes + unreadApps });
     }

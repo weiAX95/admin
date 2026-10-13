@@ -5,7 +5,7 @@ export interface AlertRule {
   scope_type: 'global' | 'model'; scope_id: string;
   operator: '>' | '<' | '=' | '>=' | '<='; threshold: number;
   duration_seconds: number; repeat_minutes: number; aggregate_minutes: number; level: 'info' | 'warning' | 'critical';
-  channels: string[]; tags: string[]; enabled: boolean; version: number; updated_at: string;
+  channels: string[]; webhook_ids: string[]; tags: string[]; enabled: boolean; version: number; updated_at: string;
 }
 export interface AlertIncident {
   id: string; rule_id: string | null; rule_name: string; metric: string;
@@ -34,7 +34,7 @@ export interface AlertMetricSample {
 export interface AlertRuleInput {
   name: string; metric: string; scopeId: string; operator: AlertRule['operator'];
   threshold: number; durationSeconds: number; repeatMinutes: number; aggregateMinutes: number; level: AlertRule['level'];
-  channels: string[]; tags: string[]; enabled: boolean;
+  channels: string[]; webhookIds: string[]; tags: string[]; enabled: boolean;
 }
 
 export interface AlertSilence {
