@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Typography, Upload } from 'antd';
+import { App, Alert, Button, Card, Checkbox, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Typography, Upload } from 'antd';
 import { Link, useSearchParams } from 'react-router-dom';
 import { createDataset, createDatasetSubset, createDatasetVersion, createEvaluationFolder, getDatasetCase, getDatasetVersion, getDatasetVersions, getEvaluationSettings, listDatasets, listEvaluationFolders, updateEvaluationSettings } from '../api/experiment-evaluation';
 import { getStoredUser } from '../api/client';
@@ -17,6 +17,7 @@ export default function ExperimentDatasets() {
   const [items, setItems] = useState<Dataset[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
   const [target, setTarget] = useState<Dataset | 'new' | null>(null);
   const [name, setName] = useState('');
   const [folderId, setFolderId] = useState<string>();
@@ -56,7 +57,14 @@ export default function ExperimentDatasets() {
     setSearchParams(next, { replace: true });
     setLinkedCase(null);
   };
-  const load = useCallback(() => Promise.all([listDatasets(), listEvaluationFolders()]).then(([datasets, tree]) => { setItems(datasets.items); setFolders(tree.items); setError(''); }).catch(cause => setError(cause instanceof Error ? cause.message : '加载失败')), []);
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [datasets, tree] = await Promise.all([listDatasets(), listEvaluationFolders()]);
+      setItems(datasets.items); setFolders(tree.items); setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '加载失败'); }
+    finally { setLoading(false); }
+  }, []);
   useEffect(() => { void load(); }, [load]);
   const preview = useMemo(() => source ? previewEvaluationRows(source) : [], [source]);
   const invalid = preview.filter(row => row.errors.length).length;
@@ -103,9 +111,9 @@ export default function ExperimentDatasets() {
   const saveSettings = async () => { try { await updateEvaluationSettings({globalMediaBytes:Math.round(mediaGlobalGb*1024**3),datasetMediaBytes:Math.round(mediaDatasetGb*1024**3),minFreePercent}); setSettingsOpen(false); message.success('评测媒体配额已更新'); } catch(cause) { message.error(cause instanceof Error ? cause.message : '保存失败'); } };
   return <Card title="版本化评测数据集" extra={<Space wrap><Link to="/experiments">返回实验</Link>{admin && <Button onClick={() => void openSettings()}>媒体配额</Button>}<Button onClick={() => openImport('new')}>导入 CSV／JSONL</Button><Button type="primary" onClick={() => { setName(''); setFolderId(undefined); setCasesText(example); setTarget('new'); }}>新建数据集</Button></Space>}>
     <Typography.Paragraph type="secondary">每次保存生成不可变版本。支持最多 10,000 条文本或多模态用例；媒体使用已上传的附件 ID。</Typography.Paragraph>
-    {error && <Alert type="error" message={error} showIcon />}
+    {error && <Alert type="error" message={error} showIcon action={<Button size="small" onClick={() => void load()}>重试</Button>} />}
     <Space wrap style={{ marginBottom: 16 }}><Select allowClear placeholder="按文件夹浏览" style={{ width: 220 }} options={folderOptions} value={folderId} onChange={setFolderId} /><Input placeholder="新文件夹名称" value={folderName} onChange={event => setFolderName(event.target.value)} style={{ width: 180 }} /><Button disabled={!folderName.trim()} onClick={() => void createEvaluationFolder(folderName, folderId).then(() => { setFolderName(''); return load(); }).catch(cause => message.error(cause.message))}>创建文件夹</Button></Space>
-    <Table rowKey="id" dataSource={items.filter(item => !folderId || item.folder_id === folderId)} columns={[{ title: '名称', dataIndex: 'name' }, { title: '最新版本', render: (_, item) => <Tag>v{item.latest_version}</Tag> }, { title: '来源', render: (_, item) => item.parent_version_id ? '版本子集' : '原始数据集' }, { title: '操作', render: (_, item) => <Space wrap><Button type="link" onClick={() => void showVersions(item)}>查看版本</Button><Button type="link" onClick={() => { setTarget(item); setCasesText(example); }}>新增版本</Button><Button type="link" onClick={() => openImport(item)}>导入为新版本</Button></Space> }]} expandable={{ rowExpandable: row => Boolean(versions[row.id]), expandedRowRender: row => <Space wrap>{versions[row.id]?.map(version => <Space key={version.id}><Tag>v{version.version} · {version.id}</Tag><Button size="small" onClick={() => void openSubset(row, version.id)}>创建子集</Button></Space>)}</Space> }} />
+    <Table rowKey="id" loading={loading} locale={{ emptyText: <Empty description={error ? '数据集加载失败' : folderId ? '当前文件夹暂无数据集' : '暂无评测数据集'}>{error ? <Button onClick={() => void load()}>重试</Button> : <Button type="primary" onClick={() => { setName(''); setFolderId(undefined); setCasesText(example); setTarget('new'); }}>新建数据集</Button>}</Empty> }} dataSource={items.filter(item => !folderId || item.folder_id === folderId)} columns={[{ title: '名称', dataIndex: 'name' }, { title: '最新版本', render: (_, item) => <Tag>v{item.latest_version}</Tag> }, { title: '来源', render: (_, item) => item.parent_version_id ? '版本子集' : '原始数据集' }, { title: '操作', render: (_, item) => <Space wrap><Button type="link" onClick={() => void showVersions(item)}>查看版本</Button><Button type="link" onClick={() => { setTarget(item); setCasesText(example); }}>新增版本</Button><Button type="link" onClick={() => openImport(item)}>导入为新版本</Button></Space> }]} expandable={{ rowExpandable: row => Boolean(versions[row.id]), expandedRowRender: row => <Space wrap>{versions[row.id]?.map(version => <Space key={version.id}><Tag>v{version.version} · {version.id}</Tag><Button size="small" onClick={() => void openSubset(row, version.id)}>创建子集</Button></Space>)}</Space> }} />
     <Modal title={target === 'new' ? '新建评测数据集' : '新增不可变版本'} open={Boolean(target) && !importOpen} onCancel={() => setTarget(null)} onOk={() => void save()} okButtonProps={{ loading: busy }} width={720}>
       {target === 'new' && <><Form.Item label="数据集名称" htmlFor="dataset-name"><Input id="dataset-name" value={name} onChange={event => setName(event.target.value)} /></Form.Item><Form.Item label="文件夹" htmlFor="dataset-folder"><Select id="dataset-folder" allowClear value={folderId} onChange={setFolderId} options={folderOptions} /></Form.Item></>}
       <Form.Item label="用例 JSON" htmlFor="dataset-cases"><Input.TextArea id="dataset-cases" rows={14} value={casesText} onChange={event => setCasesText(event.target.value)} /></Form.Item>
