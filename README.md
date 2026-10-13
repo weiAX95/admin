@@ -133,7 +133,7 @@ npm run lint
 npm run test:e2e
 ```
 
-测试会在 `TEST_DATABASE_URL` 指向的实例中创建并删除独立临时数据库，不会修改开发库。端到端测试还会启动独立的 API 和 5187 端口前端，使用本机 Chrome；CI 使用 Playwright Chromium。测试结束后会停止服务并删除临时数据库。GitHub Actions 在每次 push 和 PR 运行静态检查、最高严重度为 high 的依赖漏洞扫描、Node 测试、构建和端到端测试。构建产物位于 `dist/`。字体文件及授权说明位于 `public/fonts/`，用于中文 PDF 导出。
+测试会在 `TEST_DATABASE_URL` 指向的实例中创建并删除独立临时数据库，不会修改开发库。备份测试要求本机 PostgreSQL 18 客户端工具（`pg_dump` 等）；CI 会安装对应版本。端到端测试还会启动独立的 API 和 5187 端口前端，使用本机 Chrome；CI 使用 Playwright Chromium。测试结束后会停止服务并删除临时数据库。GitHub Actions 在每次 push 和 PR 运行静态检查、最高严重度为 high 的依赖漏洞扫描、Node 测试、构建和端到端测试。构建产物位于 `dist/`。字体文件及授权说明位于 `public/fonts/`，用于中文 PDF 导出。
 
 ## 项目结构
 
