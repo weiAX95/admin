@@ -24,7 +24,7 @@ export async function collectAlertMetrics(pool, now = new Date()) {
         count(*) FILTER (WHERE EXISTS (
           SELECT 1 FROM session_quality_flags f WHERE f.session_id=s.id AND f.flag_type='rejection'
         ))::integer AS rejected_count
-      FROM (SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 5) s`)).rows[0];
+      FROM (SELECT id FROM sessions ORDER BY updated_at DESC NULLS LAST LIMIT 5) s`)).rows[0];
     add('session_refusal_streak', refusal.session_count === 5 ? refusal.rejected_count : 0, refusal.session_count);
     const negative = (await client.query(`
       SELECT count(*)::integer AS total,
@@ -94,7 +94,7 @@ export async function handleAlertMetrics({ pathname, method, client, me, url }) 
   const scopeId = url.searchParams.get('scopeId') || '*';
   const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 120));
   const rows = (await client.query(`SELECT metric,scope_type,scope_id,sampled_at,value,source_count
-    FROM alert_metric_samples WHERE ($1::text IS NULL OR metric=$1) AND scope_id=$2
+    FROM alert_metric_samples WHERE ($1::text IS NULL OR metric=$1) AND ($2='*' OR scope_id=$2)
     ORDER BY sampled_at DESC LIMIT $3`, [metric, scopeId, limit])).rows;
   return { status: 200, data: { items: rows } };
 }

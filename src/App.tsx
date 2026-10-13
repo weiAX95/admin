@@ -39,6 +39,7 @@ const Settings = lazy(() => import("./pages/Settings"));
 const ModelCosts = lazy(() => import("./pages/ModelCosts"));
 const ModelCallAudit = lazy(() => import("./pages/ModelCallAudit"));
 const ModelHealth = lazy(() => import("./pages/ModelHealth"));
+const Alerts = lazy(() => import("./pages/Alerts"));
 const ProjectAnalysis = lazy(() => import("./pages/ProjectAnalysis"));
 
 export default function App() {
@@ -85,6 +86,7 @@ export default function App() {
                 <Route path="/model-costs" element={<ModelCosts />} />
                 <Route path="/model-call-audit" element={<ModelCallAudit />} />
                 <Route path="/model-health" element={<ModelHealth />} />
+                <Route path="/alerts" element={<Alerts />} />
                 <Route path="/project-analysis" element={<ProjectAnalysis />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>

@@ -61,6 +61,7 @@ import { handleModelRateLimits } from './model-rate-limits.mjs';
 import { handleModelCallAudit, flushModelCallAudits } from './model-call-audit.mjs';
 import { handleModelHealth, processModelHealthAlerts } from './model-health.mjs';
 import { collectAlertMetrics, handleAlertMetrics } from './alert-metrics.mjs';
+import { evaluateAlertRules, handleAlertRules } from './alert-rules.mjs';
 import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
@@ -607,6 +608,8 @@ async function handleRequest(req, res) {
     if (modelHealthResponse) return send(res, modelHealthResponse.status, modelHealthResponse.data);
     const alertMetricsResponse = await handleAlertMetrics({ pathname, method, client: activeClient, me, url });
     if (alertMetricsResponse) return send(res, alertMetricsResponse.status, alertMetricsResponse.data);
+    const alertRulesResponse = await handleAlertRules({ pathname, method, client: activeClient, me, readBody: () => readBody(req), url });
+    if (alertRulesResponse) return send(res, alertRulesResponse.status, alertRulesResponse.data);
     const modelSecurityResponse = await handleModelSecurity({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (modelSecurityResponse) return send(res, modelSecurityResponse.status, modelSecurityResponse.data);
     if (pathname === '/api/settings/version' && method === 'GET') {
@@ -2096,7 +2099,7 @@ try {
     const collectMetrics = async () => {
       if (collectingAlertMetrics) return;
       collectingAlertMetrics = true;
-      try { await collectAlertMetrics(pool); }
+      try { await collectAlertMetrics(pool); if (await evaluateAlertRules(pool)) notifyLive(); }
       catch (error) { console.error('[alerts] metric collection failed:', error); }
       finally { collectingAlertMetrics = false; }
     };

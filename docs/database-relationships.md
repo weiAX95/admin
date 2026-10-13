@@ -1,6 +1,6 @@
 # 当前数据库关系与页面取数
 
-> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量、成本、上报归属与质量标记见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)、[063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)、[064_session_ingest_ownership.sql](../db/migrations/064_session_ingest_ownership.sql) 、[065_session_quality_flags.sql](../db/migrations/065_session_quality_flags.sql) 、[066_session_clusters.sql](../db/migrations/066_session_clusters.sql) 和 [067_session_cluster_counters.sql](../db/migrations/067_session_cluster_counters.sql)；分析调用恢复见 [068_project_analysis_call_recovery.sql](../db/migrations/068_project_analysis_call_recovery.sql)。迁移后数据库共有 125 张表。
+> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量、成本、上报归属与质量标记见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)、[063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)、[064_session_ingest_ownership.sql](../db/migrations/064_session_ingest_ownership.sql) 、[065_session_quality_flags.sql](../db/migrations/065_session_quality_flags.sql) 、[066_session_clusters.sql](../db/migrations/066_session_clusters.sql) 和 [067_session_cluster_counters.sql](../db/migrations/067_session_cluster_counters.sql)；分析调用恢复见 [068_project_analysis_call_recovery.sql](../db/migrations/068_project_analysis_call_recovery.sql)。迁移后数据库共有 128 张表。
 
 > [069_project_ownership_integrity.sql](../db/migrations/069_project_ownership_integrity.sql) 为项目分析增加复合外键，防止仓库、扫描、分析、建议决定在数据库层交叉归属；表数量不变。迁移遇到历史关联不一致时会报错，需先核对来源，不会自动改写旧记录。
 
@@ -103,7 +103,9 @@ flowchart LR
 
 `/model-health` 用最近五分钟 `model_call_audit` 的请求计算 QPS、延迟分位数和 5xx 比例；没有调用记录只能显示“暂无调用”，不能推断提供商在线。`model_health_alert_state` 记录每个模型上次是否异常及转换轮次，模型删除时级联清除；定时检查仅在从正常转为异常时给管理员写入 `app_notifications`，避免每五秒重复通知。通知和状态表之间没有 SQL 外键。
 
-[082_alert_metric_samples.sql](../db/migrations/082_alert_metric_samples.sql) 新增 `alert_metric_samples`。API 每分钟聚合会话用量、拒答和负面标注、模型最近五分钟 HTTP 错误率／延迟分位数／QPS、最近一小时评测通过率和均分，以及上海日历日成本与月预算使用率，写入以指标、范围和分钟为键的样本，保留 30 天。无调用或无评分的比率不写成 0；日用量与日成本可以为 0。`scope_id` 对模型仅保存原始 ID，**没有外键**，模型删除后样本可在保留期内继续用于历史分析。管理员可经 `/api/alerts/metrics` 读取样本；规则计算和告警处置仍待后续接入。
+[082_alert_metric_samples.sql](../db/migrations/082_alert_metric_samples.sql) 新增 `alert_metric_samples`。API 每分钟聚合会话用量、拒答和负面标注、模型最近五分钟 HTTP 错误率／延迟分位数／QPS、最近一小时评测通过率和均分，以及上海日历日成本与月预算使用率，写入以指标、范围和分钟为键的样本，保留 30 天。无调用或无评分的比率不写成 0；日用量与日成本可以为 0。`scope_id` 对模型仅保存原始 ID，**没有外键**，模型删除后样本可在保留期内继续用于历史分析。管理员可经 `/api/alerts/metrics` 读取样本；规则计算见下一段。
+
+[083_alert_rules.sql](../db/migrations/083_alert_rules.sql) 建立 `alert_rules`、`alert_rule_state` 和 `alert_incidents`。规则包括指标、比较符、阈值、持续秒数、级别、站内／邮件渠道和启用状态；八个内置规则默认关闭。采样完成后按规则和实际模型范围判断，连续越界到达持续时间时仅创建一条活跃事件和首发通知；恢复时结束事件。修改或停用规则会结束旧事件并清空连续越界状态。`alert_rules.created_by` 和 `alert_incidents.acknowledged_by` 指向账号且删除时置空；`alert_rule_state.rule_id` 删除时级联；`alert_incidents.rule_id` 删除时置空以保留历史。规则与样本按指标及模型原始 ID 在代码中对应，**没有跨表 SQL 外键**。管理员在 `/alerts` 管理规则、查看样本与事件、确认触发事件；指派与完整处置流程仍待实现。
 
 ```mermaid
 flowchart LR
@@ -112,6 +114,11 @@ flowchart LR
   Runs[(experiment_run_metrics)] -. "评测指标，无 FK" .-> Samples
   Costs[(model_cost_ledger / model_cost_settings)] -. "成本指标，无 FK" .-> Samples
   Samples --> API["/api/alerts/metrics"]
+  Users[(users)] -->|"FK created_by · SET NULL"| Rules[(alert_rules)]
+  Rules -->|"FK rule_id · CASCADE"| State[(alert_rule_state)]
+  Rules -->|"FK rule_id · SET NULL"| Incidents[(alert_incidents)]
+  Users -->|"FK acknowledged_by · SET NULL"| Incidents
+  Rules -. "metric + scope_id，代码关联" .-> Samples
 ```
 
 `/model-costs` 经 `/api/model-costs` 读取 `model_cost_ledger`。迁移时把已有 `experiment_runs.cost_usd` 减去 `judge_cost_usd` 归主模型，Judge 部分归 Judge 模型；之后数据库触发器在费用写入时同步两部分。账号取批次 `owner_id`，`dataset`／`regression` 批次归评测模块，其余归实验模块。账本以 `(run_id, part)` 为主键，**故意不对运行、模型、账号设外键**，因此删除原记录后已记账费用仍保留；模型或账号删除后显示原始 ID。旧运行账务时间取完成时间或创建时间，新费用以写入账本的 UTC 时刻记账。运行费用字段与账本金额均使用 12 位小数。
@@ -130,7 +137,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [082_alert_metric_samples.sql](../db/migrations/082_alert_metric_samples.sql)。当前共 **125 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [083_alert_rules.sql](../db/migrations/083_alert_rules.sql)。当前共 **128 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
