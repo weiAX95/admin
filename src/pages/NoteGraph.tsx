@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Button, Card, Empty, Select, Space, Spin, Tag, Typography } from "antd";
+import { Alert, Button, Card, Empty, Select, Space, Spin, Tag, Typography, theme } from "antd";
 import { forceCenter, forceCollide, forceLink, forceManyBody, forceSimulation } from "d3-force";
 import { Link, useNavigate } from "react-router-dom";
 import { getKnowledgeGraph } from "../api/notes";
@@ -7,12 +7,16 @@ import type { KnowledgeGraphData } from "../types";
 
 type Node = KnowledgeGraphData["nodes"][number] & { x?: number; y?: number; fx?: number | null; fy?: number | null };
 type Edge = { source: string | Node; target: string | Node; type: KnowledgeGraphData["edges"][number]["type"]; missing: boolean };
-const colors = { note: "#9582ff", task: "#7dcca4", session: "#80b9ed" };
 const labels = { note: "笔记", task: "任务", session: "会话" };
 const radius = (node: Node) => Math.min(31, 14 + Math.sqrt(node.referenceCount) * 4);
 const route = (node: Node) => node.type === "note" ? `/notes/${encodeURIComponent(node.entityId)}` : node.type === "task" ? `/tasks/${encodeURIComponent(node.entityId)}` : `/sessions?sessionId=${encodeURIComponent(node.entityId)}`;
 
 export default function NoteGraph() {
+  const { token } = theme.useToken();
+  const palette = useMemo(() => ({ note: token.colorPrimary, task: token.colorSuccess, session: token.colorInfo, missing: token.colorError, nodeFill: token.colorBgContainer, missingFill: token.colorErrorBg, text: token.colorText }), [token.colorPrimary, token.colorSuccess, token.colorInfo, token.colorError, token.colorBgContainer, token.colorErrorBg, token.colorText]);
+  const paletteRef = useRef(palette);
+  paletteRef.current = palette;
+  const redrawRef = useRef<() => void>(() => undefined);
   const navigate = useNavigate();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [data, setData] = useState<KnowledgeGraphData | null>(null);
@@ -43,11 +47,12 @@ export default function NoteGraph() {
       context.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
       context.clearRect(0, 0, view.width, view.height);
       context.translate(view.x, view.y); context.scale(view.scale, view.scale);
+      const colors = paletteRef.current;
       for (const edge of graph.edges) {
         const source = edge.source as Node; const target = edge.target as Node;
         if (source.x === undefined || target.x === undefined) continue;
         context.beginPath(); context.moveTo(source.x, source.y || 0); context.lineTo(target.x, target.y || 0);
-        context.strokeStyle = edge.missing ? "#ec929f" : edge.type === "reference" ? colors.note : edge.type === "association" ? colors.task : colors.session;
+        context.strokeStyle = edge.missing ? colors.missing : edge.type === "reference" ? colors.note : edge.type === "association" ? colors.task : colors.session;
         context.globalAlpha = .55; context.lineWidth = 1.6; context.setLineDash(edge.missing ? [5, 4] : edge.type === "source" ? [3, 3] : []); context.stroke();
       }
       context.setLineDash([]); context.globalAlpha = 1;
@@ -57,12 +62,13 @@ export default function NoteGraph() {
         if (node.type === "note") context.rect(x - r, y - r, r * 2, r * 2);
         else if (node.type === "session") { context.moveTo(x, y - r * 1.2); context.lineTo(x + r * 1.2, y); context.lineTo(x, y + r * 1.2); context.lineTo(x - r * 1.2, y); context.closePath(); }
         else context.arc(x, y, r, 0, Math.PI * 2);
-        context.fillStyle = node.missing ? "#3a2028" : "#1c2236"; context.strokeStyle = node.missing ? "#ec929f" : colors[node.type];
+        context.fillStyle = node.missing ? colors.missingFill : colors.nodeFill; context.strokeStyle = node.missing ? colors.missing : colors[node.type];
         context.lineWidth = 2; context.fill(); context.stroke();
-        if (view.scale >= .65) { context.font = "12px sans-serif"; context.textAlign = "center"; context.fillStyle = node.missing ? "#ec929f" : "#e8eaf4"; context.fillText(node.title.length > 14 ? `${node.title.slice(0, 14)}…` : node.title, x, y + r + 17, 155); }
+        if (view.scale >= .65) { context.font = "12px sans-serif"; context.textAlign = "center"; context.fillStyle = node.missing ? colors.missing : colors.text; context.fillText(node.title.length > 14 ? `${node.title.slice(0, 14)}…` : node.title, x, y + r + 17, 155); }
       }
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(draw); };
+    redrawRef.current = schedule;
     const simulation = forceSimulation<Node>(graph.nodes)
       .force("link", forceLink<Node, Edge>(graph.edges).id(node => node.id).distance(115))
       .force("charge", forceManyBody().strength(-260))
@@ -100,8 +106,9 @@ export default function NoteGraph() {
     const onWheel = (event: WheelEvent) => { event.preventDefault(); const p = point(event); const next = Math.min(3, Math.max(.35, view.scale * (event.deltaY < 0 ? 1.12 : 1 / 1.12))); view.x = p.x - (p.x - view.x) * next / view.scale; view.y = p.y - (p.y - view.y) * next / view.scale; view.scale = next; schedule(); };
     const observer = new ResizeObserver(resize); observer.observe(canvas); resize();
     canvas.addEventListener("pointerdown", onDown); canvas.addEventListener("pointermove", onMove); canvas.addEventListener("pointerup", onUp); canvas.addEventListener("pointercancel", onCancel); canvas.addEventListener("pointerleave", onLeave); canvas.addEventListener("wheel", onWheel, { passive: false });
-    return () => { active = false; simulation.stop(); observer.disconnect(); if (frame) cancelAnimationFrame(frame); canvas.removeEventListener("pointerdown", onDown); canvas.removeEventListener("pointermove", onMove); canvas.removeEventListener("pointerup", onUp); canvas.removeEventListener("pointercancel", onCancel); canvas.removeEventListener("pointerleave", onLeave); canvas.removeEventListener("wheel", onWheel); };
+    return () => { active = false; redrawRef.current = () => undefined; simulation.stop(); observer.disconnect(); if (frame) cancelAnimationFrame(frame); canvas.removeEventListener("pointerdown", onDown); canvas.removeEventListener("pointermove", onMove); canvas.removeEventListener("pointerup", onUp); canvas.removeEventListener("pointercancel", onCancel); canvas.removeEventListener("pointerleave", onLeave); canvas.removeEventListener("wheel", onWheel); };
   }, [graph, navigate]);
+  useEffect(() => { redrawRef.current(); }, [palette]);
 
   if (error) return <Alert type="error" showIcon message={error} action={<Button size="small" onClick={() => window.location.reload()}>重试</Button>} />;
   if (!graph) return <Spin className="task-detail-loading" />;
