@@ -316,6 +316,11 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
       return ok(await insertVersion(client, dataset.id, version, body.cases,me), 201);
     }
   }
+  const caseRoute = pathname.match(/^\/api\/experiment-dataset-versions\/([^/]+)\/cases\/([^/]+)$/);
+  if (caseRoute && method === 'GET') {
+    const item = (await client.query('SELECT id,case_key,variables,reference_answer,difficulty,category,input_payload,expected_payload,context_payload,tags,difficulty_score,source,expected_tools FROM experiment_dataset_cases WHERE dataset_version_id=$1 AND case_key=$2', [decodeURIComponent(caseRoute[1]), decodeURIComponent(caseRoute[2])])).rows[0];
+    return item ? ok({ item }) : fail('该固定版本中不存在此用例', 404);
+  }
   const versionRoute = pathname.match(/^\/api\/experiment-dataset-versions\/([^/]+)$/);
   if (versionRoute && method === 'GET') {
     const version = (await client.query('SELECT * FROM experiment_dataset_versions WHERE id=$1', [versionRoute[1]])).rows[0];

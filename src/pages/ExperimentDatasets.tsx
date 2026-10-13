@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { App, Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography, Upload } from 'antd';
-import { Link } from 'react-router-dom';
-import { createDataset, createDatasetSubset, createDatasetVersion, createEvaluationFolder, getDatasetVersion, getDatasetVersions, getEvaluationSettings, listDatasets, listEvaluationFolders, updateEvaluationSettings } from '../api/experiment-evaluation';
+import { App, Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Typography, Upload } from 'antd';
+import { Link, useSearchParams } from 'react-router-dom';
+import { createDataset, createDatasetSubset, createDatasetVersion, createEvaluationFolder, getDatasetCase, getDatasetVersion, getDatasetVersions, getEvaluationSettings, listDatasets, listEvaluationFolders, updateEvaluationSettings } from '../api/experiment-evaluation';
 import { getStoredUser } from '../api/client';
 import type { Dataset, DatasetCase } from '../api/experiment-evaluation';
 import { EVALUATION_FIELDS, parseEvaluationFile, previewEvaluationRows } from '../utils/evaluationImport';
@@ -10,6 +10,9 @@ import type { EvaluationField, EvaluationImportSource } from '../utils/evaluatio
 const example = JSON.stringify([{ caseKey: 'case-1', input: '解释 ReAct', expectedOutput: 'ReAct 将思考与行动交替进行', tags: ['Agent'], difficulty: 2, source: 'manual' }], null, 2);
 type Folder = { id: string; name: string; parent_id: string | null };
 export default function ExperimentDatasets() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedVersionId = searchParams.get('versionId');
+  const requestedCaseKey = searchParams.get('caseKey');
   const { message } = App.useApp();
   const [items, setItems] = useState<Dataset[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -33,6 +36,26 @@ export default function ExperimentDatasets() {
   const [mediaGlobalGb, setMediaGlobalGb] = useState(10);
   const [mediaDatasetGb, setMediaDatasetGb] = useState(5);
   const [minFreePercent, setMinFreePercent] = useState(20);
+  const [linkedCase, setLinkedCase] = useState<Record<string, unknown> | null>(null);
+  const [linkedCaseError, setLinkedCaseError] = useState('');
+  const [linkedCaseLoading, setLinkedCaseLoading] = useState(false);
+  useEffect(() => {
+    if (!requestedVersionId || !requestedCaseKey) return;
+    let active = true;
+    setLinkedCaseLoading(true); setLinkedCaseError(''); setLinkedCase(null);
+    void getDatasetCase(requestedVersionId, requestedCaseKey).then(result => {
+      if (!active) return;
+      setLinkedCase(result.item);
+    }).catch(cause => { if (active) setLinkedCaseError(cause instanceof Error ? cause.message : '用例加载失败'); })
+      .finally(() => { if (active) setLinkedCaseLoading(false); });
+    return () => { active = false; };
+  }, [requestedVersionId, requestedCaseKey]);
+  const closeLinkedCase = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('versionId'); next.delete('caseKey');
+    setSearchParams(next, { replace: true });
+    setLinkedCase(null);
+  };
   const load = useCallback(() => Promise.all([listDatasets(), listEvaluationFolders()]).then(([datasets, tree]) => { setItems(datasets.items); setFolders(tree.items); setError(''); }).catch(cause => setError(cause instanceof Error ? cause.message : '加载失败')), []);
   useEffect(() => { void load(); }, [load]);
   const preview = useMemo(() => source ? previewEvaluationRows(source) : [], [source]);
@@ -97,5 +120,8 @@ export default function ExperimentDatasets() {
       <Input aria-label="子集名称" value={subsetName} onChange={event => setSubsetName(event.target.value)} style={{ marginBottom: 12 }} /><Select mode="multiple" aria-label="选择用例" maxTagCount="responsive" value={subsetKeys} onChange={setSubsetKeys} options={subset?.cases.map(item => ({ value: item.case_key, label: item.case_key }))} style={{ width: '100%' }} placeholder="选择源版本中的用例" />
     </Modal>
     <Modal title="评测媒体配额" open={settingsOpen} onCancel={() => setSettingsOpen(false)} onOk={() => void saveSettings()} okButtonProps={{disabled:mediaDatasetGb>mediaGlobalGb || mediaGlobalGb<=0 || mediaDatasetGb<=0}}><Form.Item label="总配额（GB）"><InputNumber min={0.001} step={1} value={mediaGlobalGb} onChange={value=>setMediaGlobalGb(value||0)} /></Form.Item><Form.Item label="单数据集配额（GB）"><InputNumber min={0.001} step={1} value={mediaDatasetGb} onChange={value=>setMediaDatasetGb(value||0)} /></Form.Item><Form.Item label="磁盘最小空闲比例（%）"><InputNumber min={0} max={99} value={minFreePercent} onChange={value=>setMinFreePercent(value||0)} /></Form.Item></Modal>
+    <Modal title={`固定版本用例 · ${requestedCaseKey || ''}`} open={Boolean(requestedVersionId && requestedCaseKey)} onCancel={closeLinkedCase} footer={<Button onClick={closeLinkedCase}>关闭</Button>} width={760}>
+      {linkedCaseLoading ? <Spin /> : linkedCaseError ? <Alert type="error" message={linkedCaseError} /> : linkedCase ? <pre className="global-search-case-detail">{JSON.stringify(linkedCase, null, 2)}</pre> : null}
+    </Modal>
   </Card>;
 }

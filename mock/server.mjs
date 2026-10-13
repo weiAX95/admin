@@ -10,6 +10,7 @@ import http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { listActivity } from "./activity.mjs";
 import { searchSessions } from "./session-search.mjs";
+import { searchGlobally } from "./global-search.mjs";
 import { exportSessions } from "./session-export.mjs";
 import { handleSessionCosts, saveSessionPriceSnapshot } from './session-costs.mjs';
 import { saveSessionQuality } from './session-quality.mjs';
@@ -1829,6 +1830,22 @@ async function withData(work) {
 }
 
 const server = http.createServer((req, res) => {
+  if (new URL(req.url, 'http://localhost').pathname === '/api/search') {
+    if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
+    void (async () => {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      const me = await lookupSession(token);
+      if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      if (req.method !== 'GET') return sendImmediate(res, 405, { error: 'method not allowed' });
+      const query = new URL(req.url, 'http://localhost').searchParams.get('query');
+      const result = await searchGlobally(pool, me, query);
+      return sendImmediate(res, result.status, result.data);
+    })().catch(error => {
+      console.error('[global-search] request failed:', error.message);
+      if (!res.headersSent) sendImmediate(res, 500, { error: '全局搜索暂不可用' });
+    });
+    return;
+  }
   const relatedRoute = new URL(req.url, 'http://localhost').pathname.match(/^\/api\/sessions\/([^/]+)\/related$/);
   if (relatedRoute) {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});

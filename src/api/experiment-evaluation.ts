@@ -18,6 +18,7 @@ export const listBaselines = (datasetVersionId: string, metricVersionId: string)
 export const createDataset = (name: string, cases: DatasetCase[], folderId?: string) => http.post<{ id: string; version: { id: string } }>('/experiment-datasets', { name, cases, folderId });
 export const getDatasetVersions = (id: string) => http.get<{ items: { id: string; version: number }[] }>(`/experiment-datasets/${id}/versions`);
 export const getDatasetVersion = (id: string) => http.get<{ id: string; cases: Record<string,unknown>[] }>(`/experiment-dataset-versions/${id}`);
+export const getDatasetCase = (versionId: string, caseKey: string) => http.get<{ item: Record<string, unknown> }>(`/experiment-dataset-versions/${encodeURIComponent(versionId)}/cases/${encodeURIComponent(caseKey)}`);
 export const createDatasetVersion = (id: string, cases: DatasetCase[]) => http.post<{ id: string; version: number }>(`/experiment-datasets/${id}/versions`, { cases });
 export const createDatasetSubset = (id: string, versionId: string, name: string, caseKeys: string[], folderId?: string) => http.post<{ id: string }>(`/evaluation/datasets/${id}/subset`, { versionId, name, caseKeys, folderId });
 export const listEvaluationFolders = () => http.get<{ items: { id: string; name: string; parent_id: string | null }[] }>('/evaluation/folders');

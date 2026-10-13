@@ -13,6 +13,7 @@ import type { ReviewNotification } from "../types";
 import { listNotifications, markNotificationRead } from "../api/reviews";
 import { useSettings } from "../components/SettingsProvider";
 import { getVersionInfo, type VersionInfo } from "../api/version-info";
+import GlobalSearch from "../components/GlobalSearch";
 
 const { Header, Sider, Content } = Layout;
 const MENU_ITEMS = [
@@ -141,6 +142,7 @@ export default function AdminLayout() {
             <span className="header-breadcrumb">工作空间 <span>/</span> <strong>{page.section}</strong></span>
           </Space>
           <Space size={14} className="header-account">
+            <GlobalSearch />
             <Popover trigger="click" placement="bottomRight" title="站内通知" content={<div style={{ width: 320, maxHeight: 360, overflowY: "auto" }}>
               {notifications.length ? notifications.map(item => <div key={item.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--ant-color-border-secondary)" }}>
                 <Space><Link to={item.targetUrl || `/notes/${item.noteId}`} onClick={() => { if (!item.readAt) void markNotificationRead(item.id).then(refreshNotifications); }}>{item.title}</Link>{!item.readAt && <Badge status="processing" />}</Space>
