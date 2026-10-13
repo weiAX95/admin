@@ -15,7 +15,7 @@ const variableNames = (text: string) => [...new Set([...text.matchAll(/\{\{([a-z
 function GeneratedImage({assetId}:{assetId:string}) {
   const [url,setUrl]=useState('');
   useEffect(()=>{let active=true,objectUrl='';void fetch(`/api/prompt-media/${assetId}`,{headers:{Authorization:`Bearer ${getToken() || ''}`}}).then(response=>{if(!response.ok)throw new Error('图片读取失败');return response.blob();}).then(blob=>{if(active){objectUrl=URL.createObjectURL(blob);setUrl(objectUrl);}}).catch(()=>{if(active)setUrl('');});return()=>{active=false;if(objectUrl)URL.revokeObjectURL(objectUrl);};},[assetId]);
-  return url?<img src={url} alt="模型生成图片" style={{maxWidth:260,maxHeight:220,objectFit:'contain'}} />:<Typography.Text type="secondary">图片加载中或不可用</Typography.Text>;
+  return url?<img src={url} alt="模型生成图片" loading="lazy" decoding="async" style={{maxWidth:260,maxHeight:220,objectFit:'contain'}} />:<Typography.Text type="secondary">图片加载中或不可用</Typography.Text>;
 }
 function GeneratedAudio({assetId}:{assetId:string}) {
   const [url,setUrl]=useState('');
