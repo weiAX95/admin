@@ -17,7 +17,7 @@ const snake = name => name.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}
 const spec = (name, table, fields, children = []) => ({ name, table, fields, children });
 const child = (name, table, fields, parentColumn, orderField = "item_order") => ({ name, table, fields, parentColumn, orderField });
 const specs = [
-  spec("users", "users", ["id", "username", ["passwordHash", "password_hash"], "name", "role", "status", "activationMode", "activatedAt", "maxDevices", "ipAllowlist", "lastLoginAt", "inactiveSince", "deletedAt", "statusBeforeDelete", "reviewEmail", "reviewEmailEnabled", "timeZone", "createdAt", "updatedAt"]),
+  spec("users", "users", ["id", "username", ["passwordHash", "password_hash"], "name", "role", ["superAdminCandidate", "super_admin_candidate"], "status", "activationMode", "activatedAt", "maxDevices", "ipAllowlist", "lastLoginAt", "inactiveSince", "deletedAt", "statusBeforeDelete", "reviewEmail", "reviewEmailEnabled", "timeZone", "createdAt", "updatedAt"]),
   spec("tasks", "tasks", ["id", "title", "description", "category", "phase", "status", "priority", "dueDate", "plannedStartDate", "notes", "progress", "manualProgress", "estimatedHours", "ownerId", "version", "activeCycleStartedAt", "legacyCompletionUnknown", "createdAt", "updatedAt", "recurringSeriesId", "recurrenceIndex"], [
     child("checklist", "task_checklist_items", ["id", "text", "done"], "task_id"),
     child("dependencyIds", "task_dependencies", [["value", "dependency_id"]], "task_id"),
@@ -67,7 +67,7 @@ async function upsert(client, table, fields, item, conflict = "id") {
 }
 
 function prepareParent(entity, name) {
-  if (name === "users") return { ...entity, activationMode: entity.activationMode || "immediate", maxDevices: entity.maxDevices ?? 3, ipAllowlist: entity.ipAllowlist || [], reviewEmailEnabled: entity.reviewEmailEnabled ?? false, timeZone: entity.timeZone || "Asia/Shanghai" };
+  if (name === "users") return { ...entity, superAdminCandidate: entity.superAdminCandidate ?? false, activationMode: entity.activationMode || "immediate", maxDevices: entity.maxDevices ?? 3, ipAllowlist: entity.ipAllowlist || [], reviewEmailEnabled: entity.reviewEmailEnabled ?? false, timeZone: entity.timeZone || "Asia/Shanghai" };
   if (name === "experiments") return { ...entity, recordKind: entity.recordKind || "manual", systemPrompt: entity.systemPrompt || "", userPrompt: entity.userPrompt || "", variables: entity.variables || {} };
   if (name !== "recurringSeries") return entity;
   const snapshot = entity.snapshot || {};

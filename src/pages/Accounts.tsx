@@ -4,6 +4,7 @@ import {
   App,
   Button,
   Card,
+  Checkbox,
   Drawer,
   Form,
   Input,
@@ -29,6 +30,7 @@ import {
 import { getStoredUser } from "../api/client";
 import type { Account, AccountPayload, AuthUser } from "../types";
 import AccountInvitations from "../components/AccountInvitations";
+import { isSuperAdmin } from "../utils/roles";
 
 const ROLE_OPTIONS = [
   { value: "super_admin", label: "超级管理员", disabled: true },
@@ -55,11 +57,13 @@ interface DrawerProps {
   initial: Account | null;
   onClose: () => void;
   onSaved: () => void;
+  canManageCandidates: boolean;
 }
 
-function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
+function AccountFormDrawer({ open, initial, onClose, onSaved, canManageCandidates }: DrawerProps) {
   const [form] = Form.useForm<AccountPayload>();
   const password = Form.useWatch("password", form) || "";
+  const selectedRole = Form.useWatch("role", form);
   const [saving, setSaving] = useState(false);
   const { message } = App.useApp();
   const validPassword = meetsPasswordPolicy(password);
@@ -73,6 +77,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         username: initial.username,
         name: initial.name,
         role: initial.role,
+        superAdminCandidate: initial.superAdminCandidate || false,
         status: initial.status,
         activationMode: initial.activationMode || "immediate",
         maxDevices: initial.maxDevices || 3,
@@ -84,6 +89,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         username: "",
         name: "",
         role: "member",
+        superAdminCandidate: false,
         status: "active",
         activationMode: "immediate",
         maxDevices: 3,
@@ -100,6 +106,8 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         // 编辑：密码留空则不提交（不修改）
         const payload: AccountPayload = { ...values };
         if (!payload.password) delete payload.password;
+        if (!canManageCandidates) delete payload.superAdminCandidate;
+        else if (payload.role !== "admin" && initial.role === "admin") payload.superAdminCandidate = false;
         await updateAccount(initial.id, payload);
         message.success("已更新账号");
       } else {
@@ -156,6 +164,9 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         <Form.Item name="role" label="角色">
           <Select options={ROLE_OPTIONS} disabled={initial?.role === "super_admin"} />
         </Form.Item>
+        {initial?.role === "admin" && canManageCandidates && selectedRole === "admin" && <Form.Item name="superAdminCandidate" valuePropName="checked" extra="提名仅作登记；候选人仍是管理员，不会自动获得 SuperAdmin 权限。">
+          <Checkbox>SuperAdmin 候选人</Checkbox>
+        </Form.Item>}
         {!initial && <Form.Item name="activationMode" label="激活方式" extra="首次登录或手动激活时，账号会先处于待激活状态。">
           <Select options={ACTIVATION_OPTIONS} />
         </Form.Item>}
@@ -252,8 +263,10 @@ export default function Accounts() {
       dataIndex: "role",
       key: "role",
       width: 110,
-      render: (v: Account["role"]) =>
-        v === "super_admin" ? <Tag color="purple">超级管理员</Tag> : v === "admin" ? <Tag color="gold">管理员</Tag> : <Tag>普通成员</Tag>,
+      render: (v: Account["role"], account) => <Space size={4}>
+        {v === "super_admin" ? <Tag color="purple">超级管理员</Tag> : v === "admin" ? <Tag color="gold">管理员</Tag> : <Tag>普通成员</Tag>}
+        {account.superAdminCandidate && <Tag color="blue">候选</Tag>}
+      </Space>,
     },
     {
       title: "状态",
@@ -350,6 +363,7 @@ export default function Accounts() {
       <AccountFormDrawer
         open={drawerOpen}
         initial={editing}
+        canManageCandidates={isSuperAdmin(current)}
         onClose={() => setDrawerOpen(false)}
         onSaved={() => {
           setDrawerOpen(false);

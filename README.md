@@ -36,7 +36,8 @@ npm run dev
 
 `db:import` 仅用于从现有 `mock/db.json` 一次性迁移数据。如果没有旧数据，先运行 `npm run db:migrate`，再按需准备账号；服务不会从空库自动生成演示数据。导入要求目标库为空，在一个事务中保留旧记录 ID 与时间、转换账号密码，并核对记录及关联数量。导入前会将原文件备份到 `mock/db-backups/`，原文件也保留；再次导入会因目标库非空而失败。迁移完成后 API 只读写 PostgreSQL，不再回退或写入 JSON。
 
-`104_super_admin.sql` 在已有数据库中将创建时间最早的启用管理员提升为唯一 SuperAdmin；旧 JSON 导入时也执行此规则。该账号不可停用、降级或删除；普通 Admin 不能修改它。若已有账号却无启用管理员，迁移会明确失败，需先核对账号状态。SuperAdmin 候选人及完整权限矩阵仍在后续开发中。
+`104_super_admin.sql` 在已有数据库中将创建时间最早的启用管理员提升为唯一 SuperAdmin；旧 JSON 导入时也执行此规则。该账号不可停用、降级或删除；普通 Admin 不能修改它。若已有账号却无启用管理员，迁移会明确失败，需先核对账号状态。
+`105_super_admin_candidates.sql` 允许 SuperAdmin 在账号编辑页提名或撤销 Admin 候选人；提名仅作登记，候选人保持 Admin 权限。完整权限矩阵仍在后续开发中。
 
 管理端默认地址为 `http://localhost:5176`，API 默认端口为 `8002`。旧演示数据的账号为 `admin`，密码为 `admin123`，仅供本地使用。`npm run dev` 同时启动 API 与 Vite。
 

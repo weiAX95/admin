@@ -318,7 +318,7 @@ async function enforceDeviceLimit(account) {
 /** 对外返回账号时剔除密码字段 */
 const publicUser = (u) => ({
   id: u.id, username: u.username, name: u.name,
-  role: u.role, status: u.status,
+  role: u.role, superAdminCandidate: Boolean(u.superAdminCandidate), status: u.status,
   activationMode: u.activationMode || "immediate", activatedAt: u.activatedAt || null, maxDevices: u.maxDevices || 3, ipAllowlist: u.ipAllowlist || [],
   deletedAt: u.deletedAt || null,
   createdAt: u.createdAt, updatedAt: u.updatedAt,
@@ -1000,6 +1000,7 @@ async function handleRequest(req, res) {
         if (method === "POST") {
           const body = await readBody(req);
           if (body.role === "super_admin") return send(res, 400, { error: "SuperAdmin 全局唯一，不能直接创建" });
+          if (body.superAdminCandidate) return send(res, 400, { error: "请先创建管理员，再由 SuperAdmin 提名候选人" });
           const uname = String(body.username || "").trim();
           const pwd = String(body.password || "");
           if (!uname) return send(res, 400, { error: "username 为必填项" });
@@ -1076,6 +1077,13 @@ async function handleRequest(req, res) {
         if (target.role === "super_admin" && ((body.role && body.role !== "super_admin") || (body.status && body.status !== "active"))) {
           return send(res, 403, { error: "SuperAdmin 不能降级或停用" });
         }
+        if (body.superAdminCandidate !== undefined) {
+          if (!isSuperAdmin(me)) return send(res, 403, { error: "只有 SuperAdmin 可管理候选人" });
+          if (typeof body.superAdminCandidate !== "boolean") return send(res, 400, { error: "候选人标记必须为布尔值" });
+        }
+        const nextRole = body.role === "admin" || body.role === "member" ? body.role : target.role;
+        const nextCandidate = body.superAdminCandidate ?? Boolean(target.superAdminCandidate);
+        if (nextCandidate && nextRole !== "admin") return send(res, 400, { error: "只有管理员账号可被提名为 SuperAdmin 候选人" });
         if (body.maxDevices !== undefined && (!Number.isInteger(body.maxDevices) || body.maxDevices < 1 || body.maxDevices > 10)) return send(res, 400, { error: "同时登录设备数需为 1–10" });
         const ipAllowlist = body.ipAllowlist === undefined ? undefined : parseLoginIpAllowlist(body.ipAllowlist);
         if (body.ipAllowlist !== undefined && !ipAllowlist) return send(res, 400, { error: "IP 白名单只允许最多 30 个完整 IPv4 或 IPv6 地址" });
@@ -1102,6 +1110,7 @@ async function handleRequest(req, res) {
           }
           target.role = body.role;
         }
+        if (body.superAdminCandidate !== undefined) target.superAdminCandidate = body.superAdminCandidate;
         if (body.status === "active" || body.status === "disabled") {
           if (target.username === me.username && body.status === "disabled") {
             return send(res, 400, { error: "不能禁用当前登录账号" });

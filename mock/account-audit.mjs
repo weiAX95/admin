@@ -25,6 +25,9 @@ export async function recordAccountAction(client, req, res) {
     const before = res.__accountBefore;
     const after = res.__accountAfter;
     if (after && before.role !== after.role) details.roleChange = { from: before.role, to: after.role };
+    if (after && Boolean(before.superAdminCandidate) !== Boolean(after.superAdminCandidate)) {
+      details.superAdminCandidateChange = { from: Boolean(before.superAdminCandidate), to: Boolean(after.superAdminCandidate) };
+    }
     if (before.status !== after?.status) details.statusChange = { from: before.status, to: after?.status || 'purged' };
   } else if (pathname === '/api/users' && req.method === 'POST') {
     details.roleChange = { from: null, to: response.payload?.role };

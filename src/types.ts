@@ -349,6 +349,7 @@ export interface Account {
   username: string;
   name: string;
   role: AccountRole;
+  superAdminCandidate?: boolean;
   status: AccountStatus;
   activationMode?: ActivationMode;
   activatedAt?: string | null;
