@@ -1,4 +1,4 @@
-import { isAdministrator } from './roles.mjs';
+import { canAccess } from './permissions.mjs';
 import { notifyUser } from './app-notifications.mjs';
 
 export async function getModelHealthReport(client) {
@@ -27,7 +27,7 @@ export async function getModelHealthReport(client) {
 
 export async function handleModelHealth({ pathname, method, client, me }) {
   if (pathname !== '/api/model-health' || method !== 'GET') return null;
-  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可查看模型健康状态' } };
+  if (!canAccess(me, 'model_health', 'read')) return { status: 403, data: { error: '仅管理员可查看模型健康状态' } };
   return { status: 200, data: await getModelHealthReport(client) };
 }
 

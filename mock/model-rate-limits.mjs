@@ -1,4 +1,4 @@
-import { isAdministrator } from './roles.mjs';
+import { canAccess } from './permissions.mjs';
 import crypto from 'node:crypto';
 import { notifyUser } from './app-notifications.mjs';
 
@@ -7,7 +7,8 @@ const retryAfter = () => Math.max(1, Math.ceil((60000 - Date.now() % 60000) / 10
 
 export async function handleModelRateLimits({ pathname, method, client, me, readBody }) {
   if (pathname !== '/api/model-rate-limits' && pathname !== '/api/model-rate-status') return null;
-  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可管理模型速率限制' } };
+  const operation = method === 'GET' ? 'read' : method === 'DELETE' ? 'delete' : 'update';
+  if (!canAccess(me, 'model_rate_limits', operation)) return { status: 403, data: { error: '仅管理员可管理模型速率限制' } };
   if (pathname === '/api/model-rate-status' && method === 'GET') {
     const rows = (await client.query(`SELECT l.model_id,m.display_name,l.rpm,l.tpm,
       COALESCE(SUM(r.reserved_requests),0)::bigint AS used_requests,

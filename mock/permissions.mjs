@@ -63,6 +63,21 @@ export const PERMISSION_RESOURCES = [
   { id: 'model_connections', label: '模型连接', description: '管理员查看、创建与修改连接；连接测试为管理操作。当前没有删除接口。', access: {
     read: admins, create: admins, update: admins, delete: nobody, manage: admins,
   } },
+  { id: 'model_quotas', label: '模型 Token 配额', description: '管理员读取、设置或移除模型日配额；设置接口可创建或更新配额。', access: {
+    read: admins, create: admins, update: admins, delete: admins, manage: nobody,
+  } },
+  { id: 'model_costs', label: '模型成本', description: '成本报表只读；月预算由管理员读取和修改。', access: {
+    read: admins, create: nobody, update: admins, delete: nobody, manage: nobody,
+  } },
+  { id: 'model_rate_limits', label: '模型速率限制', description: '管理员读取实时限流状态，设置或移除模型 RPM/TPM 限制。', access: {
+    read: admins, create: admins, update: admins, delete: admins, manage: nobody,
+  } },
+  { id: 'model_security', label: '模型安全策略', description: '管理员读取安全事件及策略、修改策略；事件记录不可通过业务接口改写。', access: {
+    read: admins, create: nobody, update: admins, delete: nobody, manage: nobody,
+  } },
+  { id: 'model_health', label: '模型健康', description: '健康状态面板只读，仅管理员可访问。', access: {
+    read: admins, create: nobody, update: nobody, delete: nobody, manage: nobody,
+  } },
 ];
 
 const byResource = new Map(PERMISSION_RESOURCES.map(resource => [resource.id, resource]));

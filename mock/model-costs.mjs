@@ -1,4 +1,4 @@
-import { isAdministrator } from './roles.mjs';
+import { canAccess } from './permissions.mjs';
 import { notifyUser } from './app-notifications.mjs';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -6,7 +6,7 @@ const DIMENSIONS = new Set(['model', 'user', 'module']);
 
 export async function handleModelCosts({ pathname, method, client, me, url }) {
   if (pathname !== '/api/model-costs' || method !== 'GET') return null;
-  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可查看成本报表' } };
+  if (!canAccess(me, 'model_costs', 'read')) return { status: 403, data: { error: '仅管理员可查看成本报表' } };
   const end = url.searchParams.get('end') || new Date().toISOString().slice(0, 10);
   const endTime = Date.parse(`${end}T00:00:00Z`);
   const start = url.searchParams.get('start') || (Number.isNaN(endTime) ? '' : new Date(endTime - 29 * 86400000).toISOString().slice(0, 10));
@@ -69,7 +69,7 @@ export async function monthlyCostStatus(client) {
 
 export async function handleModelCostBudget({ pathname, method, client, me, readBody }) {
   if (pathname !== '/api/model-cost-budget') return null;
-  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可管理模型月预算' } };
+  if (!canAccess(me, 'model_costs', method === 'GET' ? 'read' : 'update')) return { status: 403, data: { error: '仅管理员可管理模型月预算' } };
   if (method === 'GET') return { status: 200, data: await monthlyCostStatus(client) };
   if (method !== 'PUT') return null;
   const body = await readBody();
