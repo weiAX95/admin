@@ -255,7 +255,7 @@ flowchart LR
 
 用户接受分析建议时创建的学习任务会在同一事务关联该仓库；若建议关联了固定版本需求结论，也会带入对应需求 ID。旧的已接受任务由 073 迁移补关联，只有任务仍存在、归属账号相符且此前没有手工关联时才补写。
 
-`project_requirement_baselines` 按仓库保存不可改写的需求正文、递增版本号及正文 SHA-256。`project_repositories.baseline_version_id` 指向当前版本；`project_analyses.baseline_version_id` 固定分析时版本。旧 `requirement_baseline` 文本只是标签，迁移不伪造旧文档正文。新增版本使用仓库行锁和预期当前版本检查；正文作为不可信材料进入模型输入。删除仓库会级联删除其需求版本与分析；两个版本指针删除时置空。
+`project_requirement_baselines` 按仓库保存不可改写的需求正文、递增版本号及正文 SHA-256。`project_repositories.baseline_version_id` 指向当前版本；`project_analyses.baseline_version_id` 固定分析时版本。旧 `requirement_baseline` 文本只是标签，迁移不伪造旧文档正文。新增版本使用仓库行锁和预期当前版本检查；正文作为不可信材料进入模型输入，创建成功时在同一事务写操作审计。删除仓库会级联删除其需求版本与分析；两个版本指针删除时置空。
 
 `project_scans` 固定创建时的仓库名称、分支与 commit，记录排队、扫描中、完整、部分或失败状态及各类覆盖计数。进行中的相同仓库／commit 扫描由唯一索引合并；服务重启后排队或扫描中的作业重新运行。`project_scan_files` 以扫描 ID 与路径为复合主键，保存文件 Git SHA、大小、分类、读取状态、内容哈希及成功读取的 UTF-8 正文；非读取成功的记录由 CHECK 约束禁止保存正文。列表只返回索引字段，正文读取接口先验证当前账号拥有仓库连接。迁移前的旧扫描正文为空，需要重新扫描。
 

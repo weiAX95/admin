@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { containsKnownSecret } from './project-scan.mjs';
+import { appendSecurityAudit } from './account-audit.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status,error) => ({ status, data: { error } });
 const view = row => ({ id: row.id, repositoryId: row.repository_id, version: row.version, contentSha256: row.content_sha256.trim(), createdAt: row.created_at, ...(row.content === undefined ? {} : { content: row.content }) });
 
-export async function handleProjectRequirementBaselines({ pathname, method, client, me, readBody }) {
+export async function handleProjectRequirementBaselines({ pathname, method, client, me, readBody, req }) {
   const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/baselines(?:\/([^/]+))?$/);
   if (!match) return null;
   const [,repositoryId,baselineId] = match;
@@ -38,6 +39,7 @@ export async function handleProjectRequirementBaselines({ pathname, method, clie
     const sha = crypto.createHash('sha256').update(content).digest('hex');
     const row = (await connection.query('INSERT INTO project_requirement_baselines(id,repository_id,version,content,content_sha256) VALUES($1,$2,$3,$4,$5) RETURNING *',[id,repositoryId,next,content,sha])).rows[0];
     await connection.query('UPDATE project_repositories SET baseline_version_id=$2,requirement_baseline=$3,updated_at=now() WHERE id=$1',[repositoryId,id,`需求文档 v${next}`]);
+    if (req) await appendSecurityAudit(connection,req,me,'create','project_requirement_baselines',id,{repositoryId,version:next});
     await connection.query('COMMIT');
     return { status: 201, data: view(row) };
   } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }

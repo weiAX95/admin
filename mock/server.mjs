@@ -2324,9 +2324,9 @@ const server = http.createServer((req, res) => {
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       const url = new URL(req.url, 'http://localhost');
       const pathname = url.pathname;
-      const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
+      const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
         || await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
-        || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req) })
+        || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req) })
         || await handleProjectScans({ pathname, method: req.method, client: pool, me, url: new URL(req.url, 'http://localhost') })
         || await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req });

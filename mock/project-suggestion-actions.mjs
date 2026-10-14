@@ -5,6 +5,7 @@ import { recordTaskTrendEvent, recordTaskTrendSnapshot } from './task-trends.mjs
 import { recordTaskChanges } from './task-change-log.mjs';
 import { canAccess } from './permissions.mjs';
 import { isAdministrator } from './roles.mjs';
+import { appendSecurityAudit } from './account-audit.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status,error,extra={}) => ({ status, data: { error,...extra } });
@@ -21,7 +22,7 @@ function appendedDescription(task, row) {
   return { addition, description: `${task.description || ''}${task.description ? '\n\n---\n\n' : ''}${addition}` };
 }
 
-export async function handleProjectSuggestionAction({ pathname, method, client, me, url, readBody = async () => ({}) }) {
+export async function handleProjectSuggestionAction({ pathname, method, client, me, url, readBody = async () => ({}), req }) {
   const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/([^/]+)\/suggestions\/([^/]+)\/(accept|ignore|preview)$/);
   if (!match) return null;
   if (method !== (match[4] === 'preview' ? 'GET' : 'POST')) return fail(405,'不支持该操作');
@@ -99,6 +100,10 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
       await connection.query('INSERT INTO project_repository_tasks(repository_id,task_id,linked_by,requirement_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [repositoryId,taskId,me.id,row.finding_requirement_id]);
     }
     const decision = (await connection.query('INSERT INTO project_suggestion_decisions(suggestion_id,analysis_id,repository_id,owner_id,state,task_id,fingerprint,target_mode) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING decided_at', [suggestionId,analysisId,repositoryId,me.id,action === 'accept' ? 'accepted' : 'ignored',taskId,key,targetMode])).rows[0];
+    if (req) {
+      if (action === 'accept') await appendSecurityAudit(connection,req,me,targetMode === 'created' ? 'create' : 'update','tasks',taskId,{source:'project_suggestion',suggestionId});
+      await appendSecurityAudit(connection,req,me,action,'project_suggestion_decisions',suggestionId,{repositoryId,analysisId,taskId});
+    }
     await connection.query('COMMIT');
     return { status: action === 'accept' ? 201 : 200, data: { suggestionId, status: action === 'accept' ? 'accepted' : 'ignored', taskId, targetMode, decidedAt: decision.decided_at } };
   } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
