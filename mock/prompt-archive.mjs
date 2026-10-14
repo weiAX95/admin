@@ -8,6 +8,7 @@ import {Transform} from 'node:stream';
 import yazl from 'yazl';
 import yauzl from 'yauzl';
 import {buildPromptTransfer,importPrompts} from './prompts.mjs';
+import {appendSecurityAudit} from './account-audit.mjs';
 import {inspectPromptMedia,maximumPromptMediaSize,promptMediaPath} from './prompt-media.mjs';
 
 const archiveLimit=1024*1024*1024;
@@ -126,7 +127,10 @@ async function importArchive(req,res,pool,account,confirm) {
       for(const file of created) await fsp.unlink(file).catch(()=>{});
       created.length=0;
     }
-    else await client.query('COMMIT');
+    else {
+      if(result.data.imported || created.length) await appendSecurityAudit(client,req,account,'import','prompts',null,{imported:result.data.imported,skipped:result.data.skipped,mediaCreated:created.length});
+      await client.query('COMMIT');
+    }
     json(res,result.status,result.data);
   } catch(cause) {
     if(client) await client.query('ROLLBACK').catch(()=>{});

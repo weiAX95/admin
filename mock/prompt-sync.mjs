@@ -1,6 +1,7 @@
 import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import {importPrompts} from './prompts.mjs';
+import {appendSecurityAudit} from './account-audit.mjs';
 
 const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
 const invalid=(message,status=400)=>Object.assign(new Error(message),{status});
@@ -149,7 +150,11 @@ export async function handlePromptSync(req,res,pool,lookupSession) {
     try {
       await client.query('BEGIN');await client.query('SELECT pg_advisory_xact_lock(748201)');
       const result=await importPrompts(client,account,{document,confirmFindings:body.confirmFindings===true},confirm);
-      if(result.status>=400||!confirm) await client.query('ROLLBACK');else await client.query('COMMIT');
+      if(result.status>=400||!confirm) await client.query('ROLLBACK');
+      else {
+        if(result.data.imported) await appendSecurityAudit(client,req,account,'sync','prompts',null,{provider,imported:result.data.imported,skipped:result.data.skipped});
+        await client.query('COMMIT');
+      }
       json(res,result.status,{...result.data,digest,externalSkipped:fetched.skipped});
     } catch(cause) {await client.query('ROLLBACK').catch(()=>{});throw cause;} finally {client.release();}
   } catch(cause) {json(res,cause.status||502,{error:cause.message||'外部同步失败'});}

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { appendSecurityAudit } from './account-audit.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 export const assetDir = process.env.ASSET_DIR || path.join(root, "uploads");
@@ -39,7 +40,8 @@ export async function handleAssetRequest(req, res, pool, lookupSession, canReadS
   const token = /^Bearer (.+)$/.exec(req.headers.authorization || "")?.[1];
   const assetMatch = pathname.match(assetRoute);
   const publicLogo = assetMatch && req.method === "GET" && (await pool.query('SELECT logo_url FROM system_settings WHERE id=1')).rows[0]?.logo_url === pathname;
-  if (!await lookupSession(token) && !publicLogo && !(assetMatch && req.method === "GET" && await canReadSharedAsset(url.searchParams.get("share"), assetMatch[1]))) return json(res, 401, { error: "请先登录" });
+  const account = await lookupSession(token);
+  if (!account && !publicLogo && !(assetMatch && req.method === "GET" && await canReadSharedAsset(url.searchParams.get("share"), assetMatch[1]))) return json(res, 401, { error: "请先登录" });
   if (pathname === "/api/assets" && req.method === "POST") {
     try {
       if (Number(req.headers["content-length"] || 0) > MAX_BYTES) return json(res, 413, { error: "图片不能超过 10 MB" });
@@ -49,7 +51,16 @@ export async function handleAssetRequest(req, res, pool, lookupSession, canReadS
       const id = crypto.randomUUID();
       await fs.mkdir(assetDir, { recursive: true });
       await fs.writeFile(path.join(assetDir, id), data, { flag: "wx" });
-      try { await pool.query("INSERT INTO media_assets(id,mime_type,byte_size) VALUES($1,$2,$3)", [id, mime, data.length]); }
+      try {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query("INSERT INTO media_assets(id,mime_type,byte_size) VALUES($1,$2,$3)", [id, mime, data.length]);
+          await appendSecurityAudit(client, req, account, 'create', 'assets', id);
+          await client.query('COMMIT');
+        } catch (error) { await client.query('ROLLBACK'); throw error; }
+        finally { client.release(); }
+      }
       catch (error) { await fs.unlink(path.join(assetDir, id)).catch(() => {}); throw error; }
       return json(res, 201, { id, url: `/api/assets/${id}` });
     } catch (error) {

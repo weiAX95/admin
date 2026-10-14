@@ -8,6 +8,7 @@ import { Transform } from 'node:stream';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import ffprobe from 'ffprobe-static';
+import { appendSecurityAudit } from './account-audit.mjs';
 
 const execFileAsync=promisify(execFile);
 const directory=process.env.PROMPT_MEDIA_DIR || path.join(path.dirname(fileURLToPath(import.meta.url)),'prompt-media');
@@ -90,7 +91,16 @@ export async function handlePromptMedia(req,res,pool,lookupSession,canReadShared
       if (!bytes) throw Object.assign(new Error('文件不能为空'),{status:400});
       const {mime,duration}=await inspectPromptMedia(temp,kind);
       await fsp.rename(temp,promptMediaPath(id));
-      try {await pool.query('INSERT INTO prompt_media_assets(id,kind,mime_type,byte_size,duration_seconds,sha256,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,kind,mime,bytes,duration,hash.digest('hex'),account.id]);}
+      try {
+        const client=await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query('INSERT INTO prompt_media_assets(id,kind,mime_type,byte_size,duration_seconds,sha256,uploaded_by) VALUES($1,$2,$3,$4,$5,$6,$7)',[id,kind,mime,bytes,duration,hash.digest('hex'),account.id]);
+          await appendSecurityAudit(client,req,account,'create','prompt-media',id);
+          await client.query('COMMIT');
+        } catch(error) {await client.query('ROLLBACK');throw error;}
+        finally {client.release();}
+      }
       catch(error){await fsp.unlink(promptMediaPath(id)).catch(()=>{});throw error;}
       return json(res,201,{id,url:`/api/prompt-media/${id}`,kind,mimeType:mime,byteSize:bytes,durationSeconds:duration});
     } catch(error){await fsp.unlink(temp).catch(()=>{});return json(res,error.status || 500,{error:error.status?error.message:'媒体保存失败'});}
