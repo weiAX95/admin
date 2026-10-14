@@ -11,6 +11,7 @@ import { containsKnownSecret } from './project-scan.mjs';
 import { relatedAcceptedSuggestions } from './project-suggestion-similarity.mjs';
 import { compareProjectReports } from './project-report-comparison.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
+import { canAccess } from './permissions.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -170,8 +171,9 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (compare) {
     const [, repositoryId, olderId, newerId] = compare;
     if (method !== 'GET' || ![repositoryId,olderId,newerId].every(value => UUID.test(value)) || olderId === newerId) return fail(400,'报告对照参数无效');
-    const repository = (await client.query('SELECT id FROM project_repositories WHERE id=$1 AND owner_id=$2', [repositoryId,me.id])).rows[0];
+    const repository = (await client.query('SELECT id,owner_id FROM project_repositories WHERE id=$1 AND owner_id=$2', [repositoryId,me.id])).rows[0];
     if (!repository) return fail(404,'项目不存在');
+    if (!canAccess(me,'project_analyses','read',{ownerId:repository.owner_id})) return fail(403,'无权查看项目分析');
     const rows = (await client.query("SELECT * FROM project_analyses WHERE repository_id=$1 AND id=ANY($2::uuid[]) AND status='completed'", [repositoryId,[olderId,newerId]])).rows;
     if (rows.length !== 2) return fail(404,'已完成报告不存在');
     const olderRow = rows.find(item => item.id === olderId), newerRow = rows.find(item => item.id === newerId);
@@ -196,6 +198,8 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (!UUID.test(repositoryId) || analysisId && !UUID.test(analysisId)) return fail(404,'项目或分析不存在');
   const repository = (await client.query('SELECT * FROM project_repositories WHERE id=$1 AND owner_id=$2', [repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
+  const operation = method === 'POST' ? analysisId ? 'manage' : 'create' : 'read';
+  if (!canAccess(me,'project_analyses',operation,{ownerId:repository.owner_id})) return fail(403,'无权访问项目分析');
   if (method === 'GET' && !analysisId) {
     const before = url?.searchParams.get('before') || null;
     if (before && !UUID.test(before)) return fail(400,'历史游标无效');

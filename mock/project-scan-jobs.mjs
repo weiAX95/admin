@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import pg from 'pg';
 import { scanPublicRepository } from './project-scan.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
+import { canAccess } from './permissions.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status,error) => ({ status, data: { error } });
@@ -56,6 +57,8 @@ export async function handleProjectScans({ pathname, method, client, me, url, sc
   if (!UUID.test(repositoryId) || scanId && !UUID.test(scanId)) return fail(404,'项目或扫描不存在');
   const repository = (await client.query('SELECT * FROM project_repositories WHERE id=$1 AND owner_id=$2', [repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
+  const operation = method === 'POST' && !scanId ? 'create' : 'read';
+  if (!canAccess(me,'project_scans',operation,{ownerId:repository.owner_id})) return fail(403,'无权访问仓库扫描');
   if (method === 'GET' && !scanId) {
     const rows = (await client.query('SELECT * FROM project_scans WHERE repository_id=$1 ORDER BY created_at DESC LIMIT 20', [repositoryId])).rows;
     return { status: 200, data: { items: rows.map(view) } };

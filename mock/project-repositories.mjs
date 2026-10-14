@@ -4,6 +4,7 @@ import { isAdministrator } from './roles.mjs';
 import { parseProjectRequirements } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
+import { canAccess } from './permissions.mjs';
 
 export function parseGitHubRepository(value) {
   let url;
@@ -100,10 +101,12 @@ async function resolveRepository(fetchGithub, parsed, requestedBranch) {
 export async function handleProjectRepositories({ pathname, method, client, me, readBody, req, fetchGithub = githubFetch }) {
   if (pathname !== '/api/project-repositories' && !/^\/api\/project-repositories\/[0-9a-f-]{36}(?:\/refresh|\/tasks(?:\/[^/]+)?)?$/i.test(pathname)) return null;
   if (pathname === '/api/project-repositories' && method === 'GET') {
+    if (!canAccess(me,'project_repositories','read',{ownerId:me.id})) return fail(403,'无权查看项目仓库');
     const rows = (await client.query(`${repositoryQuery} WHERE r.owner_id=$1 ORDER BY r.updated_at DESC`, [me.id])).rows;
     return { status: 200, data: { items: rows.map(publicRow) } };
   }
   if (pathname === '/api/project-repositories' && method === 'POST') {
+    if (!canAccess(me,'project_repositories','create')) return fail(403,'无权创建项目仓库');
     const body = await readBody();
     let parsed;
     try { parsed = parseGitHubRepository(body?.url); } catch (error) { return fail(400, error.message); }
@@ -124,6 +127,10 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
   if (!UUID.test(id)) return fail(404, '项目不存在');
   const row = (await client.query(`${repositoryQuery} WHERE r.id=$1 AND r.owner_id=$2`, [id,me.id])).rows[0];
   if (!row) return fail(404, '项目不存在');
+  const taskRoute = pathname.includes('/tasks');
+  const operation = pathname.endsWith('/refresh') || (taskRoute && method !== 'GET')
+    ? 'manage' : method === 'PATCH' ? 'update' : 'read';
+  if (!canAccess(me,'project_repositories',operation,{ownerId:row.owner_id})) return fail(403,'无权操作该项目仓库');
   if (pathname.endsWith('/tasks') && method === 'GET') {
     const items = (await client.query(`SELECT t.id,t.title,t.status,t.progress,t.owner_id AS "ownerId",l.requirement_id AS "requirementId" FROM project_repository_tasks l
       JOIN tasks t ON t.id=l.task_id WHERE l.repository_id=$1 AND t.deleted_at IS NULL ORDER BY l.created_at DESC,t.id`, [id])).rows;

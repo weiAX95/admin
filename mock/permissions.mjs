@@ -21,7 +21,7 @@ export const PERMISSION_SCOPES = {
   visible: '有权访问的任务',
   allowed_models: '仅可使用的模型',
   personal: '预置与个人模板',
-  own: '仅本人创建',
+  own: '仅本人资源',
   non_super_admin: '除 SuperAdmin 外',
   protected: '其他账号及本人非受保护字段',
 };
@@ -98,6 +98,19 @@ export const PERMISSION_RESOURCES = [
   } },
   { id: 'model_health', label: '模型健康', description: '健康状态面板只读，仅管理员可访问。', access: {
     read: admins, create: nobody, update: nobody, delete: nobody, manage: nobody,
+  } },
+  { id: 'project_repositories', label: '项目仓库', description: '所有账号仅能查看、创建和修改自己的仓库；刷新和任务关联属于管理操作。当前没有删除接口。', access: {
+    read: { super_admin: 'own', admin: 'own', member: 'own' }, create: { super_admin: 'own', admin: 'own', member: 'own' },
+    update: { super_admin: 'own', admin: 'own', member: 'own' }, delete: nobody,
+    manage: { super_admin: 'own', admin: 'own', member: 'own' },
+  } },
+  { id: 'project_scans', label: '仓库扫描', description: '所有账号仅能读取自己仓库的扫描、文件内容并发起扫描；当前没有修改和删除接口。', access: {
+    read: { super_admin: 'own', admin: 'own', member: 'own' }, create: { super_admin: 'own', admin: 'own', member: 'own' },
+    update: nobody, delete: nobody, manage: nobody,
+  } },
+  { id: 'project_analyses', label: '项目分析', description: '所有账号仅能读取自己仓库的报告、发起分析并取消或重试自己的分析；当前没有删除接口。', access: {
+    read: { super_admin: 'own', admin: 'own', member: 'own' }, create: { super_admin: 'own', admin: 'own', member: 'own' },
+    update: nobody, delete: nobody, manage: { super_admin: 'own', admin: 'own', member: 'own' },
   } },
 ];
 
