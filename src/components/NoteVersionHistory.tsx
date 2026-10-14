@@ -5,7 +5,7 @@ import { listNoteVersions, restoreNoteVersion } from "../api/notes";
 import type { NoteVersion } from "../types";
 import MarkdownContent from "./MarkdownContent";
 
-export default function NoteVersionHistory({ noteId, onRestored }: { noteId: string; onRestored: () => void }) {
+export default function NoteVersionHistory({ noteId, onRestored, readOnly = false }: { noteId: string; onRestored: () => void; readOnly?: boolean }) {
   const { message } = App.useApp();
   const [items, setItems] = useState<NoteVersion[]>([]);
   const [selectedId, setSelectedId] = useState<string>();
@@ -44,7 +44,7 @@ export default function NoteVersionHistory({ noteId, onRestored }: { noteId: str
   return <div className="note-version-layout">
     <div className="note-version-list"><Typography.Title level={5}>版本时间线</Typography.Title>{items.map(item => <div key={item.id} className={`note-version-row${item.id === selectedId ? " selected" : ""}`}><Button type="link" onClick={() => setSelectedId(item.id)}>版本 {item.versionNumber} · {new Date(item.createdAt).toLocaleString("zh-CN", { hour12: false })}</Button><Typography.Text type="secondary">{item.reason === "restore" ? "回滚生成" : item.reason === "baseline" ? "历史基线" : "保存"}</Typography.Text></div>)}</div>
     <div className="note-version-main">
-      {selected && <><Space wrap><Typography.Title level={5} style={{ margin: 0 }}>查看版本 {selected.versionNumber}</Typography.Title><Popconfirm title={`恢复到版本 ${selected.versionNumber}？`} description="恢复后会生成一条新版本，旧版本仍保留。" okText="恢复" cancelText="取消" onConfirm={() => void restore(selected)}><Button size="small" loading={busy}>回滚到此版本</Button></Popconfirm></Space><Typography.Title level={4}>{selected.title}</Typography.Title><MarkdownContent content={selected.content} /></>}
+      {selected && <><Space wrap><Typography.Title level={5} style={{ margin: 0 }}>查看版本 {selected.versionNumber}</Typography.Title>{!readOnly && <Popconfirm title={`恢复到版本 ${selected.versionNumber}？`} description="恢复后会生成一条新版本，旧版本仍保留。" okText="恢复" cancelText="取消" onConfirm={() => void restore(selected)}><Button size="small" loading={busy}>回滚到此版本</Button></Popconfirm>}</Space><Typography.Title level={4}>{selected.title}</Typography.Title><MarkdownContent content={selected.content} /></>}
       {items.length > 1 && <div className="note-version-compare"><Typography.Title level={5}>对比两个版本</Typography.Title><Space wrap><Select aria-label="对比旧版本" value={leftId} options={options} onChange={setLeftId} style={{ width: 245 }} /><Typography.Text>→</Typography.Text><Select aria-label="对比新版本" value={rightId} options={options} onChange={setRightId} style={{ width: 245 }} /></Space>
         {left && right && <div className="note-diff-grid"><div><Typography.Text strong>旧：</Typography.Text><div className={left.title !== right.title ? "note-diff-removed" : ""}>{left.title}</div>{changes.map((change, index) => !change.added && <pre key={index} className={change.removed ? "note-diff-removed" : ""}>{change.value}</pre>)}</div><div><Typography.Text strong>新：</Typography.Text><div className={left.title !== right.title ? "note-diff-added" : ""}>{right.title}</div>{changes.map((change, index) => !change.removed && <pre key={index} className={change.added ? "note-diff-added" : ""}>{change.value}</pre>)}</div></div>}
       </div>}

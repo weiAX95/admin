@@ -9,6 +9,9 @@ import { categoryPath } from "../components/NoteCategoryManager";
 import { StatusTag } from "../components/TaskMeta";
 import NoteVersionHistory from "../components/NoteVersionHistory";
 import { downloadBlob, noteFilename, noteHtml, noteMarkdown } from "../utils/noteExport";
+import { getStoredUser } from "../api/client";
+import type { AuthUser } from "../types";
+import { isAdministrator } from "../utils/roles";
 
 export default function NoteDetail() {
   const { message } = App.useApp();
@@ -37,6 +40,8 @@ export default function NoteDetail() {
   }, [note?.taskId]);
   if (error) return <Alert type="error" showIcon message={error} />;
   if (!note) return <Spin className="task-detail-loading" />;
+  const currentAccount = getStoredUser<AuthUser>();
+  const canEditNote = isAdministrator(currentAccount) || Boolean(currentAccount?.id && note.ownerId === currentAccount.id);
   const exportNote = async (format: "md" | "html" | "pdf") => {
     setExporting(true);
     try {
@@ -61,6 +66,6 @@ export default function NoteDetail() {
     <Space><Link to="/notes/graph"><Button>查看知识图谱</Button></Link><Link to="/notes"><Button>查看全部笔记</Button></Link></Space>
   </>;
   return <Card title={note.title} extra={<Space><Dropdown menu={{ items: ["md", "pdf", "html"].map(format => ({ key: format, label: format === "md" ? "导出 Markdown" : format === "pdf" ? "导出 PDF" : "导出 HTML" })), onClick: ({ key }) => void exportNote(key as "md" | "pdf" | "html") }}><Button loading={exporting}>导出笔记</Button></Dropdown>{note.taskId ? <Link to={`/tasks/${note.taskId}`}>返回关联任务</Link> : <Link to="/notes">返回笔记列表</Link>}</Space>}>
-    <Tabs items={[{ key: "content", label: "正文", children: content }, { key: "history", label: "历史版本", children: <NoteVersionHistory noteId={note.id} onRestored={() => { void getNote(note.id).then(setNote); }} /> }]} />
+    <Tabs items={[{ key: "content", label: "正文", children: content }, { key: "history", label: "历史版本", children: <NoteVersionHistory noteId={note.id} onRestored={() => { void getNote(note.id).then(setNote); }} readOnly={!canEditNote} /> }]} />
   </Card>;
 }

@@ -182,6 +182,7 @@ export interface SessionDetail extends SessionSummary {
 
 export interface Note {
   id: string;
+  ownerId?: string | null;
   title: string;
   content: string;
   taskId: string | null;
@@ -218,7 +219,7 @@ export interface KnowledgeGraphData {
 }
 export interface NoteVersion { id: string; noteId: string; versionNumber: number; title: string; content: string; reason: "baseline" | "save" | "restore"; createdAt: string; }
 
-export type NotePayload = Partial<Omit<Note, "id" | "createdAt" | "updatedAt">>;
+export type NotePayload = Partial<Omit<Note, "id" | "ownerId" | "createdAt" | "updatedAt">>;
 export interface ReviewItem { noteId: string; title: string; step: number; generation: number; dueOn: string; lastReviewedAt: string | null; }
 export interface ReviewNotification { id: string; kind?: string; noteId: string | null; title: string; body?: string; dueOn: string | null; targetUrl?: string; createdAt: string; readAt: string | null; emailStatus: "skipped" | "pending" | "sending" | "sent" | "failed"; }
 export interface ReviewSettings { email: string; emailEnabled: boolean; smtpConfigured: boolean; }

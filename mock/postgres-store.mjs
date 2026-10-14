@@ -41,7 +41,7 @@ const specs = [
   ]),
   spec("noteCategories", "note_categories", ["id", "name", "parentId", "createdAt", "updatedAt"]),
   spec("noteTagDefinitions", "note_tag_definitions", ["id", "name", "normalizedKey", "createdAt", "updatedAt"]),
-  spec("notes", "notes", ["id", "title", "content", "taskId", "sourceSessionId", "categoryId", "createdAt", "updatedAt"], [
+  spec("notes", "notes", ["id", "title", "content", "taskId", "sourceSessionId", "categoryId", "ownerId", "createdAt", "updatedAt"], [
     child("links", "note_links", [["targetId", "target_note_id"], ["targetRef", "target_ref"], "label", "reason"], "source_note_id"),
     child("tags", "note_tags", [["value", "tag"]], "note_id"),
   ]),

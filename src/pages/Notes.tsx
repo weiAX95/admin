@@ -167,6 +167,7 @@ export default function Notes() {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const requestSequence = useRef(0);
   const isAdmin = isAdministrator(getStoredUser<AuthUser>());
+  const accountId = getStoredUser<AuthUser>()?.id;
 
   useEffect(() => {
     if (!searchInput.trim()) { setKeyword(""); return; }
@@ -320,6 +321,7 @@ export default function Notes() {
       width: 130,
       render: (_, n) => (
         <Space size={4}>
+          {(isAdmin || Boolean(accountId && n.ownerId === accountId)) && <>
           <Button
             type="link"
             size="small"
@@ -335,6 +337,8 @@ export default function Notes() {
               删除
             </Button>
           </Popconfirm>
+          </>}
+          {!isAdmin && (!accountId || n.ownerId !== accountId) && <Typography.Text type="secondary">只读</Typography.Text>}
         </Space>
       ),
     },
@@ -358,7 +362,7 @@ export default function Notes() {
         <Input.Search aria-label="搜索笔记标题和内容" allowClear placeholder="搜索标题与内容" value={searchInput} onChange={event => setSearchInput(event.target.value)} style={{ width: 250 }} />
       </Space>
       <div className="notes-layout"><aside className="notes-sidebar" aria-label="笔记分类和标签">
-        <div className="notes-sidebar-heading"><Typography.Text strong>分类</Typography.Text><Button size="small" type="text" icon={<SettingOutlined />} aria-label="管理分类" onClick={() => setCategoryManagerOpen(true)} /></div>
+        <div className="notes-sidebar-heading"><Typography.Text strong>分类</Typography.Text>{isAdmin && <Button size="small" type="text" icon={<SettingOutlined />} aria-label="管理分类" onClick={() => setCategoryManagerOpen(true)} />}</div>
         <Button type={!categoryId ? "primary" : "text"} block className="notes-all-button" onClick={() => setCategoryId(null)}>全部笔记</Button>
         <Tree blockNode treeData={categoryTree} selectedKeys={categoryId ? [categoryId] : []} onSelect={keys => setCategoryId(keys.length ? String(keys[0]) : null)} />
         <div className="notes-sidebar-heading"><Typography.Text strong>标签云</Typography.Text>{isAdmin && <Button size="small" type="text" icon={<SettingOutlined />} aria-label="管理笔记标签" onClick={() => setTagManagerOpen(true)} />}</div>
@@ -385,7 +389,7 @@ export default function Notes() {
           void refreshTags();
         }}
       />
-      <NoteCategoryManager open={categoryManagerOpen} categories={categories} onClose={() => setCategoryManagerOpen(false)} onChanged={() => void refreshCategories()} />
+      {isAdmin && <NoteCategoryManager open={categoryManagerOpen} categories={categories} onClose={() => setCategoryManagerOpen(false)} onChanged={() => void refreshCategories()} />}
       {isAdmin && <NoteTagManager open={tagManagerOpen} tags={tagDefinitions} onClose={() => setTagManagerOpen(false)} onChanged={handleTagChanged} />}
     </Card>
   );

@@ -1799,6 +1799,7 @@ async function handleRequest(req, res) {
     // ---- note categories ----
     if (pathname === "/api/note-categories") {
       if (method === "GET") return send(res, 200, { items: db.noteCategories.map(item => ({ ...item, parentId: item.parentId || null })).sort((a, b) => a.name.localeCompare(b.name, "zh-CN")) });
+      if (!isAdministrator(me)) return send(res, 403, { error: "仅管理员可管理笔记分类" });
       if (method === "POST") {
         const body = await readBody(req);
         const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -1815,6 +1816,7 @@ async function handleRequest(req, res) {
     }
     const noteCategoryOne = pathname.match(/^\/api\/note-categories\/([^/]+)$/);
     if (noteCategoryOne) {
+      if (!isAdministrator(me) && method !== "GET") return send(res, 403, { error: "仅管理员可管理笔记分类" });
       const index = db.noteCategories.findIndex(item => item.id === noteCategoryOne[1]);
       if (index < 0) return send(res, 404, { error: "分类不存在" });
       if (method === "PATCH") {
@@ -1930,6 +1932,7 @@ async function handleRequest(req, res) {
     if (restoreNote && method === "POST") {
       const note = db.notes.find(item => item.id === restoreNote[1]);
       if (!note) return send(res, 404, { error: "笔记不存在" });
+      if (!isAdministrator(me) && note.ownerId !== me.id) return send(res, 403, { error: "只能恢复自己创建的笔记" });
       const body = await readBody(req);
       const version = db.noteVersions.find(item => item.id === body.versionId && item.noteId === note.id);
       if (!version) return send(res, 404, { error: "版本不存在" });
@@ -1962,6 +1965,7 @@ async function handleRequest(req, res) {
         const t = nowIso();
         const note = {
           id: newId(), title: String(body.title).trim(),
+          ownerId: me.id,
           content: typeof body.content === "string" ? body.content : "",
           taskId: body.taskId || null,
           sourceSessionId: body.sourceSessionId || null,
@@ -1971,7 +1975,7 @@ async function handleRequest(req, res) {
         };
         if (!linkedTaskVisible(note.taskId)) return send(res, 404, { error: "任务不存在" });
         if (note.categoryId && !db.noteCategories.some(item => item.id === note.categoryId)) return send(res, 400, { error: "分类不存在" });
-        if (note.sourceSessionId && !(await activeClient.query("SELECT 1 FROM sessions WHERE id=$1 AND ($2='admin' OR ingested_by=$3)", [note.sourceSessionId, me.role, me.id])).rowCount) return send(res, 404, { error: "来源会话不存在" });
+        if (note.sourceSessionId && !(await activeClient.query("SELECT 1 FROM sessions WHERE id=$1 AND ($2 OR ingested_by=$3)", [note.sourceSessionId, isAdministrator(me), me.id])).rowCount) return send(res, 404, { error: "来源会话不存在" });
         db.notes.unshift(note);
         reconcileNoteLinks();
         snapshotNote(note, "save");
@@ -1993,6 +1997,7 @@ async function handleRequest(req, res) {
         return send(res, 200, { ...linkedRecordView(note), links, backlinks, sourceSessionMissing: Boolean(note.sourceSessionId && !db.sessions.some(session => session.id === note.sourceSessionId)) });
       }
       if (method === "PUT" || method === "PATCH") {
+        if (!isAdministrator(me) && db.notes[i].ownerId !== me.id) return send(res, 403, { error: "只能修改自己创建的笔记" });
         const body = await readBody(req);
         if ("taskId" in body && !linkedTaskVisible(db.notes[i].taskId)) return send(res, 404, { error: "任务不存在" });
         const w = {};
@@ -2017,6 +2022,7 @@ async function handleRequest(req, res) {
         return send(res, 200, linkedRecordView(db.notes[i]));
       }
       if (method === "DELETE") {
+        if (!isAdministrator(me) && db.notes[i].ownerId !== me.id) return send(res, 403, { error: "只能删除自己创建的笔记" });
         if (!linkedTaskVisible(db.notes[i].taskId)) return send(res, 404, { error: "任务不存在" });
         const [rm] = db.notes.splice(i, 1);
         reconcileNoteLinks();
