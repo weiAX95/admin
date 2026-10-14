@@ -10,6 +10,7 @@ import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvid
 import { containsKnownSecret } from './project-scan.mjs';
 import { relatedAcceptedSuggestions } from './project-suggestion-similarity.mjs';
 import { compareProjectReports } from './project-report-comparison.mjs';
+import { appendSecurityAudit } from './account-audit.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -164,7 +165,7 @@ export async function resumeProjectAnalyses(db, runModel = defaultRunModel) {
   return jobs.length;
 }
 
-export async function handleProjectAnalyses({ pathname, method, client, me, readBody, url, connectionAvailable = modelConnectionAvailable, runModel = defaultRunModel }) {
+export async function handleProjectAnalyses({ pathname, method, client, me, readBody, url, connectionAvailable = modelConnectionAvailable, runModel = defaultRunModel, req }) {
   const compare = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/compare\/([^/]+)\/([^/]+)$/);
   if (compare) {
     const [, repositoryId, olderId, newerId] = compare;
@@ -251,6 +252,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       await connection.query('BEGIN');
       canceled = await connection.query("UPDATE project_analyses SET status='canceled',canceled_at=now(),finished_at=now() WHERE id=$1 AND repository_id=$2 AND status IN ('queued','analyzing') RETURNING *", [analysisId,repositoryId]);
       if (canceled.rowCount) await connection.query("UPDATE project_analysis_attempts SET status='canceled' WHERE analysis_id=$1 AND attempt=GREATEST($2,1)", [analysisId,canceled.rows[0].attempts]);
+      if (canceled.rowCount && req) await appendSecurityAudit(connection,req,me,'cancel','project_analyses',analysisId,{repositoryId});
       await connection.query('COMMIT');
     } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
     finally { if (pooled) connection.release(); }
@@ -293,6 +295,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       await reserveModelRate(connection,[{ runId, modelId: model.id, calls: budget.calls, tokens: budget.reservedTokens }],rate);
       await connection.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,$2,$3,'queued')", [analysisId,locked.attempts+1,budget.estimatedCost]);
       retried = (await connection.query("UPDATE project_analyses SET status='queued',estimated_max_cost_usd=$2,error_code=NULL,finished_at=NULL,canceled_at=NULL WHERE id=$1 RETURNING *", [analysisId,budget.estimatedCost])).rows[0];
+      if (req) await appendSecurityAudit(connection,req,me,'retry','project_analyses',analysisId,{repositoryId,nextAttempt:locked.attempts+1});
       await connection.query('COMMIT');
     } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
     finally { if (pooled) connection.release(); }
@@ -341,6 +344,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     await connection.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,1,$2,'queued')", [id,estimatedCost]);
     await reserveRunTokens(connection,me,[{ runId: `${id}:1`, modelId: model.id, tokens: budget.reservedTokens }],quota);
     await reserveModelRate(connection,[{ runId: `${id}:1`, modelId: model.id, calls: budget.calls, tokens: budget.reservedTokens }],rate);
+    if (req) await appendSecurityAudit(connection,req,me,'create','project_analyses',id,{repositoryId,scanId:scan.id,modelId:model.id});
     await connection.query('COMMIT');
   } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
   finally { if (pooled) connection.release(); }

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { scanPublicRepository } from './project-scan.mjs';
+import { appendSecurityAudit } from './account-audit.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status,error) => ({ status, data: { error } });
@@ -48,7 +49,7 @@ export async function resumeProjectScans(db, scanRepository = scanPublicReposito
   return jobs.length;
 }
 
-export async function handleProjectScans({ pathname, method, client, me, url, scanRepository = scanPublicRepository }) {
+export async function handleProjectScans({ pathname, method, client, me, url, scanRepository = scanPublicRepository, req }) {
   const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/scans(?:\/([^/]+)(\/files)?)?$/);
   if (!match) return null;
   const [, repositoryId, scanId, fileRoute] = match;
@@ -74,12 +75,21 @@ export async function handleProjectScans({ pathname, method, client, me, url, sc
   }
   if (method === 'POST' && !scanId) {
     const id = crypto.randomUUID();
-    try { await client.query("INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,status) VALUES($1,$2,$3,$4,$5,'queued')", [id,repositoryId,repository.full_name,repository.branch,repository.commit_sha]); }
+    const pooled = client instanceof pg.Pool;
+    const connection = pooled ? await client.connect() : client;
+    try {
+      await connection.query('BEGIN');
+      await connection.query("INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,status) VALUES($1,$2,$3,$4,$5,'queued')", [id,repositoryId,repository.full_name,repository.branch,repository.commit_sha]);
+      if (req) await appendSecurityAudit(connection,req,me,'create','project_scans',id,{repositoryId,commitSha:repository.commit_sha.trim()});
+      await connection.query('COMMIT');
+    }
     catch (error) {
+      await connection.query('ROLLBACK').catch(() => undefined);
       if (error.code !== '23505') throw error;
       const active = (await client.query("SELECT * FROM project_scans WHERE repository_id=$1 AND commit_sha=$2 AND status IN ('queued','scanning') ORDER BY created_at LIMIT 1", [repositoryId,repository.commit_sha])).rows[0];
       return active ? { status: 202, data: view(active) } : fail(409,'扫描任务正在变化，请重试');
     }
+    finally { if (pooled) connection.release(); }
     void enqueue(client,id,scanRepository);
     return { status: 202, data: view((await client.query('SELECT * FROM project_scans WHERE id=$1', [id])).rows[0]) };
   }
