@@ -19,6 +19,7 @@ export const PERMISSION_SCOPES = {
   none: '无权限',
   all: '全部',
   visible: '有权访问的任务',
+  allowed_models: '仅可使用的模型',
   personal: '预置与个人模板',
   own: '仅本人创建',
   non_super_admin: '除 SuperAdmin 外',
@@ -55,6 +56,10 @@ export const PERMISSION_RESOURCES = [
   { id: 'alerts', label: '告警监控', description: '告警规则、指标、静默与处置仅管理员可访问。', access: {
     read: admins, create: admins, update: admins, delete: admins, manage: admins,
   } },
+  { id: 'model_registry', label: '模型注册中心', description: '成员只能读取其角色允许的模型；模型与执行预算由管理员管理。退役通过管理操作完成。', access: {
+    read: { super_admin: 'all', admin: 'all', member: 'allowed_models' },
+    create: admins, update: admins, delete: nobody, manage: admins,
+  } },
 ];
 
 const byResource = new Map(PERMISSION_RESOURCES.map(resource => [resource.id, resource]));
@@ -69,8 +74,8 @@ export function canAccess(user, resource, operation, { ownerId, targetRole } = {
   if (scope === 'own') return operation === 'create' || Boolean(ownerId && ownerId === user?.id);
   if (scope === 'non_super_admin') return targetRole !== 'super_admin';
   if (scope === 'protected') return targetRole !== 'super_admin' || ownerId === user?.id;
-  // "visible" and "personal" are further narrowed by the existing task or
-  // template query filters. A role check alone must never bypass those filters.
+  // Restricted read scopes are further narrowed by their existing queries.
+  // A role check alone must never bypass those filters.
   return true;
 }
 
