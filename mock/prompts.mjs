@@ -1,4 +1,5 @@
 import { isAdministrator } from './roles.mjs';
+import { canAccess } from './permissions.mjs';
 import crypto from 'node:crypto';
 import { diffChars } from 'diff';
 import YAML from 'yaml';
@@ -6,7 +7,7 @@ import YAML from 'yaml';
 const id = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
 const fail = (error, status = 400) => ok({ error }, status);
-const canEdit = (row, me) => isAdministrator(me) || row.owner_id === me.id;
+const canEdit = (row, me) => canAccess(me, 'prompts', 'update', { ownerId: row.owner_id });
 const types = new Set(['system', 'user', 'assistant', 'tool_description']);
 const formats = new Set(['text', 'chat', 'tool']);
 const variableTypes = new Set(['string', 'number', 'boolean', 'select']);
@@ -212,6 +213,13 @@ async function exportPrompts(client,url) {
 export async function importPrompts(client,me,body,confirm) {
   let document;
   try { document=parseTransfer(body); } catch(error) { return fail(error.message); }
+  if (!canAccess(me, 'prompts', 'create')) return fail('无权导入提示词',403);
+  const sourceIds=document.prompts.map(prompt=>prompt.sourceId);
+  const mappings=(await client.query('SELECT s.source_prompt_id,p.owner_id,p.deleted_at FROM prompt_import_sources s JOIN prompt_library p ON p.id=s.prompt_id WHERE s.source_key=$1 AND s.source_prompt_id=ANY($2::text[])',[document.sourceKey,sourceIds])).rows;
+  const mappedIds=new Set(mappings.map(row=>row.source_prompt_id));
+  const directIds=sourceIds.filter(sourceId=>!mappedIds.has(sourceId));
+  const existing=directIds.length ? (await client.query('SELECT id AS source_prompt_id,owner_id,deleted_at FROM prompt_library WHERE id=ANY($1::text[])',[directIds])).rows : [];
+  if ([...mappings,...existing].some(row=>row.deleted_at || !canEdit(row,me))) return fail('无权导入到其他账号或已删除的提示词',403);
   const report=[];
   for (const prompt of document.prompts) {
     const versions=[];
@@ -306,15 +314,16 @@ async function appendVersion(client, prompt, body, me, source = null) {
 }
 
 export async function handlePrompts({ pathname, method, client, me, readBody, url }) {
+  if (pathname.startsWith('/api/prompts') && method==='GET' && !canAccess(me,'prompts','read')) return fail('无权查看提示词',403);
   if (pathname==='/api/prompts/export' && method==='GET') return exportPrompts(client,url);
   if (pathname==='/api/prompts/import/preview' && method==='POST') return importPrompts(client,me,await readBody(),false);
   if (pathname==='/api/prompts/import/confirm' && method==='POST') return importPrompts(client,me,await readBody(),true);
   if (pathname === '/api/prompt-compliance-rules' && method === 'GET') {
-    if (!isAdministrator(me)) return fail('仅管理员可管理合规规则',403);
+    if (!canAccess(me,'prompt_compliance','read')) return fail('仅管理员可管理合规规则',403);
     return ok({ items:(await client.query('SELECT id,name,pattern,active,created_at FROM prompt_compliance_rules ORDER BY created_at DESC')).rows });
   }
   if (pathname === '/api/prompt-compliance-rules' && method === 'POST') {
-    if (!isAdministrator(me)) return fail('仅管理员可管理合规规则',403);
+    if (!canAccess(me,'prompt_compliance','create')) return fail('仅管理员可管理合规规则',403);
     const body = await readBody();
     if (typeof body.name !== 'string' || !body.name.trim() || !safePattern(body.pattern)) return fail('规则名称或正则无效；只支持有限重复、不含分组与分支的模式');
     const ruleId=id(); await client.query('INSERT INTO prompt_compliance_rules(id,name,pattern,created_by) VALUES($1,$2,$3,$4)',[ruleId,body.name.trim(),body.pattern,me.id]);
@@ -322,7 +331,7 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
   }
   const ruleRoute=pathname.match(/^\/api\/prompt-compliance-rules\/([^/]+)$/);
   if (ruleRoute && method === 'DELETE') {
-    if (!isAdministrator(me)) return fail('仅管理员可管理合规规则',403);
+    if (!canAccess(me,'prompt_compliance','delete')) return fail('仅管理员可管理合规规则',403);
     const result=await client.query('DELETE FROM prompt_compliance_rules WHERE id=$1 RETURNING id',[ruleRoute[1]]);
     return result.rowCount ? ok({deleted:true}) : fail('规则不存在',404);
   }
@@ -391,6 +400,7 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
     return ok({ items });
   }
   if (pathname === '/api/prompts' && method === 'POST') {
+    if (!canAccess(me,'prompts','create')) return fail('无权创建提示词',403);
     const body = await readBody();
     if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 200) return fail('名称为必填，最多 200 字');
     let tags, value;
@@ -406,9 +416,12 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
     for (const targetId of directIncludes(value)) await client.query('INSERT INTO prompt_version_includes(source_version_id,target_version_id) VALUES($1,$2) ON CONFLICT DO NOTHING',[versionId,targetId]);
     return ok({ id: promptId, versionId, semver: '1.0.0', warnings: value.warnings }, 201);
   }
-  if (pathname === '/api/prompt-folders' && method === 'GET') return ok({ items: (await client.query('SELECT id,name,parent_id,created_at FROM prompt_folders ORDER BY name')).rows });
+  if (pathname === '/api/prompt-folders' && method === 'GET') {
+    if (!canAccess(me,'prompt_folders','read')) return fail('无权查看文件夹',403);
+    return ok({ items: (await client.query('SELECT id,name,parent_id,created_at FROM prompt_folders ORDER BY name')).rows });
+  }
   if (pathname === '/api/prompt-folders' && method === 'POST') {
-    if (!isAdministrator(me)) return fail('仅管理员可管理文件夹', 403);
+    if (!canAccess(me,'prompt_folders','create')) return fail('仅管理员可管理文件夹', 403);
     const body = await readBody();
     if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 100) return fail('文件夹名称无效');
     if (body.parentId && !(await client.query('SELECT 1 FROM prompt_folders WHERE id=$1', [body.parentId])).rowCount) return fail('父文件夹不存在', 404);
@@ -418,14 +431,14 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
   }
   const folderRoute = pathname.match(/^\/api\/prompt-folders\/([^/]+)$/);
   if (folderRoute && method === 'PATCH') {
-    if (!isAdministrator(me)) return fail('仅管理员可管理文件夹', 403);
+    if (!canAccess(me,'prompt_folders','update')) return fail('仅管理员可管理文件夹', 403);
     const body = await readBody();
     if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 100) return fail('文件夹名称无效');
     const result = await client.query('UPDATE prompt_folders SET name=$2 WHERE id=$1 RETURNING id', [folderRoute[1],body.name.trim()]);
     return result.rowCount ? ok({ id: folderRoute[1] }) : fail('文件夹不存在',404);
   }
   if (folderRoute && method === 'DELETE') {
-    if (!isAdministrator(me)) return fail('仅管理员可管理文件夹', 403);
+    if (!canAccess(me,'prompt_folders','delete')) return fail('仅管理员可管理文件夹', 403);
     const children = (await client.query('SELECT count(*)::int AS n FROM prompt_folders WHERE parent_id=$1', [folderRoute[1]])).rows[0].n;
     const prompts = (await client.query('SELECT count(*)::int AS n FROM prompt_library WHERE folder_id=$1', [folderRoute[1]])).rows[0].n;
     if (children || prompts) return fail('文件夹不为空，请先移动子文件夹和提示词', 409);
@@ -474,7 +487,7 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
   if (promptRoute && method === 'DELETE') {
     const prompt = (await client.query('SELECT * FROM prompt_library WHERE id=$1 FOR UPDATE', [promptRoute[1]])).rows[0];
     if (!prompt) return fail('提示词不存在',404);
-    if (!canEdit(prompt,me)) return fail('无权删除该提示词',403);
+    if (!canAccess(me,'prompts','delete',{ownerId:prompt.owner_id})) return fail('无权删除该提示词',403);
     const recycleDays=Number((await client.query('SELECT recycle_days FROM retention_settings WHERE id=1')).rows[0].recycle_days);
     if(recycleDays===0){
       await client.query('SAVEPOINT prompt_purge');

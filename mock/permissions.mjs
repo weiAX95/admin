@@ -47,6 +47,16 @@ export const PERMISSION_RESOURCES = [
     update: { super_admin: 'all', admin: 'all', member: 'own' }, delete: { super_admin: 'all', admin: 'all', member: 'own' },
     manage: { super_admin: 'all', admin: 'all', member: 'own' },
   } },
+  { id: 'prompts', label: '提示词条目', description: '所有登录账号可读并创建个人提示词；作者和管理员可修改及删除条目。导入不得追加到其他作者的条目。', access: {
+    read: { super_admin: 'all', admin: 'all', member: 'all' }, create: { super_admin: 'all', admin: 'all', member: 'own' },
+    update: { super_admin: 'all', admin: 'all', member: 'own' }, delete: { super_admin: 'all', admin: 'all', member: 'own' }, manage: nobody,
+  } },
+  { id: 'prompt_folders', label: '提示词文件夹', description: '所有登录账号可浏览文件夹；只有管理员可创建、重命名或删除。', access: {
+    read: { super_admin: 'all', admin: 'all', member: 'all' }, create: admins, update: admins, delete: admins, manage: nobody,
+  } },
+  { id: 'prompt_compliance', label: '提示词合规规则', description: '合规规则由管理员读取、创建与删除；保存提示词时的内容扫描对所有作者生效。', access: {
+    read: admins, create: admins, update: nobody, delete: admins, manage: nobody,
+  } },
   { id: 'note_categories', label: '笔记分类', description: '分类为全局目录，普通成员只读。', access: {
     read: { super_admin: 'all', admin: 'all', member: 'all' }, create: admins, update: admins, delete: admins, manage: admins,
   } },
