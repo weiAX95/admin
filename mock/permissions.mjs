@@ -60,6 +60,9 @@ export const PERMISSION_RESOURCES = [
     read: { super_admin: 'all', admin: 'all', member: 'allowed_models' },
     create: admins, update: admins, delete: nobody, manage: admins,
   } },
+  { id: 'model_connections', label: '模型连接', description: '管理员查看、创建与修改连接；连接测试为管理操作。当前没有删除接口。', access: {
+    read: admins, create: admins, update: admins, delete: nobody, manage: admins,
+  } },
 ];
 
 const byResource = new Map(PERMISSION_RESOURCES.map(resource => [resource.id, resource]));
