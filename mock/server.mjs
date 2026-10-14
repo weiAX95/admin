@@ -1,4 +1,5 @@
 import { isAdministrator, isSuperAdmin } from './roles.mjs';
+import { canAccess, permissionMatrix } from './permissions.mjs';
 /**
  * 本地 API 层（node:http + PostgreSQL）。
  * 覆盖：登录鉴权、学习任务 CRUD + 审计、会话记录、学习笔记、实验记录、统计看板。
@@ -690,8 +691,15 @@ async function handleRequest(req, res) {
     if (passwordChangeRequired && !["/api/auth/password", "/api/auth/logout", "/api/auth/me"].includes(pathname)) {
       return send(res, 403, { error: "密码已过期，请先修改密码", code: "password_expired" });
     }
-    if (method !== "GET" && !isAdministrator(me) && /^\/api\/(?:tasks(?:\/|$)|task-templates(?:\/|$)|recurring-series(?:\/|$))/.test(pathname)) {
-      return send(res, 403, { error: "普通成员只能查看学习任务，不能修改任务、模板或重复配置" });
+    if (pathname === '/api/permissions/matrix' && method === 'GET') return send(res, 200, permissionMatrix());
+    const guardedResource = pathname.startsWith('/api/tasks/') || pathname === '/api/tasks' ? 'tasks'
+      : pathname.startsWith('/api/task-templates/') || pathname === '/api/task-templates' ? 'task_templates'
+      : pathname.startsWith('/api/recurring-series/') || pathname === '/api/recurring-series' ? 'recurring_series' : null;
+    if (guardedResource && method !== 'GET') {
+      const operation = method === 'DELETE' ? 'delete' : method === 'POST' ? 'create' : 'update';
+      if (!canAccess(me, guardedResource, operation === 'create' && pathname.endsWith('/stop') ? 'manage' : operation)) {
+        return send(res, 403, { error: "普通成员只能查看学习任务，不能修改任务、模板或重复配置" });
+      }
     }
     const accountTasks = db.tasks.filter(task => canUseDependency(task, me));
     const accountTaskIds = new Set(accountTasks.map(task => task.id));
@@ -949,7 +957,7 @@ async function handleRequest(req, res) {
 
     // ---- 一次性账号邀请（仅管理员）----
     if (pathname === "/api/users/invitations" || /^\/api\/users\/invitations\/[^/]+\/revoke$/.test(pathname)) {
-      if (!isAdministrator(me)) return send(res, 403, { error: "需要管理员权限" });
+      if (!canAccess(me, 'accounts', 'manage')) return send(res, 403, { error: "需要管理员权限" });
       if (pathname === "/api/users/invitations" && method === "GET") {
         const items = (await activeClient.query(`SELECT id,username,display_name,role,activation_mode,created_at,expires_at,consumed_at,revoked_at
           FROM account_invitations ORDER BY created_at DESC LIMIT 100`)).rows;
@@ -988,7 +996,7 @@ async function handleRequest(req, res) {
     const isUsersPath =
       pathname === "/api/users" || /^\/api\/users\/[^/]+(?:\/(?:restore|permanent))?$/.test(pathname);
     if (isUsersPath) {
-      if (!isAdministrator(me)) {
+      if (!canAccess(me, 'accounts', 'manage')) {
         return send(res, 403, { error: "需要管理员权限" });
       }
 
@@ -1046,7 +1054,7 @@ async function handleRequest(req, res) {
       const target = db.users[index];
       res.__accountBefore = structuredClone(target);
       const adminCount = () => db.users.filter((u) => u.role === "admin" && !u.deletedAt).length;
-      if (target.role === "super_admin" && (!isSuperAdmin(me) || target.id !== me.id)) {
+      if (target.role === "super_admin" && !canAccess(me, 'accounts', 'update', { ownerId: target.id, targetRole: target.role })) {
         return send(res, 403, { error: "只有 SuperAdmin 本人可维护该账号" });
       }
 
@@ -1211,7 +1219,7 @@ async function handleRequest(req, res) {
     if (seriesRoute) {
       const series = db.recurringSeries.find(item => item.id === seriesRoute[1]);
       if (!series) return send(res, 404, { error: "重复序列不存在" });
-      if (!isAdministrator(me) && series.ownerId !== me.id) return send(res, 403, { error: "无权修改该重复序列" });
+      if (!canAccess(me, 'recurring_series', method === 'GET' ? 'read' : 'update', { ownerId: series.ownerId })) return send(res, 403, { error: "无权访问该重复序列" });
       if (method === "GET" && !seriesRoute[2]) return send(res, 200, seriesView(series));
       if (method === "POST" && seriesRoute[2] === "stop") {
         if (series.active) { series.active = false; series.version = (series.version || 1) + 1; series.updatedAt = nowIso(); saveDb(db); scheduleRecurrences(0); }
@@ -1799,7 +1807,7 @@ async function handleRequest(req, res) {
     // ---- note categories ----
     if (pathname === "/api/note-categories") {
       if (method === "GET") return send(res, 200, { items: db.noteCategories.map(item => ({ ...item, parentId: item.parentId || null })).sort((a, b) => a.name.localeCompare(b.name, "zh-CN")) });
-      if (!isAdministrator(me)) return send(res, 403, { error: "仅管理员可管理笔记分类" });
+      if (!canAccess(me, 'note_categories', 'manage')) return send(res, 403, { error: "仅管理员可管理笔记分类" });
       if (method === "POST") {
         const body = await readBody(req);
         const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -1816,7 +1824,7 @@ async function handleRequest(req, res) {
     }
     const noteCategoryOne = pathname.match(/^\/api\/note-categories\/([^/]+)$/);
     if (noteCategoryOne) {
-      if (!isAdministrator(me) && method !== "GET") return send(res, 403, { error: "仅管理员可管理笔记分类" });
+      if (method !== "GET" && !canAccess(me, 'note_categories', 'manage')) return send(res, 403, { error: "仅管理员可管理笔记分类" });
       const index = db.noteCategories.findIndex(item => item.id === noteCategoryOne[1]);
       if (index < 0) return send(res, 404, { error: "分类不存在" });
       if (method === "PATCH") {
@@ -1932,7 +1940,7 @@ async function handleRequest(req, res) {
     if (restoreNote && method === "POST") {
       const note = db.notes.find(item => item.id === restoreNote[1]);
       if (!note) return send(res, 404, { error: "笔记不存在" });
-      if (!isAdministrator(me) && note.ownerId !== me.id) return send(res, 403, { error: "只能恢复自己创建的笔记" });
+      if (!canAccess(me, 'notes', 'update', { ownerId: note.ownerId })) return send(res, 403, { error: "只能恢复自己创建的笔记" });
       const body = await readBody(req);
       const version = db.noteVersions.find(item => item.id === body.versionId && item.noteId === note.id);
       if (!version) return send(res, 404, { error: "版本不存在" });
@@ -1960,6 +1968,7 @@ async function handleRequest(req, res) {
         return send(res, 200, { items: items.map(linkedRecordView), total: items.length, tags: [...tagCounts].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh-CN")) });
       }
       if (method === "POST") {
+        if (!canAccess(me, 'notes', 'create')) return send(res, 403, { error: "无权创建笔记" });
         const body = await readBody(req);
         if (!body.title || !String(body.title).trim()) return send(res, 400, { error: "title 为必填项" });
         const t = nowIso();
@@ -1997,7 +2006,7 @@ async function handleRequest(req, res) {
         return send(res, 200, { ...linkedRecordView(note), links, backlinks, sourceSessionMissing: Boolean(note.sourceSessionId && !db.sessions.some(session => session.id === note.sourceSessionId)) });
       }
       if (method === "PUT" || method === "PATCH") {
-        if (!isAdministrator(me) && db.notes[i].ownerId !== me.id) return send(res, 403, { error: "只能修改自己创建的笔记" });
+        if (!canAccess(me, 'notes', 'update', { ownerId: db.notes[i].ownerId })) return send(res, 403, { error: "只能修改自己创建的笔记" });
         const body = await readBody(req);
         if ("taskId" in body && !linkedTaskVisible(db.notes[i].taskId)) return send(res, 404, { error: "任务不存在" });
         const w = {};
@@ -2022,7 +2031,7 @@ async function handleRequest(req, res) {
         return send(res, 200, linkedRecordView(db.notes[i]));
       }
       if (method === "DELETE") {
-        if (!isAdministrator(me) && db.notes[i].ownerId !== me.id) return send(res, 403, { error: "只能删除自己创建的笔记" });
+        if (!canAccess(me, 'notes', 'delete', { ownerId: db.notes[i].ownerId })) return send(res, 403, { error: "只能删除自己创建的笔记" });
         if (!linkedTaskVisible(db.notes[i].taskId)) return send(res, 404, { error: "任务不存在" });
         const [rm] = db.notes.splice(i, 1);
         reconcileNoteLinks();

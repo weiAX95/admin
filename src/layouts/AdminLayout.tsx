@@ -35,6 +35,7 @@ const MENU_ITEMS = [
 ];
 const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号管理" };
 const ACCOUNT_AUDIT_ITEM = { key: "/account-audit", icon: <ProfileOutlined />, label: "操作审计" };
+const PERMISSIONS_ITEM = { key: "/permissions", icon: <TeamOutlined />, label: "权限矩阵" };
 const ACCOUNT_ACTIVITY_ITEM = { key: "/account-activity", icon: <DashboardOutlined />, label: "账号活跃度" };
 const SETTINGS_ITEM = { key: "/settings", icon: <SettingOutlined />, label: "系统设置" };
 const EVALUATION_ADMIN_ITEM = { key: "/evaluation/candidates", icon: <ExperimentOutlined />, label: "评测候选池" };
@@ -60,6 +61,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/project-analysis": { title: "项目分析", description: "接入公开仓库，逐步建立可追溯的项目进度与学习建议。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
   "/account-audit": { title: "操作审计", description: "核对登录、退出和资源操作记录。", section: "系统管理" },
+  "/permissions": { title: "权限矩阵", description: "查看当前后端角色权限及归属范围。", section: "系统管理" },
   "/account-activity": { title: "账号活跃度", description: "查看团队近期登录、操作和常访问页面。", section: "系统管理" },
   "/settings": { title: "系统设置", description: "配置工作空间与个人偏好。", section: "系统管理" },
   "/model-costs": { title: "模型成本", description: "按模型、账号和模块查看已记账的调用费用。", section: "系统管理" },
@@ -116,7 +118,7 @@ export default function AdminLayout() {
     return () => socket.close();
   }, [refreshNotifications, refresh]);
   const user = getStoredUser<AuthUser>();
-  const menuItems = isAdministrator(user) ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, MODEL_COSTS_ITEM, MODEL_AUDIT_ITEM, MODEL_HEALTH_ITEM, ALERTS_ITEM, ACCOUNTS_ITEM, ACCOUNT_AUDIT_ITEM, ACCOUNT_ACTIVITY_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, ACCOUNT_AUDIT_ITEM, SETTINGS_ITEM];
+  const menuItems = isAdministrator(user) ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, MODEL_COSTS_ITEM, MODEL_AUDIT_ITEM, MODEL_HEALTH_ITEM, ALERTS_ITEM, ACCOUNTS_ITEM, PERMISSIONS_ITEM, ACCOUNT_AUDIT_ITEM, ACCOUNT_ACTIVITY_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, PERMISSIONS_ITEM, ACCOUNT_AUDIT_ITEM, SETTINGS_ITEM];
   const selected = menuItems.map((m) => m.key)
     .filter((k) => k === "/" ? location.pathname === "/" : location.pathname.startsWith(k))
     .sort((a, b) => b.length - a.length)[0] || "/";
