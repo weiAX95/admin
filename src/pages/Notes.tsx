@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -165,7 +166,7 @@ export default function Notes() {
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const requestSequence = useRef(0);
-  const isAdmin = getStoredUser<AuthUser>()?.role === "admin";
+  const isAdmin = isAdministrator(getStoredUser<AuthUser>());
 
   useEffect(() => {
     if (!searchInput.trim()) { setKeyword(""); return; }

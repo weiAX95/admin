@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 const MODULES = new Set(['dashboard', 'tasks', 'sessions', 'notes', 'experiments', 'evaluation', 'prompts', 'project-analysis', 'accounts', 'account-audit', 'settings', 'model-costs', 'model-call-audit', 'model-health', 'alerts']);
 
 function pageModule(pathname) {
@@ -18,7 +19,7 @@ export async function handleAccountActivity({ pathname, method, client, me, read
     return { status: 200, data: { recorded: true } };
   }
   if (pathname !== '/api/account-activity') return null;
-  if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可查看团队活跃度' } };
+  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可查看团队活跃度' } };
   if (method !== 'GET') return { status: 405, data: { error: 'method not allowed' } };
   const timezone = (await client.query('SELECT default_timezone FROM system_settings WHERE id=1')).rows[0].default_timezone;
   const login = (await client.query(`SELECT user_id,COUNT(DISTINCT (created_at AT TIME ZONE $1)::date)::integer AS days

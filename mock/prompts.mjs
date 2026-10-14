@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import { diffChars } from 'diff';
 import YAML from 'yaml';
@@ -5,7 +6,7 @@ import YAML from 'yaml';
 const id = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
 const fail = (error, status = 400) => ok({ error }, status);
-const canEdit = (row, me) => me.role === 'admin' || row.owner_id === me.id;
+const canEdit = (row, me) => isAdministrator(me) || row.owner_id === me.id;
 const types = new Set(['system', 'user', 'assistant', 'tool_description']);
 const formats = new Set(['text', 'chat', 'tool']);
 const variableTypes = new Set(['string', 'number', 'boolean', 'select']);
@@ -309,11 +310,11 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
   if (pathname==='/api/prompts/import/preview' && method==='POST') return importPrompts(client,me,await readBody(),false);
   if (pathname==='/api/prompts/import/confirm' && method==='POST') return importPrompts(client,me,await readBody(),true);
   if (pathname === '/api/prompt-compliance-rules' && method === 'GET') {
-    if (me.role !== 'admin') return fail('仅管理员可管理合规规则',403);
+    if (!isAdministrator(me)) return fail('仅管理员可管理合规规则',403);
     return ok({ items:(await client.query('SELECT id,name,pattern,active,created_at FROM prompt_compliance_rules ORDER BY created_at DESC')).rows });
   }
   if (pathname === '/api/prompt-compliance-rules' && method === 'POST') {
-    if (me.role !== 'admin') return fail('仅管理员可管理合规规则',403);
+    if (!isAdministrator(me)) return fail('仅管理员可管理合规规则',403);
     const body = await readBody();
     if (typeof body.name !== 'string' || !body.name.trim() || !safePattern(body.pattern)) return fail('规则名称或正则无效；只支持有限重复、不含分组与分支的模式');
     const ruleId=id(); await client.query('INSERT INTO prompt_compliance_rules(id,name,pattern,created_by) VALUES($1,$2,$3,$4)',[ruleId,body.name.trim(),body.pattern,me.id]);
@@ -321,7 +322,7 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
   }
   const ruleRoute=pathname.match(/^\/api\/prompt-compliance-rules\/([^/]+)$/);
   if (ruleRoute && method === 'DELETE') {
-    if (me.role !== 'admin') return fail('仅管理员可管理合规规则',403);
+    if (!isAdministrator(me)) return fail('仅管理员可管理合规规则',403);
     const result=await client.query('DELETE FROM prompt_compliance_rules WHERE id=$1 RETURNING id',[ruleRoute[1]]);
     return result.rowCount ? ok({deleted:true}) : fail('规则不存在',404);
   }
@@ -344,7 +345,7 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
     const keyword=(url.searchParams.get('keyword') || '').trim();
     const history=url.searchParams.get('history')==='true', regex=url.searchParams.get('regex')==='true';
     if (keyword.length>100) return fail('搜索词过长');
-    if (regex && me.role!=='admin') return fail('仅管理员可使用正则搜索',403);
+    if (regex && !isAdministrator(me)) return fail('仅管理员可使用正则搜索',403);
     if (regex && !safePattern(keyword)) return fail('正则搜索语法超出安全范围');
     if (!keyword) return ok({items:[]});
     const op=regex ? '~*' : 'ILIKE';
@@ -407,7 +408,7 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
   }
   if (pathname === '/api/prompt-folders' && method === 'GET') return ok({ items: (await client.query('SELECT id,name,parent_id,created_at FROM prompt_folders ORDER BY name')).rows });
   if (pathname === '/api/prompt-folders' && method === 'POST') {
-    if (me.role !== 'admin') return fail('仅管理员可管理文件夹', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可管理文件夹', 403);
     const body = await readBody();
     if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 100) return fail('文件夹名称无效');
     if (body.parentId && !(await client.query('SELECT 1 FROM prompt_folders WHERE id=$1', [body.parentId])).rowCount) return fail('父文件夹不存在', 404);
@@ -417,14 +418,14 @@ export async function handlePrompts({ pathname, method, client, me, readBody, ur
   }
   const folderRoute = pathname.match(/^\/api\/prompt-folders\/([^/]+)$/);
   if (folderRoute && method === 'PATCH') {
-    if (me.role !== 'admin') return fail('仅管理员可管理文件夹', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可管理文件夹', 403);
     const body = await readBody();
     if (typeof body.name !== 'string' || !body.name.trim() || body.name.length > 100) return fail('文件夹名称无效');
     const result = await client.query('UPDATE prompt_folders SET name=$2 WHERE id=$1 RETURNING id', [folderRoute[1],body.name.trim()]);
     return result.rowCount ? ok({ id: folderRoute[1] }) : fail('文件夹不存在',404);
   }
   if (folderRoute && method === 'DELETE') {
-    if (me.role !== 'admin') return fail('仅管理员可管理文件夹', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可管理文件夹', 403);
     const children = (await client.query('SELECT count(*)::int AS n FROM prompt_folders WHERE parent_id=$1', [folderRoute[1]])).rows[0].n;
     const prompts = (await client.query('SELECT count(*)::int AS n FROM prompt_library WHERE folder_id=$1', [folderRoute[1]])).rows[0].n;
     if (children || prompts) return fail('文件夹不为空，请先移动子文件夹和提示词', 409);

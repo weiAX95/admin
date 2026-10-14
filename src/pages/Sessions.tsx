@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, App, Button, Card, Empty, Grid, Input, Modal, Select, Space, Spin, Switch, Table, Tag, Tooltip, Typography } from "antd";
@@ -54,7 +55,7 @@ export default function Sessions() {
   const [clusterSaving, setClusterSaving] = useState(false);
   const [editingCluster, setEditingCluster] = useState<SessionCluster | null>(null);
   const [labelDraft, setLabelDraft] = useState("");
-  const isAdmin = getStoredUser<AuthUser>()?.role === "admin";
+  const isAdmin = isAdministrator(getStoredUser<AuthUser>());
   const acceptSessionCosts = useCallback((rows: SessionCostRow[]) => setCostsBySession(Object.fromEntries(rows.map(row => [row.id, row]))), []);
   const searchRequest = useRef(0);
 

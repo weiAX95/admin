@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import { smtpConfigured } from './review-mailer.mjs';
 
@@ -122,7 +123,7 @@ async function isSilenced(client, rule, at) {
 
 export async function handleAlertRules({ pathname, method, client, me, readBody, url }) {
   if (!pathname.startsWith('/api/alerts/rules') && !pathname.startsWith('/api/alerts/incidents') && !pathname.startsWith('/api/alerts/silences') && !pathname.startsWith('/api/alerts/groups') && !pathname.startsWith('/api/alerts/channels')) return null;
-  if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可管理告警' } };
+  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可管理告警' } };
   if (pathname === '/api/alerts/channels/test' && method === 'POST') {
     const body = await readBody();
     if (!['in_app','email'].includes(body?.channel)) return { status: 400, data: { error: '请选择站内或邮件渠道' } };

@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import { rebuildSessionClusters } from './session-clusters.mjs';
 
 const view = row => ({ version: row.version, auditDays: row.audit_days, sessionDays: row.session_days, recycleDays: row.recycle_days, cleanupLocalTime: String(row.cleanup_local_time).slice(0,5) });
@@ -10,7 +11,7 @@ function valid(body) {
 }
 export async function handleRetentionSettings({ pathname, method, client, me, readBody }) {
   if (pathname === '/api/settings/retention') {
-    if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可管理保留策略' } };
+    if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可管理保留策略' } };
     if (method === 'GET') return { status: 200, data: view((await client.query('SELECT * FROM retention_settings WHERE id=1')).rows[0]) };
     if (method === 'PUT') {
       const body = await readBody(); valid(body);
@@ -19,7 +20,7 @@ export async function handleRetentionSettings({ pathname, method, client, me, re
     }
   }
   if (pathname === '/api/settings/retention/runs' && method === 'GET') {
-    if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可查看清理记录' } };
+    if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可查看清理记录' } };
     return { status: 200, data: { items: (await client.query('SELECT * FROM retention_cleanup_runs ORDER BY local_date DESC LIMIT 30')).rows } };
   }
   return null;

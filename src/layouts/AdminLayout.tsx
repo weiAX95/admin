@@ -1,3 +1,4 @@
+import { isAdministrator, isSuperAdmin } from '../utils/roles';
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Avatar, Badge, Button, Drawer, Empty, Layout, Menu, Popover, Space, Spin, Typography } from "antd";
 import {
@@ -115,7 +116,7 @@ export default function AdminLayout() {
     return () => socket.close();
   }, [refreshNotifications, refresh]);
   const user = getStoredUser<AuthUser>();
-  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, MODEL_COSTS_ITEM, MODEL_AUDIT_ITEM, MODEL_HEALTH_ITEM, ALERTS_ITEM, ACCOUNTS_ITEM, ACCOUNT_AUDIT_ITEM, ACCOUNT_ACTIVITY_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, ACCOUNT_AUDIT_ITEM, SETTINGS_ITEM];
+  const menuItems = isAdministrator(user) ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, MODEL_COSTS_ITEM, MODEL_AUDIT_ITEM, MODEL_HEALTH_ITEM, ALERTS_ITEM, ACCOUNTS_ITEM, ACCOUNT_AUDIT_ITEM, ACCOUNT_ACTIVITY_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, ACCOUNT_AUDIT_ITEM, SETTINGS_ITEM];
   const selected = menuItems.map((m) => m.key)
     .filter((k) => k === "/" ? location.pathname === "/" : location.pathname.startsWith(k))
     .sort((a, b) => b.length - a.length)[0] || "/";
@@ -166,7 +167,7 @@ export default function AdminLayout() {
               <Button type="link" onClick={() => navigate("/notes/reviews")}>打开复习面板</Button>
             </div>}><Button type="text" aria-label={`站内通知，未读 ${unread} 条`} icon={<Badge count={unread} size="small"><BellOutlined /></Badge>} onClick={refreshNotifications} /></Popover>
             <Avatar size={32} className="account-avatar">{name.slice(0, 1)}</Avatar>
-            <div className="account-copy"><strong>{name}</strong><span>{user?.role === "admin" ? "管理员" : "普通成员"}</span></div>
+            <div className="account-copy"><strong>{name}</strong><span>{isSuperAdmin(user) ? "超级管理员" : isAdministrator(user) ? "管理员" : "普通成员"}</span></div>
             <Button type="text" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => { void logout().catch(() => undefined).finally(() => { clearAuth(); navigate("/login", { replace: true }); }); }}>
               <span className="logout-label">退出</span>
             </Button>

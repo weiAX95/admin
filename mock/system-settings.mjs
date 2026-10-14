@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 const GLOBAL_COLUMNS = {
   systemName: 'system_name', logoUrl: 'logo_url', defaultTimezone: 'default_timezone',
   defaultLanguage: 'default_language', defaultDateFormat: 'default_date_format',
@@ -83,7 +84,7 @@ export async function handleSystemSettings({ pathname, method, client, me, readB
   }
   if (!me) return null;
   if (pathname === '/api/settings/global') {
-    if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可管理全局设置' } };
+    if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可管理全局设置' } };
     if (method === 'GET') return { status: 200, data: await getGlobalSettings(client) };
     if (method === 'PUT') return updateGlobalSettings(client, await readBody());
   }

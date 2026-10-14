@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import { REVIEW_DIMENSIONS, reviewSummary } from './evaluation-reviews.mjs';
 import { notifyUser } from './app-notifications.mjs';
@@ -12,13 +13,13 @@ async function taskScores(client, taskId) {
 
 export async function handleEvaluationReviews({ pathname, method, client, me, readBody }) {
   if (pathname === '/api/evaluation/reviewable-batches' && method === 'GET') {
-    if (me.role !== 'admin') return fail('仅管理员可分配人工评测', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可分配人工评测', 403);
     return ok({ items: (await client.query("SELECT b.id,b.dataset_version_id,b.status,e.title FROM experiment_batches b JOIN experiments e ON e.id=b.experiment_id WHERE b.kind IN ('dataset','regression') AND b.status IN ('completed','partial') ORDER BY b.created_at DESC LIMIT 100")).rows });
   }
   if (pathname === '/api/evaluation/reviews') {
     if (method === 'GET') return ok({ items: (await client.query(`SELECT t.*,b.status AS batch_status,e.title AS experiment_title FROM evaluation_review_tasks t JOIN experiment_batches b ON b.id=t.batch_id JOIN experiments e ON e.id=b.experiment_id WHERE $1='admin' OR EXISTS(SELECT 1 FROM evaluation_review_assignments a WHERE a.task_id=t.id AND a.reviewer_id=$2) ORDER BY t.created_at DESC LIMIT 100`, [me.role, me.id])).rows });
     if (method === 'POST') {
-      if (me.role !== 'admin') return fail('仅管理员可分配人工评测', 403);
+      if (!isAdministrator(me)) return fail('仅管理员可分配人工评测', 403);
       const body = await readBody();
       if (!Array.isArray(body.reviewerIds) || body.reviewerIds.length !== 2 || new Set(body.reviewerIds).size !== 2) return fail('请选择两位不同的评测员');
       const active = (await client.query("SELECT id FROM users WHERE id=ANY($1::text[]) AND status='active'", [body.reviewerIds])).rows;
@@ -37,13 +38,13 @@ export async function handleEvaluationReviews({ pathname, method, client, me, re
   const task = (await client.query('SELECT * FROM evaluation_review_tasks WHERE id=$1', [match[1]])).rows[0];
   if (!task) return fail('人工评测任务不存在', 404);
   const assigned = (await client.query('SELECT role FROM evaluation_review_assignments WHERE task_id=$1 AND reviewer_id=$2', [task.id,me.id])).rows[0];
-  if (!assigned && me.role !== 'admin') return fail('未分配此评测任务', 403);
+  if (!assigned && !isAdministrator(me)) return fail('未分配此评测任务', 403);
   if (match[2] === 'report' && method === 'GET') {
-    if (me.role !== 'admin') return fail('双盲阶段评测员不能查看他人评分', 403);
+    if (!isAdministrator(me)) return fail('双盲阶段评测员不能查看他人评分', 403);
     return ok({ taskId: task.id, ...reviewSummary(await taskScores(client, task.id)) });
   }
   if (match[2] === 'adjudicator' && method === 'POST') {
-    if (me.role !== 'admin') return fail('仅管理员可指派仲裁员', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可指派仲裁员', 403);
     const body = await readBody();
     const disputes = reviewSummary(await taskScores(client, task.id)).disputes;
     if (!disputes.some(item => !item.adjudicated)) return fail('当前没有待仲裁条目', 409);

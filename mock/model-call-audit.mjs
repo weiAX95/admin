@@ -1,3 +1,5 @@
+import { isAdministrator } from './roles.mjs';
+
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DELAY = [250, 1000, 4000];
 const pending = new Set();
@@ -38,7 +40,7 @@ export async function flushModelCallAudits() { await Promise.all([...pending]); 
 
 export async function handleModelCallAudit({ pathname, method, client, me, url }) {
   if (pathname !== '/api/model-call-audit' || method !== 'GET') return null;
-  if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可查看模型调用审计' } };
+  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可查看模型调用审计' } };
   const start = url.searchParams.get('start') || '';
   const end = url.searchParams.get('end') || '';
   const modelId = url.searchParams.get('modelId') || '';

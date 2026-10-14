@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import dns from 'node:dns/promises';
 import http from 'node:http';
@@ -79,7 +80,7 @@ function problem(status, error) { return { status, data: { error } }; }
 
 async function handleOutboundWebhooksInner({ pathname, method, client, me, readBody, url, env = process.env }) {
   if (!pathname.startsWith('/api/settings/webhooks')) return null;
-  if (me.role !== 'admin') return problem(403, '仅管理员可管理 Webhook');
+  if (!isAdministrator(me)) return problem(403, '仅管理员可管理 Webhook');
   if (pathname === '/api/settings/webhooks' && method === 'GET') {
     const rows = (await client.query('SELECT * FROM outbound_webhooks ORDER BY created_at DESC')).rows;
     return { status: 200, data: { items: rows.map(apiView) } };

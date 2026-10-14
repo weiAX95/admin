@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 const sources = {
   task: { table: 'tasks', title: 'title' },
   note: { table: 'notes', title: 'title' },
@@ -6,7 +7,7 @@ const sources = {
 };
 export async function handleRecycleBin({ pathname, method, client, me, readBody }) {
   if (!pathname.startsWith('/api/settings/recycle-bin')) return null;
-  if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可管理回收站' } };
+  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可管理回收站' } };
   if (pathname === '/api/settings/recycle-bin' && method === 'GET') {
     const items = [];
     for (const [type, source] of Object.entries(sources)) {

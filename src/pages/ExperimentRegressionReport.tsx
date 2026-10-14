@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Col, Input, Modal, Progress, Row, Select, Space, Spin, Table, Tag, Typography } from 'antd';
 import { Link, useParams } from 'react-router-dom';
@@ -48,7 +49,7 @@ export default function ExperimentRegressionReport() {
   }, [id]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (!progress || !['queued','running'].includes(progress.status)) return; const timer=window.setInterval(()=>{if(!document.hidden) void load();},2000);return ()=>window.clearInterval(timer); }, [progress?.status,load]);
-  useEffect(() => { if (!report || getStoredUser<{role:string}>()?.role !== 'admin') return; void getJudgeQuality(report.datasetVersionId,report.metricVersionId).then(setJudgeQuality).catch(()=>setJudgeQuality(null)); }, [report?.datasetVersionId,report?.metricVersionId]);
+  useEffect(() => { if (!report || !isAdministrator(getStoredUser<{role:string}>())) return; void getJudgeQuality(report.datasetVersionId,report.metricVersionId).then(setJudgeQuality).catch(()=>setJudgeQuality(null)); }, [report?.datasetVersionId,report?.metricVersionId]);
   if (error) return <Alert type="error" showIcon message={error} action={<Button onClick={() => void load()}>重试</Button>} />;
   if (!report) return progress ? <Card title="回归评测运行中"><Tag>{progress.status}</Tag><Progress percent={progress.totalRuns?Math.round(progress.finishedRuns/progress.totalRuns*100):0} format={()=>`${progress.finishedRuns}/${progress.totalRuns}`} /><Typography.Text type="secondary">失败 {progress.failedRuns} 条；完成后自动加载完整报告。</Typography.Text></Card> : <Spin />;
   const exportPdf = async () => { setDownloading(true); try { const { makeRegressionPdf } = await import('../utils/experimentReportPdf'); downloadBlob(await makeRegressionPdf(report), `实验回归报告-${report.batchId.slice(0,8)}.pdf`); } catch (cause) { setError(cause instanceof Error ? cause.message : 'PDF 生成失败'); } finally { setDownloading(false); } };

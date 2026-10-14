@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import { shanghaiDate } from './note-reviews.mjs';
 
 const ok = (data, status = 200) => ({ status, data });
@@ -25,13 +26,13 @@ function bucketDate(day, granularity) {
 
 export async function handleSessionCosts({ pathname, method, client, me, url, readBody, sessions }) {
   if (pathname === '/api/sessions/model-prices' && method === 'GET') {
-    if (me.role !== 'admin') return fail('仅管理员可配置会话模型价格', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可配置会话模型价格', 403);
     const rows = (await client.query('SELECT id,name,display_name,input_usd_per_million,output_usd_per_million,status FROM experiment_models ORDER BY name')).rows;
     return ok({ items: rows.map(row => ({ id: row.id, name: row.name, displayName: row.display_name, inputUsdPer1K: row.input_usd_per_million / 1000, outputUsdPer1K: row.output_usd_per_million / 1000, status: row.status })) });
   }
   const priceRoute = pathname.match(/^\/api\/sessions\/model-prices\/([^/]+)$/);
   if (priceRoute && method === 'PATCH') {
-    if (me.role !== 'admin') return fail('仅管理员可配置会话模型价格', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可配置会话模型价格', 403);
     const body = await readBody();
     if (![body.inputUsdPer1K, body.outputUsdPer1K].every(value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value < 100000)) return fail('模型输入与输出价格须为非负有限数', 422);
     const row = (await client.query('UPDATE experiment_models SET input_usd_per_million=$2,output_usd_per_million=$3 WHERE id=$1 RETURNING id,name,input_usd_per_million,output_usd_per_million', [priceRoute[1], body.inputUsdPer1K * 1000, body.outputUsdPer1K * 1000])).rows[0];
@@ -51,7 +52,7 @@ export async function handleSessionCosts({ pathname, method, client, me, url, re
     LEFT JOIN LATERAL (SELECT id,input_usd_per_million,output_usd_per_million FROM experiment_models
       WHERE id=p.model_id OR name=m.usage_model ORDER BY (id=p.model_id) DESC LIMIT 1) current_price ON true
     WHERE m.prompt_tokens IS NOT NULL AND ($1='admin' OR s.ingested_by=$2) ORDER BY m.session_id,m.item_order`, [me.role, me.id])).rows;
-  const ownedIds = me.role === 'admin' ? null : new Set((await client.query('SELECT id FROM sessions WHERE ingested_by=$1', [me.id])).rows.map(row => row.id));
+  const ownedIds = isAdministrator(me) ? null : new Set((await client.query('SELECT id FROM sessions WHERE ingested_by=$1', [me.id])).rows.map(row => row.id));
   const visible = ownedIds ? sessions.filter(session => ownedIds.has(session.id)) : sessions;
   const perSession = new Map(visible.map(session => [session.id, { id: session.id, title: (session.messages.find(item => item.role === 'user')?.content || '（无标题）').slice(0, 40), knownCostUsd: 0, pricedMessages: 0, unpricedMessages: 0 }]));
   const trend = new Map(), byModel = new Map();

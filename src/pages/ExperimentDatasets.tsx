@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Alert, Button, Card, Checkbox, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Typography, Upload } from 'antd';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -106,7 +107,7 @@ export default function ExperimentDatasets() {
     try { const detail = await getDatasetVersion(versionId); setSubset({ dataset, versionId, cases: detail.cases as { case_key: string }[] }); setSubsetKeys([]); setSubsetName(`${dataset.name} · 子集`); }
     catch (cause) { message.error(cause instanceof Error ? cause.message : '加载用例失败'); }
   };
-  const admin = getStoredUser<{role:string}>()?.role === 'admin';
+  const admin = isAdministrator(getStoredUser<{role:string}>());
   const openSettings = async () => { try { const value=await getEvaluationSettings(); setMediaGlobalGb(Number(value.global_media_bytes)/1024**3); setMediaDatasetGb(Number(value.dataset_media_bytes)/1024**3); setMinFreePercent(Number(value.min_free_percent)); setSettingsOpen(true); } catch(cause) { message.error(cause instanceof Error ? cause.message : '设置加载失败'); } };
   const saveSettings = async () => { try { await updateEvaluationSettings({globalMediaBytes:Math.round(mediaGlobalGb*1024**3),datasetMediaBytes:Math.round(mediaDatasetGb*1024**3),minFreePercent}); setSettingsOpen(false); message.success('评测媒体配额已更新'); } catch(cause) { message.error(cause instanceof Error ? cause.message : '保存失败'); } };
   return <Card title="版本化评测数据集" extra={<Space wrap><Link to="/experiments">返回实验</Link>{admin && <Button onClick={() => void openSettings()}>媒体配额</Button>}<Button onClick={() => openImport('new')}>导入 CSV／JSONL</Button><Button type="primary" onClick={() => { setName(''); setFolderId(undefined); setCasesText(example); setTarget('new'); }}>新建数据集</Button></Space>}>

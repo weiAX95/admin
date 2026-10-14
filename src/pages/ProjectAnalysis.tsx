@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
@@ -118,7 +119,7 @@ export default function ProjectAnalysis() {
       setLinkedTasks(linked.items);
       setTaskRequirements(linked.requirements);
       setTaskBaselineVersionId(linked.baselineVersionId);
-      setTaskCandidates(tasks.items.filter(task => user?.role === 'admin' || task.ownerId === user?.id));
+      setTaskCandidates(tasks.items.filter(task => isAdministrator(user) || task.ownerId === user?.id));
     } catch (cause) { setTaskError(cause instanceof Error ? cause.message : '关联任务读取失败'); }
     finally { setTaskLoading(false); }
   };

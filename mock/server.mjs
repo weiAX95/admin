@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 /**
  * 本地 API 层（node:http + PostgreSQL）。
  * 覆盖：登录鉴权、学习任务 CRUD + 审计、会话记录、学习笔记、实验记录、统计看板。
@@ -632,7 +633,7 @@ async function handleRequest(req, res) {
             locked_until=NULL,updated_at=now() RETURNING failed_attempts`, [account.id])).rows[0];
           if (failure.failed_attempts >= 5) {
             const lockedUntil = (await activeClient.query("UPDATE login_security_state SET locked_until=now()+interval '15 minutes',failed_attempts=0 WHERE user_id=$1 RETURNING locked_until", [account.id])).rows[0].locked_until;
-            for (const admin of db.users.filter(user => user.role === "admin" && user.status === "active")) {
+            for (const admin of db.users.filter(user => isAdministrator(user) && user.status === "active")) {
               await notifyUser(activeClient, admin.id, "account_login_locked", `${account.id}:${new Date(lockedUntil).toISOString()}`, "账号登录已锁定", `账号 ${account.username} 连续 5 次登录失败，已锁定 15 分钟。`, "/accounts");
             }
             await recordLoginAttempt(req, account, body.username, deviceHint, false, 'locked');
@@ -692,7 +693,7 @@ async function handleRequest(req, res) {
     const accountTasks = db.tasks.filter(task => canUseDependency(task, me));
     const accountTaskIds = new Set(accountTasks.map(task => task.id));
     const linkedTaskVisible = taskId => !taskId || accountTaskIds.has(taskId);
-    const noteSourceIds = me.role === 'admin' || !pathname.startsWith('/api/notes') ? null
+    const noteSourceIds = isAdministrator(me) || !pathname.startsWith('/api/notes') ? null
       : new Set((await activeClient.query('SELECT id FROM sessions WHERE ingested_by=$1', [me.id])).rows.map(row => row.id));
     const linkedRecordView = record => {
       if (!record) return record;
@@ -703,15 +704,15 @@ async function handleRequest(req, res) {
     };
     const visibleTask = task => canUseDependency(task, me);
     const taskView = task => {
-      if (!task || me.role === "admin") return task;
+      if (!task || isAdministrator(me)) return task;
       return {
         ...task,
         dependencyIds: (task.dependencyIds || []).filter(id => accountTaskIds.has(id)),
         blockedBy: (task.blockedBy || []).filter(item => accountTaskIds.has(item.id)),
       };
     };
-    const accountActivity = me.role === "admin" ? db.activity : db.activity.filter(item => item.taskId ? accountTaskIds.has(item.taskId) : item.userId === me.id);
-    const accountData = me.role === "admin" ? db : {
+    const accountActivity = isAdministrator(me) ? db.activity : db.activity.filter(item => item.taskId ? accountTaskIds.has(item.taskId) : item.userId === me.id);
+    const accountData = isAdministrator(me) ? db : {
       ...db,
       tasks: accountTasks,
       activity: accountActivity,
@@ -914,7 +915,7 @@ async function handleRequest(req, res) {
 
     if (method === "GET" && pathname === "/api/activity") {
       try {
-        return send(res, 200, listActivity(accountActivity, me.role === "admin" ? db.users : [me], Object.fromEntries(url.searchParams)));
+        return send(res, 200, listActivity(accountActivity, isAdministrator(me) ? db.users : [me], Object.fromEntries(url.searchParams)));
       } catch (error) {
         return send(res, 400, { error: error.message });
       }
@@ -945,7 +946,7 @@ async function handleRequest(req, res) {
 
     // ---- 一次性账号邀请（仅管理员）----
     if (pathname === "/api/users/invitations" || /^\/api\/users\/invitations\/[^/]+\/revoke$/.test(pathname)) {
-      if (me.role !== "admin") return send(res, 403, { error: "需要管理员权限" });
+      if (!isAdministrator(me)) return send(res, 403, { error: "需要管理员权限" });
       if (pathname === "/api/users/invitations" && method === "GET") {
         const items = (await activeClient.query(`SELECT id,username,display_name,role,activation_mode,created_at,expires_at,consumed_at,revoked_at
           FROM account_invitations ORDER BY created_at DESC LIMIT 100`)).rows;
@@ -983,7 +984,7 @@ async function handleRequest(req, res) {
     const isUsersPath =
       pathname === "/api/users" || /^\/api\/users\/[^/]+(?:\/(?:restore|permanent))?$/.test(pathname);
     if (isUsersPath) {
-      if (me.role !== "admin") {
+      if (!isAdministrator(me)) {
         return send(res, 403, { error: "需要管理员权限" });
       }
 
@@ -1188,7 +1189,7 @@ async function handleRequest(req, res) {
     if (seriesRoute) {
       const series = db.recurringSeries.find(item => item.id === seriesRoute[1]);
       if (!series) return send(res, 404, { error: "重复序列不存在" });
-      if (me.role !== "admin" && series.ownerId !== me.id) return send(res, 403, { error: "无权修改该重复序列" });
+      if (!isAdministrator(me) && series.ownerId !== me.id) return send(res, 403, { error: "无权修改该重复序列" });
       if (method === "GET" && !seriesRoute[2]) return send(res, 200, seriesView(series));
       if (method === "POST" && seriesRoute[2] === "stop") {
         if (series.active) { series.active = false; series.version = (series.version || 1) + 1; series.updatedAt = nowIso(); saveDb(db); scheduleRecurrences(0); }
@@ -1417,7 +1418,7 @@ async function handleRequest(req, res) {
         if (body.recurrence !== undefined) {
           if (!body.recurrence || typeof body.recurrence.enabled !== "boolean") return send(res, 400, { error: "重复配置无效" });
           existingSeries = db.recurringSeries.find(series => series.id === before.recurringSeriesId) || null;
-          if (existingSeries && me.role !== "admin" && existingSeries.ownerId !== me.id) return send(res, 403, { error: "无权修改该重复序列" });
+          if (existingSeries && !isAdministrator(me) && existingSeries.ownerId !== me.id) return send(res, 403, { error: "无权修改该重复序列" });
           if (body.recurrence.enabled) {
             if (existingSeries && !existingSeries.active) return send(res, 409, { error: "重复序列已停止" });
             if (existingSeries && body.recurrence.version !== (existingSeries.version || 1)) return send(res, 409, { error: "重复配置已变化，请刷新后重试" });
@@ -1496,7 +1497,7 @@ async function handleRequest(req, res) {
     if (timeEntryRoute) {
       const entry = db.timeEntries.find(item => item.taskId === timeEntryRoute[1] && item.id === timeEntryRoute[2]);
       if (!entry) return send(res, 404, { error: "工时记录不存在" });
-      if (entry.recordedBy !== me.id && me.role !== "admin") return send(res, 403, { error: "只能修改自己的工时记录" });
+      if (entry.recordedBy !== me.id && !isAdministrator(me)) return send(res, 403, { error: "只能修改自己的工时记录" });
       if (method === "PUT") {
         const body = await readBody(req);
         let values;
@@ -1592,7 +1593,7 @@ async function handleRequest(req, res) {
     }
 
     // ---- sessions ----
-    const visibleSessionIds = async () => me.role === 'admin' ? null : new Set((await activeClient.query('SELECT id FROM sessions WHERE ingested_by=$1', [me.id])).rows.map(row => row.id));
+    const visibleSessionIds = async () => isAdministrator(me) ? null : new Set((await activeClient.query('SELECT id FROM sessions WHERE ingested_by=$1', [me.id])).rows.map(row => row.id));
     const sessionUsage = session => {
       const reported = session.messages.filter(item => item.role === 'assistant' && item.usage);
       if (!reported.length) return null;
@@ -1650,14 +1651,14 @@ async function handleRequest(req, res) {
     }
     if (pathname === '/api/sessions/clusters' && method === 'GET') {
       const settings = (await activeClient.query('SELECT requested_k,last_built_at FROM session_cluster_settings WHERE id=1')).rows[0];
-      const rows = me.role === 'admin'
+      const rows = isAdministrator(me)
         ? (await activeClient.query('SELECT id,label,auto_label,manually_labeled,member_count FROM session_clusters ORDER BY member_count DESC,label,id')).rows
         : (await activeClient.query('SELECT c.id,count(s.id)::int AS member_count FROM session_clusters c JOIN sessions s ON s.cluster_id=c.id AND s.ingested_by=$1 GROUP BY c.id ORDER BY member_count DESC,c.id', [me.id])).rows;
-      const items = rows.map(row => ({ id: row.id, label: me.role === 'admin' ? row.label : `主题 ${row.id.slice(0, 6)}`, autoLabel: me.role === 'admin' ? row.auto_label : null, manuallyLabeled: me.role === 'admin' && row.manually_labeled, memberCount: row.member_count }));
+      const items = rows.map(row => ({ id: row.id, label: isAdministrator(me) ? row.label : `主题 ${row.id.slice(0, 6)}`, autoLabel: isAdministrator(me) ? row.auto_label : null, manuallyLabeled: isAdministrator(me) && row.manually_labeled, memberCount: row.member_count }));
       return send(res, 200, { requestedK: settings.requested_k || 'auto', lastBuiltAt: settings.last_built_at, items });
     }
     if (pathname === '/api/sessions/clusters/config' && method === 'PUT') {
-      if (me.role !== 'admin') return send(res, 403, { error: '仅管理员可配置主题聚类' });
+      if (!isAdministrator(me)) return send(res, 403, { error: '仅管理员可配置主题聚类' });
       const body = await readBody(req);
       if (body.k !== 'auto' && (!Number.isInteger(body.k) || body.k < 1 || body.k > 20)) return send(res, 422, { error: 'K 必须为 auto 或 1–20 的整数' });
       await activeClient.query('UPDATE session_cluster_settings SET requested_k=$1 WHERE id=1', [body.k === 'auto' ? null : body.k]);
@@ -1665,13 +1666,13 @@ async function handleRequest(req, res) {
       return send(res, 200, { requestedK: body.k, count: items.length });
     }
     if (pathname === '/api/sessions/clusters/rebuild' && method === 'POST') {
-      if (me.role !== 'admin') return send(res, 403, { error: '仅管理员可重算主题聚类' });
+      if (!isAdministrator(me)) return send(res, 403, { error: '仅管理员可重算主题聚类' });
       const items = await rebuildSessionClusters(activeClient);
       return send(res, 200, { count: items.length });
     }
     const clusterRoute = pathname.match(/^\/api\/sessions\/clusters\/([^/]+)$/);
     if (clusterRoute && method === 'PATCH') {
-      if (me.role !== 'admin') return send(res, 403, { error: '仅管理员可修改主题标签' });
+      if (!isAdministrator(me)) return send(res, 403, { error: '仅管理员可修改主题标签' });
       const body = await readBody(req);
       const label = typeof body.label === 'string' ? body.label.trim() : '';
       if (!label || label.length > 60) return send(res, 422, { error: '标签须为 1–60 字' });
@@ -1720,7 +1721,7 @@ async function handleRequest(req, res) {
       const body = await readBody(req);
       if (!Array.isArray(body.messages)) return send(res, 422, { error: "messages 必须是数组" });
       const existing = body.id ? db.sessions.find(item => item.id === body.id) : null;
-      if (existing && me.role !== "admin") {
+      if (existing && !isAdministrator(me)) {
         const owner = (await activeClient.query("SELECT ingested_by FROM sessions WHERE id=$1", [existing.id])).rows[0]?.ingested_by;
         if (owner !== me.id) return send(res, 403, { error: "仅会话上报账号或管理员可追加消息" });
       }
@@ -1821,7 +1822,7 @@ async function handleRequest(req, res) {
     if (pathname === "/api/note-tags") {
       if (method === "GET") return send(res, 200, { items: db.noteTagDefinitions.map(noteTagView).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh-CN")) });
       if (method === "POST") {
-        if (me.role !== "admin") return send(res, 403, { error: "仅管理员可管理笔记标签" });
+        if (!isAdministrator(me)) return send(res, 403, { error: "仅管理员可管理笔记标签" });
         const body = await readBody(req);
         const name = validateNoteTagName(body.name);
         const normalizedKey = noteTagKey(name);
@@ -1836,7 +1837,7 @@ async function handleRequest(req, res) {
     const noteTagMerge = pathname.match(/^\/api\/note-tags\/([^/]+)\/merge$/);
     const noteTagOne = pathname.match(/^\/api\/note-tags\/([^/]+)$/);
     if (noteTagMerge || noteTagOne) {
-      if (me.role !== "admin") return send(res, 403, { error: "仅管理员可管理笔记标签" });
+      if (!isAdministrator(me)) return send(res, 403, { error: "仅管理员可管理笔记标签" });
       const tag = db.noteTagDefinitions.find(item => item.id === (noteTagMerge || noteTagOne)[1]);
       if (!tag) return send(res, 404, { error: "标签不存在" });
       if (noteTagMerge && method === "POST") {
@@ -2043,7 +2044,7 @@ async function handleRequest(req, res) {
       if (i === -1) return send(res, 404, { error: "experiment not found" });
       if (method === "GET") return send(res, 200, linkedRecordView(db.experiments[i]));
       if (method === "PUT" || method === "PATCH") {
-        if (me.role !== "admin" && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权修改该实验" });
+        if (!isAdministrator(me) && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权修改该实验" });
         if (db.experiments[i].recordKind === "definition") return send(res, 409, { error: "请使用实验定义接口修改" });
         const body = await readBody(req);
         const w = {};
@@ -2062,7 +2063,7 @@ async function handleRequest(req, res) {
         return send(res, 200, linkedRecordView(db.experiments[i]));
       }
       if (method === "DELETE") {
-        if (me.role !== "admin" && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权删除该实验" });
+        if (!isAdministrator(me) && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权删除该实验" });
         const [rm] = db.experiments.splice(i, 1);
         saveDb(db);
         afterSave(async client => {

@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useCallback, useEffect, useState } from 'react';
 import { App, Button, Card, Input, Select, Space, Table, Tag, Typography } from 'antd';
 import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
@@ -20,7 +21,7 @@ const csvCell = (value: unknown) => {
 
 export default function AccountAudit() {
   const { message } = App.useApp();
-  const admin = getStoredUser<AuthUser>()?.role === 'admin';
+  const admin = isAdministrator(getStoredUser<AuthUser>());
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [filters, setFilters] = useState<AccountAuditQuery>({});
   const [page, setPage] = useState(1);

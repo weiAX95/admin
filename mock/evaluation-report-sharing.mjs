@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import { sha256 } from './postgres-store.mjs';
 import { regressionReport } from './experiment-evaluation.mjs';
@@ -11,7 +12,7 @@ const publicRoute = /^\/api\/public\/evaluation-reports\/([0-9a-f-]{36})$/;
 async function ownedBatch(client, batchId, me) {
   const row = (await client.query("SELECT id,owner_id FROM experiment_batches WHERE id=$1 AND kind='regression'", [batchId])).rows[0];
   if (!row) return { error: fail('回归报告不存在', 404) };
-  if (me.role !== 'admin' && row.owner_id !== me.id) return { error: fail('无权管理此报告分享', 403) };
+  if (!isAdministrator(me) && row.owner_id !== me.id) return { error: fail('无权管理此报告分享', 403) };
   return { row };
 }
 

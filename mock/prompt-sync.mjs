@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import {importPrompts} from './prompts.mjs';
 
@@ -131,7 +132,7 @@ export async function handlePromptSync(req,res,pool,lookupSession) {
   const token=/^Bearer (.+)$/.exec(req.headers.authorization || '')?.[1];
   const account=await lookupSession(token);
   if(!account) return json(res,401,{error:'请先登录'});
-  if(account.role!=='admin') return json(res,403,{error:'仅管理员可同步外部提示词'});
+  if(!isAdministrator(account)) return json(res,403,{error:'仅管理员可同步外部提示词'});
   if(url.pathname==='/api/prompts/sync/config'&&req.method==='GET') return json(res,200,{langfuse:Boolean(connection('langfuse')),langsmith:Boolean(connection('langsmith'))});
   if(!['/api/prompts/sync/preview','/api/prompts/sync/confirm'].includes(url.pathname)||req.method!=='POST') return json(res,405,{error:'method not allowed'});
   try {

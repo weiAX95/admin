@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useEffect, useState } from 'react';
 import { App, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Switch, Table, Tag, Typography, Upload } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
@@ -19,7 +20,7 @@ const primaryPresets = ['#9582ff', '#1677ff', '#13a8a8', '#389e0d', '#d46b08', '
 export default function Settings() {
   const { message } = App.useApp();
   const { refresh, brand, previewPreferences } = useSettings();
-  const admin = getStoredUser<AuthUser>()?.role === 'admin';
+  const admin = isAdministrator(getStoredUser<AuthUser>());
   const [global, setGlobal] = useState<GlobalSettings | null>(null);
   const [personal, setPersonal] = useState<Preferences | null>(null);
   const [saving, setSaving] = useState(false);

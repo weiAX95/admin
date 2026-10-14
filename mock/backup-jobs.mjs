@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
@@ -43,7 +44,7 @@ export async function handleBackupRequest(req, res, pool, lookupSession, onChang
   const token = (req.headers.authorization || '').replace(/^Bearer /, '');
   const me = await lookupSession(token);
   if (!me) { respond(res, 401, { error: '未登录或登录已过期' }); return true; }
-  if (me.role !== 'admin') { respond(res, 403, { error: '仅管理员可操作备份' }); return true; }
+  if (!isAdministrator(me)) { respond(res, 403, { error: '仅管理员可操作备份' }); return true; }
   if (pathname === '/api/settings/backups' && req.method === 'GET') {
     const items = (await pool.query('SELECT * FROM backup_jobs ORDER BY created_at DESC LIMIT 50')).rows.map(asPublic);
     respond(res, 200, { items });

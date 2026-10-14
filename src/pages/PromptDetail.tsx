@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useCallback, useEffect, useState } from 'react';
 import { App, Alert, Button, Card, Col, Form, Input, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
 import { diffArrays, diffLines } from 'diff';
@@ -25,7 +26,7 @@ export default function PromptDetail() {
   const [analytics,setAnalytics] = useState<PromptAnalytics | null>(null);
   const content = Form.useWatch('content',form) || '';
   const variables = Form.useWatch('variables',form) || [];
-  const canEdit = user?.role === 'admin' || user?.id === prompt?.owner_id;
+  const canEdit = isAdministrator(user) || user?.id === prompt?.owner_id;
   const refresh = useCallback(async () => {
     const [item,history,refs,stats] = await Promise.all([getPrompt(id),listPromptVersions(id),getPromptReferences(id),getPromptAnalytics(id)]);
     setReferences(refs);setAnalytics(stats);

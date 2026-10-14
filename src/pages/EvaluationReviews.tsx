@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Empty, Form, InputNumber, Modal, Select, Space, Table, Tag, Typography, theme } from 'antd';
 import { listAccounts } from '../api/accounts';
@@ -13,7 +14,7 @@ const initialScore: Score = { accuracy: 5, completeness: 5, brevity: 5, safety: 
 export default function EvaluationReviews() {
   const { message } = App.useApp();
   const { token } = theme.useToken();
-  const admin = getStoredUser<Account>()?.role === 'admin';
+  const admin = isAdministrator(getStoredUser<Account>());
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [batches, setBatches] = useState<{ id: string; title: string; dataset_version_id: string }[]>([]);

@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import { sha256 } from './postgres-store.mjs';
 
@@ -5,7 +6,7 @@ const uuid=()=>crypto.randomUUID();
 const ok=(data,status=200)=>({status,data});
 const fail=(error,status=400)=>ok({error},status);
 const expiries={ '1h': 3600_000, '24h': 86_400_000, '7d': 7*86_400_000, permanent: null };
-const owner=(row,me)=>me.role==='admin'||row.owner_id===me.id;
+const owner=(row,me)=>isAdministrator(me)||row.owner_id===me.id;
 
 async function publicView(client, experimentId) {
   const experiment=(await client.query('SELECT * FROM experiments WHERE id=$1 AND deleted_at IS NULL',[experimentId])).rows[0];

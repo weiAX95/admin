@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 const MAX_SESSIONS = 50;
 
 function fenced(value) {
@@ -45,7 +46,7 @@ export async function exportSessions(pool, body, me, now = new Date()) {
     for (const row of annotationsResult.rows) {
       const key = `${row.session_id}\0${row.message_id}`;
       if (!annotations.has(key)) annotations.set(key, []);
-      annotations.get(key).push({ id: row.id, ...(me.role === 'admin' ? { reviewerId: row.reviewer_id } : {}), rating: row.rating, tags: row.tags, createdAt: row.created_at, updatedAt: row.updated_at });
+      annotations.get(key).push({ id: row.id, ...(isAdministrator(me) ? { reviewerId: row.reviewer_id } : {}), rating: row.rating, tags: row.tags, createdAt: row.created_at, updatedAt: row.updated_at });
     }
     const messages = new Map(ids.map(id => [id, []]));
     for (const row of messagesResult.rows) messages.get(row.session_id).push({ id: row.id, role: row.role, content: row.content, at: row.at, ...(row.prompt_tokens === null ? {} : { usage: { promptTokens: row.prompt_tokens, completionTokens: row.completion_tokens, ...(row.usage_model ? { model: row.usage_model } : {}) } }), annotations: annotations.get(`${row.session_id}\0${row.id}`) || [] });

@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useCallback, useEffect, useState } from 'react';
 import { App, Alert, Button, Card, Col, Descriptions, Form, Input, Progress, Rate, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
@@ -45,7 +46,7 @@ export default function ExperimentDefinitionDetail({ id }: { id: string }) {
   if (error) return <Alert type="error" showIcon message={error} action={<Button onClick={() => void load()}>重试</Button>} />;
   if (!definition) return <Card loading />;
   const user = getStoredUser<AuthUser>();
-  const canManage = user?.role === 'admin' || user?.id === definition.ownerId;
+  const canManage = isAdministrator(user) || user?.id === definition.ownerId;
   const needed = variableNames(`${definition.systemPrompt}\n${definition.userPrompt}`);
   const confirmQuote = (runCount: number, cost: number, remaining: number) => new Promise<boolean>(resolve => modal.confirm({ title: `确认提交 ${runCount} 次模型调用？`, content: `调用上限估算 $${cost.toFixed(6)}，当前剩余额度 $${remaining.toFixed(6)}。`, onOk: () => resolve(true), onCancel: () => resolve(false) }));
   const run = async () => { setBusy(true); try { const quote = await estimateDefinition(id, { kind: 'single', variables }); if (!await confirmQuote(quote.runCount, quote.estimatedMaxCostUsd, quote.remainingBudgetUsd)) return; const result = await runDefinition(id, variables); message.success(`已排队 ${result.runCount} 次运行`); await load(); } catch (cause) { message.error(cause instanceof Error ? cause.message : '执行失败'); } finally { setBusy(false); } };

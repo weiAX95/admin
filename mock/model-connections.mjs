@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 
 const providers = new Set(['legacy','openai','qwen','gemini']);
@@ -88,7 +89,7 @@ export async function modelConnectionAvailable(client, model) {
 }
 export async function handleModelConnections({ pathname, method, client, me, readBody }) {
   if (!pathname.startsWith('/api/settings/model-connections')) return null;
-  if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可管理模型连接' } };
+  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可管理模型连接' } };
   if (pathname === '/api/settings/model-connections' && method === 'GET') {
     return { status: 200, data: { items: (await client.query('SELECT * FROM model_connections ORDER BY provider,name')).rows.map(view) } };
   }

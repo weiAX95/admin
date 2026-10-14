@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 const MINUTE = 60_000;
 
 export async function collectAlertMetrics(pool, now = new Date()) {
@@ -94,7 +95,7 @@ export async function collectAlertMetrics(pool, now = new Date()) {
 
 export async function handleAlertMetrics({ pathname, method, client, me, url }) {
   if (pathname !== '/api/alerts/metrics' || method !== 'GET') return null;
-  if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可查看告警指标' } };
+  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可查看告警指标' } };
   const metric = url.searchParams.get('metric');
   const scopeId = url.searchParams.get('scopeId') || '*';
   const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 120));

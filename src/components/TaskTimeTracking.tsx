@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useEffect, useState } from "react";
 import { App, Alert, Button, Card, DatePicker, Drawer, Empty, Form, Input, InputNumber, Popconfirm, Select, Space, Spin, Statistic, Typography } from "antd";
 import dayjs from "dayjs";
@@ -99,7 +100,7 @@ export default function TaskTimeTracking({ task }: { task: LearningTask }) {
     {task.status !== "done" && task.activeCycleStartedAt && <Typography.Paragraph type="secondary">当前周期进行中：自 {dateTime(task.activeCycleStartedAt)} 开始；任务历时不会计入实际投入。</Typography.Paragraph>}
     <Typography.Title level={5} className="task-time-records-title">实际工时记录</Typography.Title>
     {loading ? <Spin className="task-detail-loading" /> : entries.length === 0 ? <Empty description="暂无工时记录" /> : <div className="task-time-entries">{entries.map(entry => {
-      const editable = current?.role === "admin" || current?.id === entry.recordedBy;
+      const editable = isAdministrator(current) || current?.id === entry.recordedBy;
       return <div className="task-time-entry" key={entry.id}>
         <div><strong>{Math.round(entry.durationMinutes / 60 * 100) / 100} 小时</strong><Typography.Text type="secondary">{entry.mode === "interval" && entry.startedAt && entry.endedAt ? `${dateTime(entry.startedAt)} — ${dateTime(entry.endedAt)}` : entry.workDate} · {entry.recordedByName}</Typography.Text>{entry.note && <p>{entry.note}</p>}</div>
         {editable && <Space><Button size="small" onClick={() => openForm(entry)}>编辑</Button><Popconfirm title="删除这条工时记录？" onConfirm={() => void remove(entry)}><Button size="small" danger>删除</Button></Popconfirm></Space>}

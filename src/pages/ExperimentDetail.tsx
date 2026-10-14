@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useEffect, useState } from "react";
 import { Alert, Card, Descriptions, Spin } from "antd";
 import { Link, useParams } from "react-router-dom";
@@ -23,7 +24,7 @@ export default function ExperimentDetail() {
   if (!experiment) return <Spin className="task-detail-loading" />;
   if (experiment.recordKind === "definition") return <ExperimentDefinitionDetail id={experiment.id} />;
   const me = getStoredUser<AuthUser>();
-  const canShare = me?.role === "admin" || experiment.ownerId === me?.id;
+  const canShare = isAdministrator(me) || experiment.ownerId === me?.id;
   return <Card title={experiment.title} extra={<>{canShare && <ExperimentShareButton id={experiment.id}/>} {experiment.taskId ? <Link to={`/tasks/${experiment.taskId}`}>返回关联任务</Link> : <Link to="/experiments">返回实验列表</Link>}</>}>
     <Descriptions column={{ xs: 1, md: 2 }} items={[
       { key: "model", label: "模型", children: experiment.model || "未填写" },

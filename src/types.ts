@@ -339,7 +339,7 @@ export interface StatsQuery {
 
 /* ------------------------------ 鉴权 / 账号 ------------------------------ */
 
-export type AccountRole = "admin" | "member";
+export type AccountRole = "super_admin" | "admin" | "member";
 export type AccountStatus = "active" | "disabled" | "pending";
 export type ActivationMode = "immediate" | "first_login" | "manual";
 

@@ -1,6 +1,7 @@
+import { isAdministrator } from './roles.mjs';
 const features=new Set(['vision','function_calling','json_mode','streaming','embedding','reasoning']);
 export const supportedProvider=new Set(['legacy','openai','qwen','gemini']);
-export const modelUsable=(model, user)=>Boolean(model?.active && model.status==='active' && (user.role==='admin' || model.allowed_roles?.includes(user.role)));
+export const modelUsable=(model, user)=>Boolean(model?.active && model.status==='active' && (isAdministrator(user) || model.allowed_roles?.includes(user.role)));
 export function validateRegistry(body, current=null){
   const name=body.name===undefined?current?.name:body.name;
   if(typeof name!=='string'||!(/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,99}$/).test(name))throw new Error('唯一标识只能使用字母、数字、点、冒号、下划线和连字符');

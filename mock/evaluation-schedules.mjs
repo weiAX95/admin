@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import { createBatch } from './experiment-platform.mjs';
 import { nextScheduleAt, validTimeZone } from './experiment-schedule-time.mjs';
@@ -28,7 +29,7 @@ export async function handleEvaluationSchedules({ pathname, method, client, me, 
       const body = await readBody();
       const experiment = (await client.query("SELECT owner_id FROM experiments WHERE id=$1 AND record_kind='definition' AND deleted_at IS NULL", [body.experimentId])).rows[0];
       if (!experiment) return fail('可执行实验不存在',404);
-      if (me.role !== 'admin' && experiment.owner_id !== me.id) return fail('无权调度该实验',403);
+      if (!isAdministrator(me) && experiment.owner_id !== me.id) return fail('无权调度该实验',403);
       if (!(await client.query('SELECT 1 FROM experiment_variants WHERE id=$1 AND experiment_id=$2 AND active=true', [body.variantId,body.experimentId])).rowCount) return fail('变体不存在或已停用');
       if (!(await client.query('SELECT 1 FROM experiment_dataset_versions WHERE id=$1', [body.datasetVersionId])).rowCount) return fail('数据集版本不存在');
       if (!(await client.query('SELECT 1 FROM experiment_metric_versions WHERE id=$1', [body.metricVersionId])).rowCount) return fail('指标版本不存在');
@@ -45,7 +46,7 @@ export async function handleEvaluationSchedules({ pathname, method, client, me, 
   if (!route) return null;
   const schedule = (await client.query('SELECT * FROM evaluation_schedules WHERE id=$1', [route[1]])).rows[0];
   if (!schedule) return fail('调度不存在',404);
-  if (me.role !== 'admin' && schedule.owner_id !== me.id) return fail('无权管理该调度',403);
+  if (!isAdministrator(me) && schedule.owner_id !== me.id) return fail('无权管理该调度',403);
   if (route[2] === 'run-now' && method === 'POST') {
     const result = await dispatch(client,schedule,new Date());
     return result?.batchId ? ok(result,202) : fail(result?.error || '立即执行失败',409);

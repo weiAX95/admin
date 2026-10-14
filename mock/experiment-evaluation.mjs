@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createBatch } from './experiment-platform.mjs';
@@ -13,7 +14,7 @@ const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
 const fail = (error, status = 400) => ok({ error }, status);
 const allowedTags = new Set(['幻觉','不完整','格式错误','推理错误','完美','偏题','冗余']);
-const canAccessLinkedTask = async (client, me, taskId) => !taskId || me.role === 'admin' || Boolean((await client.query('SELECT 1 FROM tasks WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL', [taskId, me.id])).rowCount);
+const canAccessLinkedTask = async (client, me, taskId) => !taskId || isAdministrator(me) || Boolean((await client.query('SELECT 1 FROM tasks WHERE id=$1 AND owner_id=$2 AND deleted_at IS NULL', [taskId, me.id])).rowCount);
 
 const validatedCases = validateEvaluationCases;
 async function validateAssets(client, datasetId, cases, actor) {
@@ -22,7 +23,7 @@ async function validateAssets(client, datasetId, cases, actor) {
   const settings = (await client.query('SELECT * FROM evaluation_settings WHERE id=1')).rows[0];
   const assets = (await client.query('SELECT id,kind,byte_size,uploaded_by FROM prompt_media_assets WHERE id=ANY($1::text[])', [ids])).rows;
   if (assets.length !== ids.length) throw new Error('部分媒体附件不存在');
-  if (actor?.role !== 'admin' && assets.some(asset => asset.uploaded_by !== actor?.id)) throw new Error('无权引用其他账号的媒体附件');
+  if (!isAdministrator(actor) && assets.some(asset => asset.uploaded_by !== actor?.id)) throw new Error('无权引用其他账号的媒体附件');
   const newBytes = assets.reduce((sum, asset) => sum + Number(asset.byte_size), 0);
   if (newBytes > Number(settings.dataset_media_bytes)) throw new Error('单数据集媒体引用超过配额');
   const existing = (await client.query('SELECT DISTINCT a.asset_id,p.byte_size FROM evaluation_case_assets a JOIN prompt_media_assets p ON p.id=a.asset_id JOIN experiment_dataset_cases c ON c.id=a.case_id JOIN experiment_dataset_versions v ON v.id=c.dataset_version_id WHERE v.dataset_id=$1', [datasetId])).rows;
@@ -123,7 +124,7 @@ export async function handleExperimentEvaluation(context) {
 
 async function handleExperimentEvaluationInner({ pathname, method, client, me, readBody, url }) {
   if (pathname === '/api/evaluation/judge-quality' && method === 'GET') {
-    if (me.role !== 'admin') return fail('仅管理员可查看 Judge 质量',403);
+    if (!isAdministrator(me)) return fail('仅管理员可查看 Judge 质量',403);
     const datasetVersionId = url.searchParams.get('datasetVersionId'), metricVersionId = url.searchParams.get('metricVersionId');
     if (!datasetVersionId || !metricVersionId) return fail('请选择数据集版本和指标版本');
     const rows = (await client.query(`SELECT r.id,m.judge_score,m.metric_details,avg(s.accuracy) AS accuracy,avg(s.completeness) AS completeness,avg(s.brevity) AS brevity,avg(s.safety) AS safety
@@ -134,7 +135,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   if (pathname === '/api/evaluation/settings') {
     if (method === 'GET') return ok((await client.query('SELECT * FROM evaluation_settings WHERE id=1')).rows[0]);
     if (method === 'PUT') {
-      if (me.role !== 'admin') return fail('仅管理员可配置评测配额',403);
+      if (!isAdministrator(me)) return fail('仅管理员可配置评测配额',403);
       const body = await readBody();
       const global = body.globalMediaBytes, dataset = body.datasetMediaBytes, free = body.minFreePercent;
       if (!Number.isSafeInteger(global) || global <= 0 || !Number.isSafeInteger(dataset) || dataset <= 0 || dataset > global || typeof free !== 'number' || !Number.isFinite(free) || free < 0 || free >= 100) return fail('配额或磁盘保留比例无效');
@@ -152,7 +153,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     try { return ok({ datasetVersionId,metricVersionId,...rankModels(rows,metric.goal_ranges,weights) }); } catch (error) { return fail(error.message); }
   }
   if (pathname === '/api/evaluation/candidates' && method === 'GET') {
-    if (me.role !== 'admin') return fail('仅管理员可审核候选池', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可审核候选池', 403);
     const status = url.searchParams.get('status') || 'pending';
     if (!['pending','staged','rejected','ineligible','published'].includes(status)) return fail('候选状态无效');
     const source = url.searchParams.get('source') || 'all';
@@ -161,7 +162,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     return ok({ items: (await client.query('SELECT * FROM evaluation_candidates WHERE status=$1 AND ($2=$3 OR source_type=$2) ORDER BY created_at DESC,id DESC LIMIT 50 OFFSET $4', [status,source,'all',(page-1)*50])).rows, page });
   }
   if (pathname === '/api/evaluation/candidates/qa-summary' && method === 'GET') {
-    if (me.role !== 'admin') return fail('仅管理员可查看问答审核统计', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可查看问答审核统计', 403);
     const counts = (await client.query(`SELECT
       count(*) FILTER (WHERE status='pending')::int AS pending,
       count(*) FILTER (WHERE status IN ('staged','published'))::int AS accepted,
@@ -171,13 +172,13 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     return ok({ ...counts, reviewed, approvalRate: reviewed ? counts.accepted / reviewed : null });
   }
   if (pathname === '/api/evaluation/candidates/qa-export' && method === 'GET') {
-    if (me.role !== 'admin') return fail('仅管理员可导出问答对', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可导出问答对', 403);
     const rows = (await client.query("SELECT id,input_payload,expected_payload,context_payload,tags FROM evaluation_candidates WHERE source_type='session' AND rating>=4 AND status IN ('staged','published') ORDER BY created_at,id")).rows;
     const content = rows.map(row => JSON.stringify({ caseKey: `candidate-${row.id}`, input: row.input_payload, expectedOutput: row.expected_payload, context: row.context_payload, tags: row.tags, difficulty: 3, source: 'session_extract' })).join('\n');
     return ok({ filename: 'session-qa.jsonl', content: content ? `${content}\n` : '', count: rows.length });
   }
   if (pathname === '/api/evaluation/candidates/publish' && method === 'POST') {
-    if (me.role !== 'admin') return fail('仅管理员可发布候选用例', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可发布候选用例', 403);
     const body = await readBody();
     const dataset = (await client.query('SELECT id FROM experiment_datasets WHERE id=$1 FOR UPDATE', [body.datasetId])).rows[0];
     if (!dataset) return fail('目标数据集不存在', 404);
@@ -193,7 +194,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   }
   const evaluationCandidateRoute = pathname.match(/^\/api\/evaluation\/candidates\/([^/]+)\/review$/);
   if (evaluationCandidateRoute && method === 'POST') {
-    if (me.role !== 'admin') return fail('仅管理员可审核候选池', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可审核候选池', 403);
     const body = await readBody();
     if (!['staged','rejected'].includes(body.status)) return fail('审核状态无效');
     if (body.status === 'staged' && !(await client.query('SELECT 1 FROM experiment_datasets WHERE id=$1', [body.datasetId])).rowCount) return fail('目标数据集不存在', 404);
@@ -206,14 +207,14 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     return ok({ id: candidate.id, status: body.status });
   }
   if (pathname === '/api/evaluation/alerts' && method === 'GET') {
-    if (me.role !== 'admin') return fail('仅管理员可查看退化告警', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可查看退化告警', 403);
     return ok({ items: (await client.query('SELECT * FROM evaluation_alerts ORDER BY created_at DESC LIMIT 200')).rows });
   }
   if (pathname === '/api/evaluation/metrics' && method === 'GET') return ok({ tokenizerVersion: TOKENIZER_VERSION, builtIns: BUILT_IN_METRICS, pythonEnabled: await pythonMetricAvailable(), bertScoreEnabled: process.env.EVALUATION_BERTSCORE_ENABLED === 'true' && await pythonMetricAvailable('bertscore') });
   if (pathname === '/api/evaluation/metric-scripts') {
     if (method === 'GET') return ok({ items:(await client.query('SELECT id,name,created_by,created_at FROM evaluation_metric_scripts ORDER BY created_at DESC')).rows });
     if (method === 'POST') {
-      if (me.role !== 'admin') return fail('仅管理员可登记 Python 指标',403);
+      if (!isAdministrator(me)) return fail('仅管理员可登记 Python 指标',403);
       const body=await readBody();
       if (!String(body.name||'').trim() || String(body.name).length>120 || typeof body.source!=='string' || !body.source.trim() || body.source.length>20000) return fail('指标名称或 Python 源码无效');
       if (!(await pythonMetricAvailable())) return fail('隔离 Python 容器未就绪',409);
@@ -234,7 +235,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     }
   }
   const folderRoute = pathname.match(/^\/api\/evaluation\/folders\/([^/]+)$/);
-  if (folderRoute && me.role === 'admin') {
+  if (folderRoute && isAdministrator(me)) {
     if (method === 'PATCH') {
       const body = await readBody();
       if (!String(body.name || '').trim() || String(body.name).length > 120) return fail('文件夹名称须为 1–120 字');
@@ -261,7 +262,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   if (pathname === '/api/experiment-metrics') {
     if (method === 'GET') return ok({ items: (await client.query('SELECT * FROM experiment_metric_versions ORDER BY name,version DESC')).rows });
     if (method === 'POST') {
-      if (me.role !== 'admin') return fail('仅管理员可配置指标', 403);
+      if (!isAdministrator(me)) return fail('仅管理员可配置指标', 403);
       const body = await readBody();
       if (!body.name?.trim() || !['token_f1','exact','bleu','rouge_l','tool_selection','parameter_accuracy','bertscore','custom_python'].includes(body.ruleType) || typeof body.passThreshold !== 'number' || body.passThreshold < 0 || body.passThreshold > 5 || typeof body.regressionThreshold !== 'number' || body.regressionThreshold < 0 || body.regressionThreshold > 5 || !body.judgePrompt?.trim()) return fail('指标配置无效');
       if (body.ruleType === 'bertscore' && (process.env.EVALUATION_BERTSCORE_ENABLED !== 'true' || !(await pythonMetricAvailable('bertscore')))) return fail('BERTScore worker 尚未启用', 409);
@@ -294,7 +295,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     const body = await readBody();
     const parent = (await client.query('SELECT v.*,d.owner_id FROM experiment_dataset_versions v JOIN experiment_datasets d ON d.id=v.dataset_id WHERE v.id=$1 AND v.dataset_id=$2', [body.versionId, subsetRoute[1]])).rows[0];
     if (!parent) return fail('源版本不存在', 404);
-    if (me.role !== 'admin' && parent.owner_id !== me.id) return fail('无权创建子集', 403);
+    if (!isAdministrator(me) && parent.owner_id !== me.id) return fail('无权创建子集', 403);
     if (!Array.isArray(body.caseKeys) || !body.caseKeys.length || body.caseKeys.length > 10000 || !String(body.name || '').trim()) return fail('请选择用例及子集名称');
     const cases = (await client.query('SELECT * FROM experiment_dataset_cases WHERE dataset_version_id=$1 AND case_key=ANY($2::text[])', [parent.id, body.caseKeys])).rows;
     if (cases.length !== new Set(body.caseKeys).size) return fail('部分用例不在源版本内');
@@ -309,7 +310,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     if (!dataset) return fail('数据集不存在', 404);
     if (method === 'GET') return ok({ items: (await client.query('SELECT * FROM experiment_dataset_versions WHERE dataset_id=$1 ORDER BY version DESC', [dataset.id])).rows });
     if (method === 'POST') {
-      if (me.role !== 'admin' && dataset.owner_id !== me.id) return fail('无权修改数据集', 403);
+      if (!isAdministrator(me) && dataset.owner_id !== me.id) return fail('无权修改数据集', 403);
       const body = await readBody();
       try { validatedCases(body.cases); } catch (error) { return fail(error.message); }
       const version = (await client.query('SELECT COALESCE(max(version),0)+1 AS next FROM experiment_dataset_versions WHERE dataset_id=$1', [dataset.id])).rows[0].next;
@@ -334,7 +335,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   if (reportRoute && method === 'GET') {
     const batch = (await client.query("SELECT owner_id FROM experiment_batches WHERE id=$1 AND kind='regression'", [reportRoute[1]])).rows[0];
     if (!batch) return fail('回归报告不存在', 404);
-    if (me.role !== 'admin' && batch.owner_id !== me.id) return fail('无权查看此报告', 403);
+    if (!isAdministrator(me) && batch.owner_id !== me.id) return fail('无权查看此报告', 403);
     return regressionReport(client, reportRoute[1]);
   }
   const annotationRoute = pathname.match(/^\/api\/experiment-runs\/([^/]+)\/annotation$/);
@@ -368,12 +369,12 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     }
   }
   if (pathname === '/api/experiment-candidates' && method === 'GET') {
-    if (me.role !== 'admin') return fail('仅管理员可审核候选池', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可审核候选池', 403);
     return ok({ items: (await client.query('SELECT c.*,a.rating,r.output,e.title FROM experiment_dataset_candidates c JOIN experiment_annotations a ON a.id=c.annotation_id JOIN experiment_runs r ON r.id=c.run_id JOIN experiments e ON e.id=c.experiment_id ORDER BY c.created_at DESC LIMIT 200')).rows });
   }
   const candidateRoute = pathname.match(/^\/api\/experiment-candidates\/([^/]+)$/);
   if (candidateRoute && method === 'PATCH') {
-    if (me.role !== 'admin') return fail('仅管理员可审核候选池', 403);
+    if (!isAdministrator(me)) return fail('仅管理员可审核候选池', 403);
     const body = await readBody();
     if (!['accepted','rejected'].includes(body.status)) return fail('状态无效');
     const result = await client.query('UPDATE experiment_dataset_candidates SET status=$2 WHERE id=$1 RETURNING id', [candidateRoute[1], body.status]);
@@ -391,11 +392,11 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   if (chainConfirm && method === 'POST') {
     const target = (await client.query('SELECT * FROM experiments WHERE id=$1', [chainConfirm[1]])).rows[0];
     if (!target) return fail('实验不存在', 404);
-    if (me.role !== 'admin' && target.owner_id !== me.id) return fail('无权加入版本链', 403);
+    if (!isAdministrator(me) && target.owner_id !== me.id) return fail('无权加入版本链', 403);
     if (!await canAccessLinkedTask(client, me, target.task_id)) return fail('关联任务不存在', 404);
     const body = await readBody();
     const peer = (await client.query('SELECT * FROM experiments WHERE id=$1', [body.peerId])).rows[0];
-    if (!peer || (me.role !== 'admin' && peer.owner_id !== me.id)) return fail('目标实验不存在或无权管理', 404);
+    if (!peer || (!isAdministrator(me) && peer.owner_id !== me.id)) return fail('目标实验不存在或无权管理', 404);
     if (!await canAccessLinkedTask(client, me, peer.task_id)) return fail('关联任务不存在', 404);
     if (peer.task_id !== target.task_id) return fail('版本链任务必须一致');
     const chainId = peer.chain_id || target.chain_id || uuid();

@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { createMetricVersion, createPythonMetricScript, getMetricCatalog, listMetricVersions, listPythonMetricScripts } from '../api/experiment-evaluation';
@@ -12,7 +13,7 @@ export default function EvaluationMetrics() {
   const [error,setError]=useState(''),[open,setOpen]=useState(false),[scriptOpen,setScriptOpen]=useState(false),[busy,setBusy]=useState(false);
   const [name,setName]=useState(''),[ruleType,setRuleType]=useState('exact'),[passThreshold,setPassThreshold]=useState(3),[normalizedRegressionThreshold,setNormalizedRegressionThreshold]=useState(0.2),[judgePrompt,setJudgePrompt]=useState('根据问题、参考答案与模型回答评分，并说明理由。'),[customScriptId,setCustomScriptId]=useState<string>();
   const [scriptName,setScriptName]=useState(''),[source,setSource]=useState('def score(payload):\n    return 1.0 if payload["output"] == payload["expectedOutput"] else 0.0\n');
-  const admin=getStoredUser<{role:string}>()?.role==='admin';
+  const admin=isAdministrator(getStoredUser<{role:string}>());
   const load=useCallback(async()=>{try{const [versions,available,codes]=await Promise.all([listMetricVersions(),getMetricCatalog(),listPythonMetricScripts()]);setItems(versions.items);setCatalog(available);setScripts(codes.items);setError('');}catch(cause){setError(cause instanceof Error?cause.message:'指标加载失败');}},[]);
   useEffect(()=>{void load();},[load]);
   const saveScript=async()=>{setBusy(true);try{const created=await createPythonMetricScript(scriptName,source);setCustomScriptId(created.id);setScriptOpen(false);message.success('Python 指标已登记');await load();}catch(cause){message.error(cause instanceof Error?cause.message:'登记失败');}finally{setBusy(false);}};

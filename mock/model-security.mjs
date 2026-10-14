@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 
 const pii = [/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i, /(?<!\d)1[3-9]\d{9}(?!\d)/, /(?<!\d)\d{17}[\dXx](?!\d)/];
@@ -29,14 +30,14 @@ export async function recordModelSecurityEvent(client, audit, direction, rule) {
 
 export async function handleModelSecurity({ pathname, method, client, me, readBody }) {
   if (pathname === '/api/model-security-events' && method === 'GET') {
-    if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可查看安全事件' } };
+    if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可查看安全事件' } };
     const rows = (await client.query(`SELECT e.id,e.model_id,e.run_id,e.phase,e.direction,e.rule,e.action,e.created_at,m.display_name
       FROM model_security_events e LEFT JOIN experiment_models m ON m.id=e.model_id ORDER BY e.created_at DESC,e.id DESC LIMIT 100`)).rows;
     return { status: 200, data: { items: rows.map(row => ({ id: row.id, modelId: row.model_id, modelName: row.display_name || row.model_id, runId: row.run_id, phase: row.phase, direction: row.direction, rule: row.rule, action: row.action, createdAt: row.created_at })) } };
   }
   const match = pathname.match(/^\/api\/model-security\/([^/]+)$/);
   if (!match || !['GET','PUT'].includes(method)) return null;
-  if (me.role !== 'admin') return { status: 403, data: { error: '仅管理员可管理模型安全策略' } };
+  if (!isAdministrator(me)) return { status: 403, data: { error: '仅管理员可管理模型安全策略' } };
   const modelId = decodeURIComponent(match[1]);
   if (!(await client.query('SELECT 1 FROM experiment_models WHERE id=$1', [modelId])).rowCount) return { status: 404, data: { error: '模型不存在' } };
   if (method === 'GET') return { status: 200, data: await getModelSecurityPolicy(client, modelId) };

@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 export const dateKey = value => typeof value === "string" ? value.slice(0, 10) : "";
 export const validDate = value => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
@@ -11,7 +12,7 @@ export function validatePlan(start, due) {
 }
 
 export function canUseDependency(task, user) {
-  return user.role === "admin" || task.ownerId === user.id;
+  return isAdministrator(user) || task.ownerId === user.id;
 }
 
 export function validateDependencies(tasks, taskId, ids, user) {

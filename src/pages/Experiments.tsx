@@ -1,3 +1,4 @@
+import { isAdministrator } from '../utils/roles';
 import { useSettings } from "../components/SettingsProvider";
 import { useCallback, useEffect, useState } from "react";
 import {
@@ -240,7 +241,7 @@ export default function Experiments() {
           <Button
             type="link"
             size="small"
-            disabled={currentUser?.role !== "admin" && e.ownerId !== currentUser?.id}
+            disabled={!isAdministrator(currentUser) && e.ownerId !== currentUser?.id}
             onClick={() => {
               if (e.recordKind === "definition") void getDefinition(e.id).then(value => { setEditingDefinition(value); setDefinitionOpen(true); }).catch(error => message.error(error instanceof Error ? error.message : "加载失败"));
               else { setEditing(e); setDrawerOpen(true); }
@@ -278,7 +279,7 @@ export default function Experiments() {
           新建可执行实验
         </Button>
         <Button onClick={() => { setEditing(null); setDrawerOpen(true); }}>记录手工实验</Button>
-        {currentUser?.role === "admin" && <Button onClick={() => setSettingsOpen(true)}>模型与预算配置</Button>}
+        {isAdministrator(currentUser) && <Button onClick={() => setSettingsOpen(true)}>模型与预算配置</Button>}
         <Button disabled={compareIds.length < 2} onClick={() => navigate(`/experiments/compare?ids=${compareIds.map(String).map(encodeURIComponent).join(',')}`)}>对比已选 {compareIds.length} 个</Button>
         <Button onClick={() => navigate('/experiments/datasets')}>评测数据集</Button>
         <Button onClick={() => navigate('/experiments/schedules')}>定时任务</Button>

@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import { EXPERIMENT_TEMPLATES, fillPrompt, validateDefinition, winRates } from './experiment-core.mjs';
 import { executionConfigured } from './experiment-runner.mjs';
@@ -14,7 +15,7 @@ import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
 const forbidden = () => ok({ error: '仅管理员可配置模型和预算' }, 403);
-const own = (experiment, me) => me.role === 'admin' || experiment.owner_id === me.id;
+const own = (experiment, me) => isAdministrator(me) || experiment.owner_id === me.id;
 const fail = (error, status = 400) => ok({ error }, status);
 
 function mapRun(row) {
@@ -201,12 +202,12 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
   if (pathname === '/api/experiment-platform/config') {
     if (method === 'GET') {
       const settings = (await client.query('SELECT * FROM experiment_settings WHERE id=1')).rows[0];
-      const models = (await client.query('SELECT * FROM experiment_models ORDER BY created_at')).rows.filter(row=>me.role==='admin'||modelUsable(row,me));
+      const models = (await client.query('SELECT * FROM experiment_models ORDER BY created_at')).rows.filter(row=>isAdministrator(me)||modelUsable(row,me));
       const availability = await Promise.all(models.map(model => modelConnectionAvailable(client, model)));
       return ok({ configured: await executionConfigured(client), dailyBudgetUsd: settings.daily_budget_usd, concurrencyLimit: settings.concurrency_limit, judgeModelId: settings.judge_model_id, models: models.map((model, index) => ({ id: model.id, name:model.name, displayName: model.display_name, apiModel: model.api_model, provider:model.provider,connectionId:model.connection_id,capabilities:model.capabilities,mediaPricing:model.media_pricing,configured:availability[index],inputUsdPerMillion: model.input_usd_per_million, outputUsdPerMillion: model.output_usd_per_million, active: model.active, status:model.status,deprecatedAt:model.deprecated_at,retireAt:model.retire_at,retiredAt:model.retired_at,allowedRoles:model.allowed_roles,endpointUrl:model.endpoint_url,apiVersion:model.api_version,contextWindow:model.context_window,maxOutputTokens:model.max_output_tokens,featureTags:model.feature_tags,adapterReady:['legacy','openai','qwen','gemini'].includes(model.provider) })) });
     }
     if (method === 'PUT') {
-      if (me.role !== 'admin') return forbidden();
+      if (!isAdministrator(me)) return forbidden();
       const body = await readBody();
       if (typeof body.dailyBudgetUsd !== 'number' || !Number.isFinite(body.dailyBudgetUsd) || body.dailyBudgetUsd < 0 || body.dailyBudgetUsd > 1_000_000 || !Number.isInteger(body.concurrencyLimit) || body.concurrencyLimit < 0 || body.concurrencyLimit > 20) return fail('预算或并发上限无效');
       if (body.judgeModelId && !(await client.query("SELECT 1 FROM experiment_models WHERE id=$1 AND active=true AND status='active'", [body.judgeModelId])).rowCount) return fail('LLM Judge 模型不可用');
@@ -215,7 +216,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     }
   }
   if (pathname === '/api/experiment-platform/models' && method === 'POST') {
-    if (me.role !== 'admin') return forbidden();
+    if (!isAdministrator(me)) return forbidden();
     const body = await readBody();
     if (!body.displayName?.trim() || !body.apiModel?.trim() || !Number.isFinite(body.inputUsdPerMillion) || body.inputUsdPerMillion < 0 || !Number.isFinite(body.outputUsdPerMillion) || body.outputUsdPerMillion < 0) return fail('模型名称、API 名称及非负价格为必填');
     let configured;
@@ -231,7 +232,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
   const modelRoute = pathname.match(/^\/api\/experiment-platform\/models\/([^/]+)$/);
   const retireRoute = pathname.match(/^\/api\/experiment-platform\/models\/([^/]+)\/retire$/);
   if (retireRoute && method === 'POST') {
-    if (me.role !== 'admin') return forbidden();
+    if (!isAdministrator(me)) return forbidden();
     const current=(await client.query('SELECT * FROM experiment_models WHERE id=$1 FOR UPDATE',[retireRoute[1]])).rows[0];
     if(!current)return fail('模型不存在',404);
     if(current.status==='retired')return ok({id:current.id,retired:true,alreadyRetired:true});
@@ -242,7 +243,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     return ok({id:current.id,retired:true});
   }
   if (modelRoute && method === 'PATCH') {
-    if (me.role !== 'admin') return forbidden();
+    if (!isAdministrator(me)) return forbidden();
     const body = await readBody();
     if (typeof body.displayName !== 'string' || !body.displayName.trim() || typeof body.inputUsdPerMillion !== 'number' || !Number.isFinite(body.inputUsdPerMillion) || body.inputUsdPerMillion < 0 || typeof body.outputUsdPerMillion !== 'number' || !Number.isFinite(body.outputUsdPerMillion) || body.outputUsdPerMillion < 0 || typeof body.active !== 'boolean') return fail('模型价格或状态无效');
     const current=(await client.query('SELECT * FROM experiment_models WHERE id=$1',[modelRoute[1]])).rows[0];
@@ -281,7 +282,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     const body = await readBody();
     const prompt = (await client.query('SELECT * FROM prompt_library WHERE id=$1 FOR UPDATE', [promptVersion[1]])).rows[0];
     if (!prompt) return fail('提示词不存在', 404);
-    if (me.role !== 'admin' && prompt.owner_id !== me.id) return fail('无权修改提示词', 403);
+    if (!isAdministrator(me) && prompt.owner_id !== me.id) return fail('无权修改提示词', 403);
     if (typeof body.content !== 'string') return fail('content 必须为文本');
     const checked = await checkPromptCompliance(client, body, me, prompt.id);
     if (checked) return checked;

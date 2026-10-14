@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import { notifyUser } from './app-notifications.mjs';
 
 const validScope=new Set(['model','role','user']);
@@ -7,7 +8,7 @@ const pickLimit=(rows,role,userId)=>rows.find(row=>row.scope==='user'&&row.subje
 
 export async function handleModelQuotas({pathname,method,client,me,readBody}){
   if(pathname!=='/api/model-quotas')return null;
-  if(me.role!=='admin')return {status:403,data:{error:'仅管理员可管理模型配额'}};
+  if(!isAdministrator(me))return {status:403,data:{error:'仅管理员可管理模型配额'}};
   if(method==='GET'){
     const items=(await client.query('SELECT q.*,m.display_name FROM model_token_quotas q JOIN experiment_models m ON m.id=q.model_id ORDER BY m.display_name,q.scope,q.subject_id')).rows;
     return {status:200,data:{items:items.map(row=>({modelId:row.model_id,modelName:row.display_name,scope:row.scope,subjectId:row.subject_id,dailyTokens:Number(row.daily_tokens)}))}};

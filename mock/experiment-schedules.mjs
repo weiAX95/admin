@@ -1,3 +1,4 @@
+import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import { createBatch } from './experiment-platform.mjs';
 import { nextScheduleAt, validTimeZone } from './experiment-schedule-time.mjs';
@@ -35,7 +36,7 @@ export async function handleExperimentSchedules({pathname,method,client,me,readB
       const body=await readBody();
       const experiment=(await client.query("SELECT owner_id FROM experiments WHERE id=$1 AND record_kind='definition' AND deleted_at IS NULL",[body.experimentId])).rows[0];
       if(!experiment)return fail('可执行实验不存在',404);
-      if(me.role!=='admin'&&experiment.owner_id!==me.id)return fail('无权调度该实验',403);
+      if(!isAdministrator(me)&&experiment.owner_id!==me.id)return fail('无权调度该实验',403);
       let config;
       try{config=scheduleConfig(body,me.timeZone||'Asia/Shanghai');}catch(error){return fail(error.message);}
       const nextRunAt=nextScheduleAt(config);
@@ -48,7 +49,7 @@ export async function handleExperimentSchedules({pathname,method,client,me,readB
   if(route){
     const row=(await client.query('SELECT * FROM experiment_schedules WHERE id=$1',[route[1]])).rows[0];
     if(!row)return fail('调度不存在',404);
-    if(me.role!=='admin'&&row.owner_id!==me.id)return fail('无权管理调度',403);
+    if(!isAdministrator(me)&&row.owner_id!==me.id)return fail('无权管理调度',403);
     if(method==='PATCH'){
       const body=await readBody();
       if(typeof body.active!=='boolean')return fail('active 必须是布尔值');
