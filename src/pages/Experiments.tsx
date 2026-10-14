@@ -250,7 +250,7 @@ export default function Experiments() {
             编辑
           </Button>
           <Popconfirm title="删除该实验记录？" okText="删除" cancelText="取消" onConfirm={() => void remove(e)}>
-            <Button type="link" size="small" danger>
+            <Button type="link" size="small" danger disabled={!isAdministrator(currentUser) && e.ownerId !== currentUser?.id}>
               删除
             </Button>
           </Popconfirm>

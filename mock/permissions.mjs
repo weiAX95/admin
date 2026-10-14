@@ -42,6 +42,11 @@ export const PERMISSION_RESOURCES = [
     read: { super_admin: 'all', admin: 'all', member: 'all' }, create: { super_admin: 'all', admin: 'all', member: 'own' },
     update: { super_admin: 'all', admin: 'all', member: 'own' }, delete: { super_admin: 'all', admin: 'all', member: 'own' }, manage: admins,
   } },
+  { id: 'experiments', label: '实验记录', description: '所有登录账号可查看并创建个人实验；成员只能修改、删除或执行自己的实验，旧记录无归属时仅管理员可管理。', access: {
+    read: { super_admin: 'all', admin: 'all', member: 'all' }, create: { super_admin: 'all', admin: 'all', member: 'own' },
+    update: { super_admin: 'all', admin: 'all', member: 'own' }, delete: { super_admin: 'all', admin: 'all', member: 'own' },
+    manage: { super_admin: 'all', admin: 'all', member: 'own' },
+  } },
   { id: 'note_categories', label: '笔记分类', description: '分类为全局目录，普通成员只读。', access: {
     read: { super_admin: 'all', admin: 'all', member: 'all' }, create: admins, update: admins, delete: admins, manage: admins,
   } },

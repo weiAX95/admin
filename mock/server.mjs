@@ -2045,6 +2045,7 @@ async function handleRequest(req, res) {
     // ---- experiments ----
     if (pathname === "/api/experiments") {
       if (method === "GET") {
+        if (!canAccess(me, 'experiments', 'read')) return send(res, 403, { error: '无权查看实验' });
         const taskId = url.searchParams.get("taskId");
         if (taskId && !linkedTaskVisible(taskId)) return send(res, 404, { error: "任务不存在" });
         let items = [...db.experiments];
@@ -2053,6 +2054,7 @@ async function handleRequest(req, res) {
         return send(res, 200, { items: items.map(linkedRecordView) });
       }
       if (method === "POST") {
+        if (!canAccess(me, 'experiments', 'create')) return send(res, 403, { error: '无权创建实验' });
         const body = await readBody(req);
         if (!body.title || !String(body.title).trim()) return send(res, 400, { error: "title 为必填项" });
         const t = nowIso();
@@ -2079,9 +2081,9 @@ async function handleRequest(req, res) {
     if (expOne) {
       const i = db.experiments.findIndex((e) => e.id === expOne[1]);
       if (i === -1) return send(res, 404, { error: "experiment not found" });
-      if (method === "GET") return send(res, 200, linkedRecordView(db.experiments[i]));
+      if (method === "GET") return canAccess(me, 'experiments', 'read') ? send(res, 200, linkedRecordView(db.experiments[i])) : send(res, 403, { error: '无权查看实验' });
       if (method === "PUT" || method === "PATCH") {
-        if (!isAdministrator(me) && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权修改该实验" });
+        if (!canAccess(me, 'experiments', 'update', { ownerId: db.experiments[i].ownerId })) return send(res, 403, { error: "无权修改该实验" });
         if (db.experiments[i].recordKind === "definition") return send(res, 409, { error: "请使用实验定义接口修改" });
         const body = await readBody(req);
         const w = {};
@@ -2100,7 +2102,7 @@ async function handleRequest(req, res) {
         return send(res, 200, linkedRecordView(db.experiments[i]));
       }
       if (method === "DELETE") {
-        if (!isAdministrator(me) && db.experiments[i].ownerId !== me.id) return send(res, 403, { error: "无权删除该实验" });
+        if (!canAccess(me, 'experiments', 'delete', { ownerId: db.experiments[i].ownerId })) return send(res, 403, { error: "无权删除该实验" });
         const [rm] = db.experiments.splice(i, 1);
         saveDb(db);
         afterSave(async client => {

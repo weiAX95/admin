@@ -16,7 +16,7 @@ import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 const uuid = () => crypto.randomUUID();
 const ok = (data, status = 200) => ({ status, data });
 const forbidden = () => ok({ error: '仅管理员可配置模型和预算' }, 403);
-const own = (experiment, me) => isAdministrator(me) || experiment.owner_id === me.id;
+const own = (experiment, me) => canAccess(me, 'experiments', 'manage', { ownerId: experiment.owner_id });
 const fail = (error, status = 400) => ok({ error }, status);
 
 function mapRun(row) {
@@ -297,6 +297,7 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
     return ok({ id, version }, 201);
   }
   if (pathname === '/api/experiment-definitions' && method === 'POST') {
+    if (!canAccess(me, 'experiments', 'create')) return fail('无权创建实验', 403);
     const body = await readBody();
     const models = new Set((await client.query("SELECT * FROM experiment_models WHERE active=true AND status='active'")).rows.filter(row=>modelUsable(row,me)).map(row => row.id));
     let definition;
@@ -319,11 +320,11 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
   const definitionRoute = pathname.match(/^\/api\/experiment-definitions\/([^/]+)$/);
   if (definitionRoute) {
     const id = definitionRoute[1];
-    if (method === 'GET') { const value = await getDefinition(client, id); return value ? ok(await visibleDefinition(value)) : fail('实验定义不存在', 404); }
+    if (method === 'GET') { if (!canAccess(me, 'experiments', 'read')) return fail('无权查看实验', 403); const value = await getDefinition(client, id); return value ? ok(await visibleDefinition(value)) : fail('实验定义不存在', 404); }
     if (method === 'PUT') {
       const row = (await client.query('SELECT owner_id FROM experiments WHERE id=$1 AND record_kind=$2', [id, 'definition'])).rows[0];
       if (!row) return fail('实验定义不存在', 404);
-      if (!own(row, me)) return fail('无权修改该实验', 403);
+      if (!canAccess(me, 'experiments', 'update', { ownerId: row.owner_id })) return fail('无权修改该实验', 403);
       const body = await readBody();
       const models = new Set((await client.query("SELECT * FROM experiment_models WHERE active=true AND status='active'")).rows.filter(row=>modelUsable(row,me)).map(item => item.id));
       let definition;
