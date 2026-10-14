@@ -68,6 +68,12 @@ export const PERMISSION_RESOURCES = [
   { id: 'account_audit', label: '操作审计', description: '成员只能读取自己的历史；审计记录不可通过业务接口改写或删除。', access: {
     read: { super_admin: 'all', admin: 'all', member: 'own' }, create: nobody, update: nobody, delete: nobody, manage: nobody,
   } },
+  { id: 'account_activity', label: '账号活跃度', description: '所有账号可记录自己的页面访问；仅管理员可查看团队活跃度。', access: {
+    read: admins, create: { super_admin: 'own', admin: 'own', member: 'own' }, update: nobody, delete: nobody, manage: nobody,
+  } },
+  { id: 'model_call_audit', label: '模型调用审计', description: '管理员可查询脱敏后的模型调用事实；调用记录由服务自动写入，不提供手工增删接口。', access: {
+    read: admins, create: nobody, update: nobody, delete: nobody, manage: nobody,
+  } },
   { id: 'alerts', label: '告警监控', description: '告警规则、指标、静默与处置仅管理员可访问。', access: {
     read: admins, create: admins, update: admins, delete: admins, manage: admins,
   } },

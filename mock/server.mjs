@@ -755,6 +755,9 @@ async function handleRequest(req, res) {
     if (costBudgetResponse) return send(res, costBudgetResponse.status, costBudgetResponse.data);
     const rateResponse = await handleModelRateLimits({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (rateResponse) return send(res, rateResponse.status, rateResponse.data);
+    if (pathname === '/api/model-call-audit' && method === 'GET' && !canAccess(me, 'model_call_audit', 'read')) {
+      return send(res, 403, { error: '仅管理员可查看模型调用审计' });
+    }
     const callAuditResponse = await handleModelCallAudit({ pathname, method, client: activeClient, me, url });
     if (callAuditResponse) return send(res, callAuditResponse.status, callAuditResponse.data);
     const modelHealthResponse = await handleModelHealth({ pathname, method, client: activeClient, me });
