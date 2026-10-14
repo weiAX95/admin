@@ -256,7 +256,7 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     const datasetVersionId = url.searchParams.get('datasetVersionId');
     const metricVersionId = url.searchParams.get('metricVersionId');
     if (!datasetVersionId || !metricVersionId) return fail('请选择数据集和指标版本');
-    const rows = (await client.query("SELECT b.id,b.created_at,e.title AS experiment_title FROM experiment_batches b JOIN experiments e ON e.id=b.experiment_id JOIN experiment_dataset_versions selected ON selected.id=$1 JOIN experiment_dataset_versions source ON source.id=b.dataset_version_id WHERE source.dataset_id=selected.dataset_id AND b.metric_version_id=$2 AND ($3='admin' OR b.owner_id=$4) AND b.status IN ('completed','partial') AND EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status='completed' AND r.auto_score IS NOT NULL) ORDER BY b.created_at DESC LIMIT 100", [datasetVersionId, metricVersionId, me.role, me.id])).rows;
+    const rows = (await client.query("SELECT b.id,b.created_at,e.title AS experiment_title FROM experiment_batches b JOIN experiments e ON e.id=b.experiment_id JOIN experiment_dataset_versions selected ON selected.id=$1 JOIN experiment_dataset_versions source ON source.id=b.dataset_version_id WHERE source.dataset_id=selected.dataset_id AND b.metric_version_id=$2 AND ($3 OR b.owner_id=$4) AND b.status IN ('completed','partial') AND EXISTS(SELECT 1 FROM experiment_runs r WHERE r.batch_id=b.id AND r.status='completed' AND r.auto_score IS NOT NULL) ORDER BY b.created_at DESC LIMIT 100", [datasetVersionId, metricVersionId, isAdministrator(me), me.id])).rows;
     return ok({ items: rows });
   }
   if (pathname === '/api/experiment-metrics') {
@@ -412,10 +412,10 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     return ok({ id: chain.id, title: chain.title, items });
   }
   if (pathname === '/api/experiment-costs' && method === 'GET') {
-    const scope = [me.role, me.id];
-    const total = (await client.query("SELECT COALESCE(sum(r.cost_usd),0) AS total FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id WHERE r.status='completed' AND ($1='admin' OR b.owner_id=$2) AND date_trunc('month',r.created_at AT TIME ZONE 'Asia/Shanghai')=date_trunc('month',now() AT TIME ZONE 'Asia/Shanghai')", scope)).rows[0].total;
-    const byModel = (await client.query("SELECT r.api_model,sum(r.cost_usd) AS cost FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id WHERE r.status='completed' AND ($1='admin' OR b.owner_id=$2) AND date_trunc('month',r.created_at AT TIME ZONE 'Asia/Shanghai')=date_trunc('month',now() AT TIME ZONE 'Asia/Shanghai') GROUP BY r.api_model ORDER BY cost DESC", scope)).rows;
-    const top = (await client.query("SELECT e.id,e.title,sum(r.cost_usd) AS cost FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiments e ON e.id=r.experiment_id WHERE r.status='completed' AND ($1='admin' OR b.owner_id=$2) GROUP BY e.id ORDER BY cost DESC LIMIT 10", scope)).rows;
+    const scope = [isAdministrator(me), me.id];
+    const total = (await client.query("SELECT COALESCE(sum(r.cost_usd),0) AS total FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id WHERE r.status='completed' AND ($1 OR b.owner_id=$2) AND date_trunc('month',r.created_at AT TIME ZONE 'Asia/Shanghai')=date_trunc('month',now() AT TIME ZONE 'Asia/Shanghai')", scope)).rows[0].total;
+    const byModel = (await client.query("SELECT r.api_model,sum(r.cost_usd) AS cost FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id WHERE r.status='completed' AND ($1 OR b.owner_id=$2) AND date_trunc('month',r.created_at AT TIME ZONE 'Asia/Shanghai')=date_trunc('month',now() AT TIME ZONE 'Asia/Shanghai') GROUP BY r.api_model ORDER BY cost DESC", scope)).rows;
+    const top = (await client.query("SELECT e.id,e.title,sum(r.cost_usd) AS cost FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiments e ON e.id=r.experiment_id WHERE r.status='completed' AND ($1 OR b.owner_id=$2) GROUP BY e.id ORDER BY cost DESC LIMIT 10", scope)).rows;
     return ok({ monthTotalUsd: total, byModel, top });
   }
   return null;

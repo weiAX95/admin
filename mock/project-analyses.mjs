@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
+import { isAdministrator } from './roles.mjs';
 import { completeWithProvider } from './provider-adapters.mjs';
 import { modelConnectionAvailable } from './model-connections.mjs';
 import { modelUsable, supportedProvider } from './model-governance.mjs';
@@ -235,9 +236,9 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     }
     const technologies = (await client.query('SELECT * FROM project_analysis_technologies WHERE analysis_id=$1 ORDER BY name', [analysisId])).rows.map(row => ({ name: row.name, packageName: row.package_name, evidence: { path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha.trim() } }));
     const linkedTasks = (await client.query(`SELECT s.task_id,s.requirement_id,s.title,s.status,s.progress,s.owner_id,s.task_version,s.captured_at,
-      (t.id IS NOT NULL AND t.deleted_at IS NULL AND (t.owner_id=$2 OR $3='admin')) AS currently_available
+      (t.id IS NOT NULL AND t.deleted_at IS NULL AND (t.owner_id=$2 OR $3)) AS currently_available
       FROM project_analysis_task_snapshots s LEFT JOIN tasks t ON t.id=s.task_id
-      WHERE s.analysis_id=$1 ORDER BY s.requirement_id NULLS LAST,s.title,s.task_id`, [analysisId,me.id,me.role])).rows.map(row => ({ id: row.task_id, requirementId: row.requirement_id, title: row.title, status: row.status, progress: row.progress === null ? null : Number(row.progress), ownerId: row.owner_id, taskVersion: row.task_version, capturedAt: row.captured_at, currentlyAvailable: row.currently_available }));
+      WHERE s.analysis_id=$1 ORDER BY s.requirement_id NULLS LAST,s.title,s.task_id`, [analysisId,me.id,isAdministrator(me)])).rows.map(row => ({ id: row.task_id, requirementId: row.requirement_id, title: row.title, status: row.status, progress: row.progress === null ? null : Number(row.progress), ownerId: row.owner_id, taskVersion: row.task_version, capturedAt: row.captured_at, currentlyAvailable: row.currently_available }));
     const baselineDocument = job.baseline_version_id ? (await client.query('SELECT content FROM project_requirement_baselines WHERE id=$1',[job.baseline_version_id])).rows[0]?.content : null;
     const requirements = parseProjectRequirements(baselineDocument);
     return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, requirements, staleReasons, findings, suggestions, modules, flows: [...flowsById.values()], technologies, linkedTasks } };

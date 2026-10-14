@@ -1,3 +1,5 @@
+import { isAdministrator } from './roles.mjs';
+
 const MAX_QUERY_LENGTH = 120;
 const RESULT_LIMIT = 5;
 const escapeLike = value => value.replace(/[\\%_]/g, character => `\\${character}`);
@@ -9,7 +11,7 @@ WITH task_hits AS (
     left(CASE WHEN coalesce(t.description,'') ILIKE $1 ESCAPE '\\' THEN t.description ELSE coalesce(t.notes,'') END,160) AS preview,
     NULL::text AS context_id,NULL::text AS case_key,t.updated_at AS sort_at,
     CASE WHEN t.title ILIKE $1 ESCAPE '\\' THEN 0 ELSE 1 END AS rank
-  FROM tasks t WHERE t.deleted_at IS NULL AND ($2='admin' OR t.owner_id=$3)
+  FROM tasks t WHERE t.deleted_at IS NULL AND ($2 OR t.owner_id=$3)
     AND (t.title ILIKE $1 ESCAPE '\\' OR coalesce(t.description,'') ILIKE $1 ESCAPE '\\' OR coalesce(t.notes,'') ILIKE $1 ESCAPE '\\')
   ORDER BY rank,t.updated_at DESC,t.id LIMIT ${RESULT_LIMIT}
 ), note_hits AS (
@@ -25,7 +27,7 @@ WITH task_hits AS (
   FROM sessions s
   JOIN LATERAL (SELECT content FROM session_messages WHERE session_id=s.id AND content ILIKE $1 ESCAPE '\\' ORDER BY item_order LIMIT 1) m ON true
   LEFT JOIN LATERAL (SELECT left(content,80) AS title FROM session_messages WHERE session_id=s.id AND role='user' ORDER BY item_order LIMIT 1) heading ON true
-  WHERE ($2='admin' OR s.ingested_by=$3)
+  WHERE ($2 OR s.ingested_by=$3)
   ORDER BY s.updated_at DESC,s.id LIMIT ${RESULT_LIMIT}
 ), experiment_hits AS (
   SELECT 'experiment'::text AS kind,e.id,e.title,
@@ -76,7 +78,7 @@ export async function searchGlobally(pool, me, query) {
   try {
     await client.query('BEGIN READ ONLY');
     await client.query("SET LOCAL statement_timeout = '280ms'");
-    const rows = (await client.query(SEARCH_SQL, [`%${escapeLike(term)}%`, me.role, me.id])).rows;
+    const rows = (await client.query(SEARCH_SQL, [`%${escapeLike(term)}%`, isAdministrator(me), me.id])).rows;
     await client.query('COMMIT');
     return { status: 200, data: { items: rows.map(row => ({ type: row.kind, id: row.id, title: row.title, preview: row.preview || '', href: resultUrl(row) })) } };
   } catch (error) {

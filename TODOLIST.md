@@ -693,7 +693,7 @@
 ### 10. Accounts（账号管理）
 
 - [ ] **10.1 RBAC 三级角色**
-  - [ ] 已有管理员专用页面加前端路由守卫；分散的 Admin 判断已迁往统一角色辅助函数。`104_super_admin.sql` 将现有最早启用管理员提升为唯一 SuperAdmin，旧 JSON 导入也执行同一提升；数据库、账号 API 和页面阻止直接创建第二个 SuperAdmin，以及删除、降级或停用现有 SuperAdmin。`105_super_admin_candidates.sql` 允许 SuperAdmin 提名／撤销 Admin 候选人，提名不自动提升权限。任务、模板与重复配置的写接口已限制为 Admin+，任务页面对 Member 只读。`106_note_ownership.sql` 开始记录新笔记创建者，Member 只能改自己的笔记；旧笔记无可靠归属，仍可读、仅 Admin+ 可改。模型、评测调度及告警通知的管理员收件查询已包含 SuperAdmin。其他模块逐项授权和最后统一验证仍待完成。
+  - [ ] 已有管理员专用页面加前端路由守卫；分散的 Admin 判断已迁往统一角色辅助函数。`104_super_admin.sql` 将现有最早启用管理员提升为唯一 SuperAdmin，旧 JSON 导入也执行同一提升；数据库、账号 API 和页面阻止直接创建第二个 SuperAdmin，以及删除、降级或停用现有 SuperAdmin。`105_super_admin_candidates.sql` 允许 SuperAdmin 提名／撤销 Admin 候选人，提名不自动提升权限。任务、模板与重复配置的写接口已限制为 Admin+，任务页面对 Member 只读；项目分析建议的任务创建与描述更新入口也已执行同一规则。`106_note_ownership.sql` 开始记录新笔记创建者，Member 只能改自己的笔记；旧笔记无可靠归属，仍可读、仅 Admin+ 可改。模型、评测调度及告警通知的管理员收件查询已包含 SuperAdmin；会话、评测、项目及全局搜索中的管理员可见性查询也已改为识别 Admin+。其他模块逐项授权和最后统一验证仍待完成。
   - [ ] SuperAdmin：全局唯一，不可删除/降级/停用；拥有所有权限 + 可管理其他 SuperAdmin 候选
   - [ ] Admin：管理所有模块数据 + 管理 Member/Admin 账号（但不能管理 SuperAdmin）
   - [ ] Member：仅查看 + 标注 + 创建个人实验/笔记；不可修改他人数据、不可访问告警/账号/治理/协作空间管理

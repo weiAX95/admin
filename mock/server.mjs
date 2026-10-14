@@ -1660,7 +1660,7 @@ async function handleRequest(req, res) {
       const quality = url.searchParams.get('quality');
       if (quality && !['rejection', 'excessive_length'].includes(quality)) return send(res, 400, { error: '质量标记类型无效' });
       const clusterId = url.searchParams.get('clusterId');
-      const clusterRows = (await activeClient.query("SELECT s.id,s.cluster_id,CASE WHEN $1='admin' THEN c.label ELSE concat('主题 ',left(c.id,6)) END AS cluster_label FROM sessions s LEFT JOIN session_clusters c ON c.id=s.cluster_id", [me.role])).rows;
+      const clusterRows = (await activeClient.query(`SELECT s.id,s.cluster_id,CASE WHEN $1 THEN c.label ELSE concat('主题 ',left(c.id,6)) END AS cluster_label FROM sessions s LEFT JOIN session_clusters c ON c.id=s.cluster_id`, [isAdministrator(me)])).rows;
       const clustersBySession = new Map(clusterRows.map(row => [row.id, row]));
       if (clusterId && !(await activeClient.query('SELECT 1 FROM session_clusters WHERE id=$1', [clusterId])).rowCount) return send(res, 400, { error: '主题聚类不存在' });
       const flagRows = (await activeClient.query("SELECT session_id,flag_type FROM session_quality_flags ORDER BY session_id, CASE flag_type WHEN 'rejection' THEN 0 ELSE 1 END")).rows;

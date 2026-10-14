@@ -29,7 +29,7 @@ export async function handleExperimentSchedules({pathname,method,client,me,readB
   }
   if(pathname==='/api/experiment-schedules'){
     if(method==='GET'){
-      const rows=(await client.query('SELECT s.*,e.title FROM experiment_schedules s JOIN experiments e ON e.id=s.experiment_id WHERE $1=$2 OR s.owner_id=$3 ORDER BY s.created_at DESC',[me.role,'admin',me.id])).rows;
+      const rows=(await client.query('SELECT s.*,e.title FROM experiment_schedules s JOIN experiments e ON e.id=s.experiment_id WHERE $1 OR s.owner_id=$2 ORDER BY s.created_at DESC',[isAdministrator(me),me.id])).rows;
       return ok({items:rows.map(row=>({id:row.id,experimentId:row.experiment_id,title:row.title,ownerId:row.owner_id,timeZone:row.time_zone,frequency:row.frequency,localTime:row.local_time,weekday:row.weekday,dayOfMonth:row.day_of_month,variables:row.variables,retryLimit:row.retry_limit,active:row.active,failureStreak:row.failure_streak,nextRunAt:row.next_run_at}))});
     }
     if(method==='POST'){

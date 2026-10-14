@@ -1,3 +1,5 @@
+import { isAdministrator } from './roles.mjs';
+
 const PAGE_SIZE = 20;
 const MAX_QUERY_LENGTH = 200;
 const SEARCH_TIMEOUT_MS = 750;
@@ -29,7 +31,7 @@ export async function searchSessions(pool, { query, regex = false, page = 1, me 
   const offsetPosition = regex ? '$3' : '$4';
   const rolePosition = `$${parameters.length + 1}`;
   const ownerPosition = `$${parameters.length + 2}`;
-  parameters.push(me.role, me.id);
+  parameters.push(isAdministrator(me), me.id);
   const client = await pool.connect();
   try {
     await client.query('BEGIN READ ONLY');
@@ -40,7 +42,7 @@ export async function searchSessions(pool, { query, regex = false, page = 1, me 
       FROM session_messages m JOIN sessions s ON s.id=m.session_id
       LEFT JOIN LATERAL (SELECT left(content,40) AS title FROM session_messages first_message
         WHERE first_message.session_id=s.id AND first_message.role='user' ORDER BY item_order LIMIT 1) heading ON true
-      WHERE ${matchPredicate} AND (${rolePosition}='admin' OR s.ingested_by=${ownerPosition})
+      WHERE ${matchPredicate} AND (${rolePosition} OR s.ingested_by=${ownerPosition})
       ORDER BY s.updated_at DESC,m.session_id,m.item_order,m.id LIMIT ${limitPosition} OFFSET ${offsetPosition}`, parameters);
     await client.query('COMMIT');
     const rows = result.rows;

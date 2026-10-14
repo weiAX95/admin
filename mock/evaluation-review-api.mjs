@@ -17,7 +17,7 @@ export async function handleEvaluationReviews({ pathname, method, client, me, re
     return ok({ items: (await client.query("SELECT b.id,b.dataset_version_id,b.status,e.title FROM experiment_batches b JOIN experiments e ON e.id=b.experiment_id WHERE b.kind IN ('dataset','regression') AND b.status IN ('completed','partial') ORDER BY b.created_at DESC LIMIT 100")).rows });
   }
   if (pathname === '/api/evaluation/reviews') {
-    if (method === 'GET') return ok({ items: (await client.query(`SELECT t.*,b.status AS batch_status,e.title AS experiment_title FROM evaluation_review_tasks t JOIN experiment_batches b ON b.id=t.batch_id JOIN experiments e ON e.id=b.experiment_id WHERE $1='admin' OR EXISTS(SELECT 1 FROM evaluation_review_assignments a WHERE a.task_id=t.id AND a.reviewer_id=$2) ORDER BY t.created_at DESC LIMIT 100`, [me.role, me.id])).rows });
+    if (method === 'GET') return ok({ items: (await client.query(`SELECT t.*,b.status AS batch_status,e.title AS experiment_title FROM evaluation_review_tasks t JOIN experiment_batches b ON b.id=t.batch_id JOIN experiments e ON e.id=b.experiment_id WHERE $1 OR EXISTS(SELECT 1 FROM evaluation_review_assignments a WHERE a.task_id=t.id AND a.reviewer_id=$2) ORDER BY t.created_at DESC LIMIT 100`, [isAdministrator(me), me.id])).rows });
     if (method === 'POST') {
       if (!isAdministrator(me)) return fail('仅管理员可分配人工评测', 403);
       const body = await readBody();

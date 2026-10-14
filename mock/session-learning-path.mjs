@@ -1,3 +1,5 @@
+import { isAdministrator } from './roles.mjs';
+
 const STAGES = [
   { id: 'basic', label: '基础概念', pattern: /是什么|什么是|概念|入门|基础|介绍|what is|basics?|introduction/i },
   { id: 'advanced', label: '进阶用法', pattern: /原理|机制|源码|性能|优化|进阶|并发|架构|设计模式|advanced|internals?|optimi[sz]e|performance/i },
@@ -37,7 +39,7 @@ export async function getSessionLearningPath(pool, userId, me) {
     await client.query('BEGIN READ ONLY');
     const result = await client.query(`SELECT s.id,s.created_at,m.content,m.item_order
       FROM sessions s LEFT JOIN session_messages m ON m.session_id=s.id AND m.role='user'
-      WHERE s.external_user_id=$1 AND ($2='admin' OR s.ingested_by=$3) ORDER BY s.created_at,s.id,m.item_order`, [userId, me.role, me.id]);
+      WHERE s.external_user_id=$1 AND ($2 OR s.ingested_by=$3) ORDER BY s.created_at,s.id,m.item_order`, [userId, isAdministrator(me), me.id]);
     await client.query('COMMIT');
     const grouped = new Map();
     for (const row of result.rows) {

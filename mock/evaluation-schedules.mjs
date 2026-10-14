@@ -24,7 +24,7 @@ async function dispatch(client, schedule, dueAt) {
 
 export async function handleEvaluationSchedules({ pathname, method, client, me, readBody }) {
   if (pathname === '/api/evaluation/schedules') {
-    if (method === 'GET') return ok({ items: (await client.query("SELECT s.*,e.title FROM evaluation_schedules s JOIN experiments e ON e.id=s.experiment_id WHERE $1='admin' OR s.owner_id=$2 ORDER BY s.created_at DESC", [me.role,me.id])).rows });
+    if (method === 'GET') return ok({ items: (await client.query('SELECT s.*,e.title FROM evaluation_schedules s JOIN experiments e ON e.id=s.experiment_id WHERE $1 OR s.owner_id=$2 ORDER BY s.created_at DESC', [isAdministrator(me),me.id])).rows });
     if (method === 'POST') {
       const body = await readBody();
       const experiment = (await client.query("SELECT owner_id FROM experiments WHERE id=$1 AND record_kind='definition' AND deleted_at IS NULL", [body.experimentId])).rows[0];

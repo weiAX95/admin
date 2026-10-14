@@ -3,6 +3,8 @@ import pg from 'pg';
 import { loadData, saveData } from './postgres-store.mjs';
 import { recordTaskTrendEvent, recordTaskTrendSnapshot } from './task-trends.mjs';
 import { recordTaskChanges } from './task-change-log.mjs';
+import { canAccess } from './permissions.mjs';
+import { isAdministrator } from './roles.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status,error,extra={}) => ({ status, data: { error,...extra } });
@@ -26,6 +28,8 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
   const [,repositoryId,analysisId,suggestionId,action] = match;
   if (![repositoryId,analysisId,suggestionId].every(value => UUID.test(value))) return fail(404,'建议不存在');
   const body = action === 'preview' ? null : await readBody();
+  const taskOperation = action === 'ignore' ? null : action === 'preview' || body?.targetTaskId ? 'update' : 'create';
+  if (taskOperation && !canAccess(me, 'tasks', taskOperation)) return fail(403, '仅管理员可通过项目建议创建或修改任务');
   const pooled = client instanceof pg.Pool;
   const connection = pooled ? await client.connect() : client;
   try {
@@ -55,7 +59,7 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
     if (action === 'preview') {
       const targetTaskId = url?.searchParams.get('taskId');
       if (!targetTaskId || targetTaskId.length > 200) { await connection.query('ROLLBACK'); return fail(400,'任务 ID 无效'); }
-      const task = (await connection.query("SELECT id,title,description,version FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3='admin')", [targetTaskId,me.id,me.role])).rows[0];
+      const task = (await connection.query('SELECT id,title,description,version FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3)', [targetTaskId,me.id,isAdministrator(me)])).rows[0];
       if (!task) { await connection.query('ROLLBACK'); return fail(404,'任务不存在或无权修改'); }
       const proposed = appendedDescription(task,row);
       await connection.query('COMMIT');
@@ -67,7 +71,7 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
       const targetTaskId = body?.targetTaskId;
       if (targetTaskId !== undefined && (typeof targetTaskId !== 'string' || !targetTaskId || targetTaskId.length > 200 || !Number.isInteger(body.expectedTaskVersion) || body.expectedTaskVersion < 1)) { await connection.query('ROLLBACK'); return fail(400,'任务确认参数无效'); }
       if (targetTaskId) {
-        const locked = (await connection.query("SELECT id,version FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3='admin') FOR UPDATE", [targetTaskId,me.id,me.role])).rows[0];
+        const locked = (await connection.query('SELECT id,version FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3) FOR UPDATE', [targetTaskId,me.id,isAdministrator(me)])).rows[0];
         if (!locked) { await connection.query('ROLLBACK'); return fail(404,'任务不存在或无权修改'); }
         if (locked.version !== body.expectedTaskVersion) { await connection.query('ROLLBACK'); return fail(409,'任务版本已变化，请重新预览'); }
       }

@@ -31,7 +31,7 @@ export async function exportSessions(pool, body, me, now = new Date()) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN READ ONLY');
-    const sessionsResult = await client.query("SELECT id,external_user_id,created_at,updated_at FROM sessions WHERE id=ANY($1::text[]) AND ($2='admin' OR ingested_by=$3)", [ids, me.role, me.id]);
+    const sessionsResult = await client.query("SELECT id,external_user_id,created_at,updated_at FROM sessions WHERE id=ANY($1::text[]) AND ($2 OR ingested_by=$3)", [ids, isAdministrator(me), me.id]);
     if (sessionsResult.rows.length !== ids.length) {
       await client.query('ROLLBACK');
       return { status: 404, error: '所选会话不存在，请刷新列表后重试' };

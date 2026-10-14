@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
+import { isAdministrator } from './roles.mjs';
 import { parseProjectRequirements } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
 
@@ -117,7 +118,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     if (requirementId !== null && (typeof requirementId !== 'string' || requirementId.length > 64)) return fail(400, '需求 ID 无效');
     return writeTaskLink(client,id,me,body.expectedBaselineVersionId,async (connection, requirements) => {
       if (requirementId && !requirements.some(item => item.id === requirementId)) return fail(400, '需求 ID 不属于当前版本');
-      const task = (await connection.query("SELECT id,title,status,progress,owner_id AS \"ownerId\" FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3='admin')", [taskId,me.id,me.role])).rows[0];
+      const task = (await connection.query('SELECT id,title,status,progress,owner_id AS "ownerId" FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3)', [taskId,me.id,isAdministrator(me)])).rows[0];
       if (!task) return fail(404, '任务不存在或无权关联');
       await connection.query('INSERT INTO project_repository_tasks(repository_id,task_id,linked_by,requirement_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [id,taskId,me.id,requirementId]);
       const link = (await connection.query('SELECT requirement_id FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [id,taskId])).rows[0];

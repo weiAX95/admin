@@ -51,7 +51,7 @@ export async function handleSessionCosts({ pathname, method, client, me, url, re
     LEFT JOIN session_usage_prices p ON p.session_id=m.session_id AND p.message_id=m.id
     LEFT JOIN LATERAL (SELECT id,input_usd_per_million,output_usd_per_million FROM experiment_models
       WHERE id=p.model_id OR name=m.usage_model ORDER BY (id=p.model_id) DESC LIMIT 1) current_price ON true
-    WHERE m.prompt_tokens IS NOT NULL AND ($1='admin' OR s.ingested_by=$2) ORDER BY m.session_id,m.item_order`, [me.role, me.id])).rows;
+    WHERE m.prompt_tokens IS NOT NULL AND ($1 OR s.ingested_by=$2) ORDER BY m.session_id,m.item_order`, [isAdministrator(me), me.id])).rows;
   const ownedIds = isAdministrator(me) ? null : new Set((await client.query('SELECT id FROM sessions WHERE ingested_by=$1', [me.id])).rows.map(row => row.id));
   const visible = ownedIds ? sessions.filter(session => ownedIds.has(session.id)) : sessions;
   const perSession = new Map(visible.map(session => [session.id, { id: session.id, title: (session.messages.find(item => item.role === 'user')?.content || '（无标题）').slice(0, 40), knownCostUsd: 0, pricedMessages: 0, unpricedMessages: 0 }]));
