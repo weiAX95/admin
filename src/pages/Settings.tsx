@@ -13,6 +13,7 @@ import RetentionSettings from '../components/RetentionSettings';
 import BackupSettings from '../components/BackupSettings';
 import WebhookSettings from '../components/WebhookSettings';
 import MfaPanel from '../components/MfaPanel';
+import PasswordStrength from '../components/PasswordStrength';
 import { getVersionInfo, type VersionInfo } from '../api/version-info';
 
 const languageOptions = [{ value: 'zh-CN', label: '简体中文' }, { value: 'en-US', label: 'English' }];
@@ -30,6 +31,7 @@ export default function Settings() {
   const [globalForm] = Form.useForm<GlobalSettings>();
   const [personalForm] = Form.useForm<Preferences>();
   const [passwordForm] = Form.useForm<{ currentPassword: string; newPassword: string; confirmPassword: string }>();
+  const newPassword = Form.useWatch('newPassword', passwordForm) || '';
   const logoPreview = Form.useWatch('logoUrl', globalForm);
   const load = async () => {
     const [g, p] = await Promise.all([admin ? getGlobalSettings() : Promise.resolve(null), getPreferences()]);
@@ -138,6 +140,7 @@ export default function Settings() {
       }} style={{ maxWidth: 440 }}>
         <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}><Input.Password autoComplete="current-password" /></Form.Item>
         <Form.Item name="newPassword" label="新密码" rules={[{ required: true, message: '请输入新密码' }, { validator: async (_, value: string) => { if (value && !(value.length >= 8 && /[A-Z]/.test(value) && /[a-z]/.test(value) && /[0-9]/.test(value))) throw new Error('至少 8 位，包含大小写字母和数字'); } }]}><Input.Password autoComplete="new-password" /></Form.Item>
+        <PasswordStrength password={newPassword} />
         <Form.Item name="confirmPassword" label="确认新密码" rules={[{ required: true, message: '请再次输入新密码' }]}><Input.Password autoComplete="new-password" /></Form.Item>
         <Button type="primary" htmlType="submit" loading={saving}>更新密码</Button>
       </Form>

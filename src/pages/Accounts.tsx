@@ -10,7 +10,6 @@ import {
   Input,
   InputNumber,
   Popconfirm,
-  Progress,
   Select,
   Space,
   Table,
@@ -30,6 +29,7 @@ import {
 import { getStoredUser } from "../api/client";
 import type { Account, AccountPayload, AuthUser } from "../types";
 import AccountInvitations from "../components/AccountInvitations";
+import PasswordStrength from "../components/PasswordStrength";
 import { isSuperAdmin } from "../utils/roles";
 
 const ROLE_OPTIONS = [
@@ -66,8 +66,6 @@ function AccountFormDrawer({ open, initial, onClose, onSaved, canManageCandidate
   const selectedRole = Form.useWatch("role", form);
   const [saving, setSaving] = useState(false);
   const { message } = App.useApp();
-  const validPassword = meetsPasswordPolicy(password);
-  const strength = !password ? 0 : Math.min(100, 20 + Number(password.length >= 8) * 20 + Number(/[A-Z]/.test(password) && /[a-z]/.test(password)) * 20 + Number(/[0-9]/.test(password)) * 20 + Number(password.length >= 12 || /[^A-Za-z0-9]/.test(password)) * 20);
 
   useEffect(() => {
     if (!open) return;
@@ -157,10 +155,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved, canManageCandidate
             placeholder={initial ? "留空则不修改密码" : "登录密码"}
           />
         </Form.Item>
-        {password && <div aria-live="polite" style={{ marginTop: -18, marginBottom: 20 }}>
-          <Progress percent={strength} showInfo={false} status={validPassword ? "success" : "normal"} size="small" />
-          <Typography.Text type={validPassword ? "success" : "secondary"}>{!validPassword ? "弱" : strength >= 100 ? "强" : "中"} · 至少 8 位，包含大小写字母和数字</Typography.Text>
-        </div>}
+        <PasswordStrength password={password} />
         <Form.Item name="role" label="角色">
           <Select options={ROLE_OPTIONS} disabled={initial?.role === "super_admin"} />
         </Form.Item>
