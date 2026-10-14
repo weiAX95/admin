@@ -4,6 +4,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { lazy, Suspense } from "react";
 import AdminLayout from "./layouts/AdminLayout";
 import RequireAuth from "./components/RequireAuth";
+import RequireAdmin from "./components/RequireAdmin";
 import ErrorBoundary from "./components/ErrorBoundary";
 import OfflineBanner from "./components/OfflineBanner";
 import ApiNetworkRetryBanner from "./components/ApiNetworkRetryBanner";
@@ -76,25 +77,27 @@ export default function App() {
                 <Route path="/experiments/compare" element={<ExperimentCompare />} />
                 <Route path="/experiments/datasets" element={<ExperimentDatasets />} />
                 <Route path="/evaluation/reviews" element={<EvaluationReviews />} />
-                <Route path="/evaluation/candidates" element={<EvaluationCandidates />} />
+                <Route element={<RequireAdmin />}>
+                  <Route path="/evaluation/candidates" element={<EvaluationCandidates />} />
+                  <Route path="/evaluation/alerts" element={<EvaluationAlerts />} />
+                  <Route path="/accounts" element={<Accounts />} />
+                  <Route path="/account-activity" element={<AccountActivity />} />
+                  <Route path="/model-costs" element={<ModelCosts />} />
+                  <Route path="/model-call-audit" element={<ModelCallAudit />} />
+                  <Route path="/model-health" element={<ModelHealth />} />
+                  <Route path="/alerts" element={<Alerts />} />
+                </Route>
                 <Route path="/evaluation/leaderboard" element={<EvaluationLeaderboard />} />
                 <Route path="/evaluation/schedules" element={<EvaluationSchedules />} />
                 <Route path="/evaluation/metrics" element={<EvaluationMetrics />} />
-                <Route path="/evaluation/alerts" element={<EvaluationAlerts />} />
                 <Route path="/experiments/reports/:id" element={<ExperimentRegressionReport />} />
                 <Route path="/experiments/chains/:id" element={<ExperimentChain />} />
                 <Route path="/experiments/schedules" element={<ExperimentSchedules />} />
                 <Route path="/experiments/:id" element={<ExperimentDetail />} />
                 <Route path="/prompts" element={<Prompts />} />
                 <Route path="/prompts/:id" element={<PromptDetail />} />
-                <Route path="/accounts" element={<Accounts />} />
                 <Route path="/account-audit" element={<AccountAudit />} />
-                <Route path="/account-activity" element={<AccountActivity />} />
                 <Route path="/settings" element={<Settings />} />
-                <Route path="/model-costs" element={<ModelCosts />} />
-                <Route path="/model-call-audit" element={<ModelCallAudit />} />
-                <Route path="/model-health" element={<ModelHealth />} />
-                <Route path="/alerts" element={<Alerts />} />
                 <Route path="/project-analysis" element={<ProjectAnalysis />} />
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
