@@ -42,6 +42,7 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
     const existing = await client.query('SELECT 1 FROM retention_cleanup_runs WHERE local_date=$1', [clock.date]);
     if (existing.rowCount) { await client.query('COMMIT'); return null; }
     await client.query('INSERT INTO retention_cleanup_runs(local_date) VALUES($1)', [clock.date]);
+    await client.query("SET LOCAL app.audit_retention='on'");
     const audit = await client.query('DELETE FROM security_audit_logs WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
     const modelAudit = await client.query('DELETE FROM model_call_audit WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
     const rateRejections = await client.query('DELETE FROM model_rate_rejections WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);

@@ -70,11 +70,13 @@ flowchart LR
 flowchart LR
   Models["experiment_models"] -->|"FK connection_id"| Connections["model_connections"]
   Runs["experiment_runs"] -->|"FK connection_id / judge_connection_id"| Connections
-  Users["users"] -->|"FK actor_id · ON DELETE SET NULL"| Audit["security_audit_logs"]
+  Users["users"] -. "actor_id 历史原始 ID，无 FK" .-> Audit["security_audit_logs"]
   Connections -. "管理操作按目标 ID 记账" .-> Audit
 ```
 
 `model_connections` 可为同一供应商保存多条连接，只有一个启用的默认连接；API Key 和自定义 X- 请求头分别以 AES-256-GCM 加密，数据库行记录密钥版本与脱敏显示值。显式绑定的模型通过 `experiment_models.connection_id` 选择连接；创建运行时将主模型与 Judge 的连接 ID 复制到 `experiment_runs`，运行器按该 ID 取密钥。未绑定模型选供应商默认数据库连接，无默认连接才使用旧环境变量。`security_audit_logs` 是独立安全审计表，保存管理动作、操作者及目标 ID，不保存明文密钥；与任务字段历史、笔记版本历史区分。[036_model_registry.sql](../db/migrations/036_model_registry.sql) 扩展 `experiment_models` 的唯一名称、Endpoint／API 版本元数据、token 上限、能力标签、状态和角色白名单；[042_model_retirement.sql](../db/migrations/042_model_retirement.sql) 增加弃用、计划退役和实际退役时间，**不增加新表或外键**。旧模型保留成员可见权限；新增模型默认仅管理员可用。未接入的供应商只能登记目录，不能启用或执行；Endpoint 暂不覆盖加密连接的实际请求地址。运行单价仍按美元／百万 token 存储，管理表单换算显示美元／千 token。到期退役器按 `retire_at` 自动把状态改为 `retired`，排队运行标记失败；引用者通知存于 `app_notifications`，紧急退役写入 `security_audit_logs`。
+
+[101 迁移](../db/migrations/101_account_audit.sql) 取消审计表操作者外键，使永久删除账号后仍保留原始账号 ID；登录记录插入时触发生成成功／失败审计。审计表触发器拒绝普通更新和删除，保留策略作业在事务内设置专用标记后才能清理过期行。主 API 的成功写请求同事务追加资源操作记录；`/account-audit` 由管理员按账号／动作／资源／上海日期查询与导出，成员只能查询自己的记录。独立旁路接口和数据库角色级隔离仍需补齐，不能将目前的触发器视为能抵御数据库管理员篡改的绝对保证。
 
 ```mermaid
 flowchart LR

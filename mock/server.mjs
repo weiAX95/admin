@@ -23,6 +23,8 @@ import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
 import crypto from "node:crypto";
 import { parseLoginIpAllowlist, requestLoginIp } from './login-network.mjs';
+import { recordAccountAction } from './account-audit.mjs';
+import { handleAccountAudit } from './account-audit-api.mjs';
 import { pool, loadData, saveData, sha256, assertSchemaCurrent } from "./postgres-store.mjs";
 import { hashPassword, passwordPolicyError, verifyPassword } from "./passwords.mjs";
 import { createPasswordExpiryReminders } from "./password-expiry.mjs";
@@ -679,6 +681,7 @@ async function handleRequest(req, res) {
     if (!username) return send(res, 401, { error: "未登录或登录已过期" });
     const me = db.users.find((u) => u.username === username) || null;
     if (!me) return send(res, 401, { error: "登录账号不存在，请重新登录" });
+    res.__actor = { id: me.id, username: me.username };
     const latestPassword = (await activeClient.query("SELECT changed_at FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 1", [me.id])).rows[0]?.changed_at;
     const passwordChangeRequired = Boolean(latestPassword && new Date(latestPassword).getTime() <= Date.now() - 90 * 24 * 60 * 60 * 1000);
     if (passwordChangeRequired && !["/api/auth/password", "/api/auth/logout", "/api/auth/me"].includes(pathname)) {
@@ -718,6 +721,8 @@ async function handleRequest(req, res) {
 
     const settingsResponse = await handleSystemSettings({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (settingsResponse) return send(res, settingsResponse.status, settingsResponse.data);
+    const accountAuditResponse = await handleAccountAudit({ pathname, method, url, client: activeClient, me });
+    if (accountAuditResponse) return send(res, accountAuditResponse.status, accountAuditResponse.data);
     const connectionResponse = await handleModelConnections({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (connectionResponse) return send(res, connectionResponse.status, connectionResponse.data);
     const retentionResponse = await handleRetentionSettings({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
@@ -1028,6 +1033,7 @@ async function handleRequest(req, res) {
       const index = db.users.findIndex((u) => u.id === um[1]);
       if (index === -1) return send(res, 404, { error: "user not found" });
       const target = db.users[index];
+      res.__accountBefore = structuredClone(target);
       const adminCount = () => db.users.filter((u) => u.role === "admin" && !u.deletedAt).length;
 
       if (pathname.endsWith("/restore") && method === "POST") {
@@ -2263,7 +2269,11 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  void withData(() => handleRequest(req, res)).then(({ changed }) => {
+  void withData(async () => {
+    await handleRequest(req, res);
+    if (res.__accountBefore) res.__accountAfter = db.users.find(user => user.id === res.__accountBefore.id);
+    await recordAccountAction(activeClient, req, res);
+  }).then(({ changed }) => {
     const pending = res.__pending || { status: 500, payload: { error: "接口没有返回结果" } };
     send(res, pending.status, pending.payload);
     if (changed || (req.method === 'POST' && new URL(req.url, 'http://localhost').pathname === '/api/auth/login' && pending.status === 200)) notifyLive();

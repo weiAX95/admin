@@ -34,6 +34,7 @@ const ExperimentSchedules = lazy(() => import("./pages/ExperimentSchedules"));
 const Prompts = lazy(() => import("./pages/Prompts"));
 const PromptDetail = lazy(() => import("./pages/PromptDetail"));
 const Accounts = lazy(() => import("./pages/Accounts"));
+const AccountAudit = lazy(() => import("./pages/AccountAudit"));
 const Login = lazy(() => import("./pages/Login"));
 const Register = lazy(() => import("./pages/Register"));
 const ChangePassword = lazy(() => import("./pages/ChangePassword"));
@@ -86,6 +87,7 @@ export default function App() {
                 <Route path="/prompts" element={<Prompts />} />
                 <Route path="/prompts/:id" element={<PromptDetail />} />
                 <Route path="/accounts" element={<Accounts />} />
+                <Route path="/account-audit" element={<AccountAudit />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/model-costs" element={<ModelCosts />} />
                 <Route path="/model-call-audit" element={<ModelCallAudit />} />
