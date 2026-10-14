@@ -2325,11 +2325,11 @@ const server = http.createServer((req, res) => {
       const url = new URL(req.url, 'http://localhost');
       const pathname = url.pathname;
       const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
-        || await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) })
+        || await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
         || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req) })
         || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req) })
         || await handleProjectScans({ pathname, method: req.method, client: pool, me, url: new URL(req.url, 'http://localhost') })
-        || await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req) });
+        || await handleProjectRepositories({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req });
       sendImmediate(res, response?.status || 404, response?.data || { error: '项目接口不存在' });
       if (response?.status === 201 && pathname.endsWith('/accept')) notifyLive();
       return;

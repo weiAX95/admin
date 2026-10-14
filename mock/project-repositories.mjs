@@ -3,6 +3,7 @@ import pg from 'pg';
 import { isAdministrator } from './roles.mjs';
 import { parseProjectRequirements } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
+import { appendSecurityAudit } from './account-audit.mjs';
 
 export function parseGitHubRepository(value) {
   let url;
@@ -47,6 +48,22 @@ async function writeTaskLink(client, repositoryId, me, expectedBaselineVersionId
   finally { if (pooled) connection.release(); }
 }
 
+async function auditedWrite(client, req, me, action, targetId, work) {
+  const pooled = client instanceof pg.Pool;
+  const connection = pooled ? await client.connect() : client;
+  try {
+    await connection.query('BEGIN');
+    const result = await work(connection);
+    if (result.status >= 400) await connection.query('ROLLBACK');
+    else {
+      if (req) await appendSecurityAudit(connection, req, me, action, 'project_repositories', typeof targetId === 'function' ? targetId(result) : targetId);
+      await connection.query('COMMIT');
+    }
+    return result;
+  } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
+  finally { if (pooled) connection.release(); }
+}
+
 async function githubFetch(url) {
   return fetch(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(10000) });
 }
@@ -80,7 +97,7 @@ async function resolveRepository(fetchGithub, parsed, requestedBranch) {
   return { data: { fullName, branch, commitSha: sha } };
 }
 
-export async function handleProjectRepositories({ pathname, method, client, me, readBody, fetchGithub = githubFetch }) {
+export async function handleProjectRepositories({ pathname, method, client, me, readBody, req, fetchGithub = githubFetch }) {
   if (pathname !== '/api/project-repositories' && !/^\/api\/project-repositories\/[0-9a-f-]{36}(?:\/refresh|\/tasks(?:\/[^/]+)?)?$/i.test(pathname)) return null;
   if (pathname === '/api/project-repositories' && method === 'GET') {
     const rows = (await client.query(`${repositoryQuery} WHERE r.owner_id=$1 ORDER BY r.updated_at DESC`, [me.id])).rows;
@@ -97,8 +114,10 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     if (resolved.error) return resolved.error;
     const { fullName, branch, commitSha } = resolved.data;
     try {
-      const row = (await client.query('INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,requirement_baseline,commit_sha) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *', [crypto.randomUUID(),me.id,fullName,branch,goal,baseline,commitSha])).rows[0];
-      return { status: 201, data: publicRow(row) };
+      return await auditedWrite(client,req,me,'create',result=>result.data.id,async connection => {
+        const row = (await connection.query('INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,requirement_baseline,commit_sha) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *', [crypto.randomUUID(),me.id,fullName,branch,goal,baseline,commitSha])).rows[0];
+        return { status: 201, data: publicRow(row) };
+      });
     } catch (error) { if (error.code === '23505') return fail(409, '该分支已接入'); throw error; }
   }
   const id = pathname.split('/')[3];
@@ -120,8 +139,9 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
       if (requirementId && !requirements.some(item => item.id === requirementId)) return fail(400, '需求 ID 不属于当前版本');
       const task = (await connection.query('SELECT id,title,status,progress,owner_id AS "ownerId" FROM tasks WHERE id=$1 AND deleted_at IS NULL AND (owner_id=$2 OR $3)', [taskId,me.id,isAdministrator(me)])).rows[0];
       if (!task) return fail(404, '任务不存在或无权关联');
-      await connection.query('INSERT INTO project_repository_tasks(repository_id,task_id,linked_by,requirement_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [id,taskId,me.id,requirementId]);
+      const inserted = await connection.query('INSERT INTO project_repository_tasks(repository_id,task_id,linked_by,requirement_id) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [id,taskId,me.id,requirementId]);
       const link = (await connection.query('SELECT requirement_id FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [id,taskId])).rows[0];
+      if (req && inserted.rowCount) await appendSecurityAudit(connection,req,me,'link','project_repository_tasks',taskId,{repositoryId:id});
       return { status: 200, data: { ...task, requirementId: link.requirement_id } };
     });
   }
@@ -138,14 +158,17 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
       const task = (await connection.query('SELECT t.id,t.title,t.status,t.progress,t.owner_id AS "ownerId" FROM project_repository_tasks l JOIN tasks t ON t.id=l.task_id WHERE l.repository_id=$1 AND l.task_id=$2 AND t.deleted_at IS NULL', [id,taskId])).rows[0];
       if (!task) return fail(404, '关联任务不存在');
       await connection.query('UPDATE project_repository_tasks SET requirement_id=$3 WHERE repository_id=$1 AND task_id=$2', [id,taskId,requirementId]);
+      if (req) await appendSecurityAudit(connection,req,me,'update','project_repository_tasks',taskId,{repositoryId:id});
       return { status: 200, data: { ...task, requirementId } };
     });
   }
   if (unlink && method === 'DELETE') {
     let taskId;
     try { taskId = decodeURIComponent(unlink[1]); } catch { return fail(400, '任务 ID 无效'); }
-    const deleted = await client.query('DELETE FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [id,taskId]);
-    return deleted.rowCount ? { status: 200, data: { deleted: true, taskId } } : fail(404, '关联不存在');
+    return auditedWrite(client,req,me,'unlink',taskId,async connection => {
+      const deleted = await connection.query('DELETE FROM project_repository_tasks WHERE repository_id=$1 AND task_id=$2', [id,taskId]);
+      return deleted.rowCount ? { status: 200, data: { deleted: true, taskId } } : fail(404, '关联不存在');
+    });
   }
   if (method === 'PATCH' && pathname.endsWith(`/${id}`)) {
     const body = await readBody();
@@ -155,21 +178,26 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     if (!goal || goal.length > 2000 || baseline === null || baseline.length > 200 || containsKnownSecret(goal) || containsKnownSecret(baseline)) return fail(400, '项目目标或需求基线无效，且不得包含凭据');
     if (typeof body.expectedGoal !== 'string' || typeof body.expectedRequirementBaseline !== 'string' || body.expectedBaselineVersionId !== null && (typeof body.expectedBaselineVersionId !== 'string' || !UUID.test(body.expectedBaselineVersionId))) return fail(400, '缺少当前项目版本，请刷新后重试');
     if (row.baseline_version_id && baseline !== row.requirement_baseline) return fail(409, '已有版本化需求文档，请通过新版本修改正文');
-    const changed = await client.query(`UPDATE project_repositories SET goal=$3,requirement_baseline=$4,updated_at=now()
-      WHERE id=$1 AND owner_id=$2 AND goal=$5 AND requirement_baseline=$6
-        AND baseline_version_id IS NOT DISTINCT FROM $7::uuid
-        AND (baseline_version_id IS NULL OR requirement_baseline=$4)
-      RETURNING *`, [id,me.id,goal,baseline,body.expectedGoal,body.expectedRequirementBaseline,body.expectedBaselineVersionId]);
-    if (!changed.rowCount) return fail(409, '项目目标或需求版本已变化，请刷新后重试');
-    return { status: 200, data: publicRow({ ...changed.rows[0], last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) };
+    return auditedWrite(client,req,me,'update',id,async connection => {
+      const changed = await connection.query(`UPDATE project_repositories SET goal=$3,requirement_baseline=$4,updated_at=now()
+        WHERE id=$1 AND owner_id=$2 AND goal=$5 AND requirement_baseline=$6
+          AND baseline_version_id IS NOT DISTINCT FROM $7::uuid
+          AND (baseline_version_id IS NULL OR requirement_baseline=$4)
+        RETURNING *`, [id,me.id,goal,baseline,body.expectedGoal,body.expectedRequirementBaseline,body.expectedBaselineVersionId]);
+      if (!changed.rowCount) return fail(409, '项目目标或需求版本已变化，请刷新后重试');
+      return { status: 200, data: publicRow({ ...changed.rows[0], last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) };
+    });
   }
   if (method === 'GET' && pathname.endsWith(`/${id}`)) return { status: 200, data: publicRow(row) };
   if (method === 'POST' && pathname.endsWith('/refresh')) {
     const [owner, repo] = row.full_name.split('/');
     const resolved = await resolveRepository(fetchGithub, { owner, repo, fullName: row.full_name }, row.branch);
     if (resolved.error) return resolved.error;
-    const updated = (await client.query('UPDATE project_repositories SET commit_sha=$1,last_checked_at=now(),updated_at=now() WHERE id=$2 AND owner_id=$3 RETURNING *', [resolved.data.commitSha,id,me.id])).rows[0];
-    return { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) };
+    return auditedWrite(client,req,me,'refresh',id,async connection => {
+      const updated = (await connection.query('UPDATE project_repositories SET commit_sha=$1,last_checked_at=now(),updated_at=now() WHERE id=$2 AND owner_id=$3 RETURNING *', [resolved.data.commitSha,id,me.id])).rows[0];
+      if (!updated) return fail(404, '项目不存在');
+      return { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) };
+    });
   }
   return fail(405, '不支持该操作');
 }

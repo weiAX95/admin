@@ -5,6 +5,7 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEncryptedBackup } from './backup-archive.mjs';
+import { appendSecurityAudit } from './account-audit.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const backupDir = () => path.resolve(process.env.BACKUP_DIR || path.join(root, 'backups'));
@@ -53,7 +54,16 @@ export async function handleBackupRequest(req, res, pool, lookupSession, onChang
   if (pathname === '/api/settings/backups' && req.method === 'POST') {
     if (!/^[a-f\d]{64}$/i.test(process.env.BACKUP_ENCRYPTION_KEY || '')) { respond(res, 503, { error: '备份密钥未配置或格式无效' }); return true; }
     const id = crypto.randomUUID();
-    try { await pool.query("INSERT INTO backup_jobs(id,requested_by,status,phase) VALUES($1,$2,'queued','queued')", [id,me.id]); }
+    try {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query("INSERT INTO backup_jobs(id,requested_by,status,phase) VALUES($1,$2,'queued','queued')", [id,me.id]);
+        await appendSecurityAudit(client,req,me,'create','backup',id);
+        await client.query('COMMIT');
+      } catch (error) { await client.query('ROLLBACK'); throw error; }
+      finally { client.release(); }
+    }
     catch (error) { if (error.code === '23505') { respond(res, 409, { error: '已有备份任务正在执行' }); return true; } throw error; }
     respond(res, 202, { id, status: 'queued' });
     void runBackupJob(pool,id,onChanged);
@@ -68,6 +78,7 @@ export async function handleBackupRequest(req, res, pool, lookupSession, onChang
     const file = backupPath(id);
     let stat;
     try { stat = await fsp.stat(file); } catch { respond(res, 404, { error: '备份文件不存在' }); return true; }
+    await appendSecurityAudit(pool,req,me,'download','backup',id);
     res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': stat.size, 'Content-Disposition': `attachment; filename="backup-${id}.agbackup"`, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
     return true;

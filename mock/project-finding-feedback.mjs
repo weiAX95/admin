@@ -1,11 +1,12 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
+import { appendSecurityAudit } from './account-audit.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const statuses = new Set(['implemented','partial','not_found','unverified']);
 const fail = (status,error) => ({ status, data: { error } });
 
-export async function handleProjectFindingFeedback({ pathname, method, client, me, readBody }) {
+export async function handleProjectFindingFeedback({ pathname, method, client, me, readBody, req }) {
   const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/([^/]+)\/findings\/([^/]+)\/feedback$/);
   if (!match) return null;
   if (method !== 'POST') return fail(405,'不支持该操作');
@@ -25,6 +26,7 @@ export async function handleProjectFindingFeedback({ pathname, method, client, m
       WHERE f.id=$1 AND a.id=$2 AND r.id=$3 AND r.owner_id=$4 AND a.status='completed'`,[findingId,analysisId,repositoryId,me.id])).rows[0];
     if (!finding) { await connection.query('ROLLBACK'); return fail(404,'结论不存在'); }
     const result = (await connection.query('INSERT INTO project_finding_feedback(id,analysis_id,finding_id,owner_id,corrected_status,reason) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,corrected_status,reason,created_at',[crypto.randomUUID(),analysisId,findingId,me.id,status,reason])).rows[0];
+    if (req) await appendSecurityAudit(connection,req,me,'create','project_finding_feedback',result.id);
     await connection.query('COMMIT');
     return { status: 201, data: { id: result.id, correctedStatus: result.corrected_status, reason: result.reason, createdAt: result.created_at, author: me.username || me.id } };
   } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
