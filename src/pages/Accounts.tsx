@@ -75,6 +75,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         status: initial.status,
         activationMode: initial.activationMode || "immediate",
         maxDevices: initial.maxDevices || 3,
+        ipAllowlist: initial.ipAllowlist || [],
         password: "",
       });
     } else {
@@ -85,6 +86,7 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         status: "active",
         activationMode: "immediate",
         maxDevices: 3,
+        ipAllowlist: [],
         password: "",
       });
     }
@@ -161,6 +163,9 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
         </Form.Item>
         <Form.Item name="maxDevices" label="最多同时登录设备" rules={[{ required: true, message: '请选择 1–10 台设备' }]}>
           <InputNumber min={1} max={10} style={{ width: '100%' }} />
+        </Form.Item>
+        <Form.Item name="ipAllowlist" label="登录 IP 白名单" extra="留空允许所有地址；输入完整 IPv4 或 IPv6 后按回车。配置前请确认自己当前的连接 IP。">
+          <Select mode="tags" tokenSeparators={[',']} placeholder="例如 203.0.113.10" />
         </Form.Item>
       </Form>
     </Drawer>

@@ -144,7 +144,7 @@ export default function Settings() {
       <Table rowKey="id" size="small" dataSource={loginRows} pagination={{ pageSize: 5 }} scroll={{ x: 760 }} columns={[
         { title: '时间', dataIndex: 'createdAt', render: value => new Date(value as string).toLocaleString('zh-CN', { hour12: false }) },
         { title: '结果', dataIndex: 'succeeded', render: value => value ? <Tag color="success">成功</Tag> : <Tag color="error">失败</Tag> },
-        { title: '原因', dataIndex: 'reason', render: value => ({ success: '登录成功', invalid_credentials: '凭据错误', locked: '尝试过多', pending: '待激活', disabled: '已停用' }[value as string] || value) },
+        { title: '原因', dataIndex: 'reason', render: value => ({ success: '登录成功', invalid_credentials: '凭据错误', locked: '尝试过多', pending: '待激活', disabled: '已停用', ip_denied: 'IP 不在白名单' }[value as string] || value) },
         { title: 'IP', dataIndex: 'ipAddress' },
         { title: '设备', dataIndex: 'userAgent', ellipsis: true, render: value => <Typography.Text ellipsis={{ tooltip: value }}>{value || '未知设备'}</Typography.Text> },
       ]} />

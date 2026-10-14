@@ -22,6 +22,7 @@ import { activityHeatmap, activityDay, validDateKey } from "./heatmap.mjs";
 import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
 import crypto from "node:crypto";
+import { parseLoginIpAllowlist, requestLoginIp } from './login-network.mjs';
 import { pool, loadData, saveData, sha256, assertSchemaCurrent } from "./postgres-store.mjs";
 import { hashPassword, passwordPolicyError, verifyPassword } from "./passwords.mjs";
 import { createPasswordExpiryReminders } from "./password-expiry.mjs";
@@ -295,7 +296,7 @@ async function revokeUserSessions(userId) {
 
 async function recordLoginAttempt(req, account, username, deviceHash, succeeded, reason) {
   await activeClient.query(`INSERT INTO account_login_history(id,user_id,username,ip_address,user_agent,device_hash,succeeded,reason)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [newId(), account?.id || null, String(username || '').slice(0, 30), req.socket.remoteAddress || 'unknown', String(req.headers['user-agent'] || '').slice(0, 500), deviceHash, succeeded, reason]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [newId(), account?.id || null, String(username || '').slice(0, 30), requestLoginIp(req), String(req.headers['user-agent'] || '').slice(0, 500), deviceHash, succeeded, reason]);
 }
 
 async function enforceDeviceLimit(account) {
@@ -314,7 +315,7 @@ async function enforceDeviceLimit(account) {
 const publicUser = (u) => ({
   id: u.id, username: u.username, name: u.name,
   role: u.role, status: u.status,
-  activationMode: u.activationMode || "immediate", activatedAt: u.activatedAt || null, maxDevices: u.maxDevices || 3,
+  activationMode: u.activationMode || "immediate", activatedAt: u.activatedAt || null, maxDevices: u.maxDevices || 3, ipAllowlist: u.ipAllowlist || [],
   deletedAt: u.deletedAt || null,
   createdAt: u.createdAt, updatedAt: u.updatedAt,
 });
@@ -638,6 +639,11 @@ async function handleRequest(req, res) {
         await recordLoginAttempt(req, account, body.username, deviceHint, false, 'invalid_credentials');
         return send(res, 401, { error: "用户名或密码错误" });
       }
+      const loginIp = requestLoginIp(req);
+      if (account.ipAllowlist?.length && !account.ipAllowlist.includes(loginIp)) {
+        await recordLoginAttempt(req, account, body.username, deviceHint, false, 'ip_denied');
+        return send(res, 403, { error: "当前 IP 不在该账号的登录白名单中" });
+      }
       if (account.status === "pending" && account.activationMode === "first_login") {
         account.status = "active";
         account.activatedAt = nowIso();
@@ -653,6 +659,14 @@ async function handleRequest(req, res) {
       const passwordChangeRequired = Boolean(passwordChangedAt && new Date(passwordChangedAt).getTime() <= Date.now() - 90 * 24 * 60 * 60 * 1000);
       const token = crypto.randomBytes(32).toString("hex");
       const deviceHash = deviceHint || sha256(token);
+      const previousLogin = (await activeClient.query(`SELECT device_hash FROM account_login_history
+        WHERE user_id=$1 AND succeeded=true ORDER BY created_at DESC LIMIT 1`, [account.id])).rows[0];
+      if (previousLogin?.device_hash && deviceHint) {
+        const seen = (await activeClient.query(`SELECT 1 FROM account_login_history
+          WHERE user_id=$1 AND succeeded=true AND device_hash=$2 LIMIT 1`, [account.id, deviceHash])).rowCount;
+        if (!seen) await notifyUser(activeClient, account.id, 'account_new_device', sha256(`${account.id}:${deviceHash}`),
+          '新设备登录提醒', `账号 ${account.username} 从新设备登录，连接 IP：${loginIp}。如非本人操作，请立即修改密码。`, '/settings');
+      }
       const { sessionHours } = await getGlobalSettings(activeClient);
       await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at,device_hash) VALUES($1,$2,now()+($3 * interval '1 hour'),$4)", [sha256(token), account.id, sessionHours, deviceHash]);
       await enforceDeviceLimit(account);
@@ -981,6 +995,8 @@ async function handleRequest(req, res) {
           const passwordError = passwordPolicyError(pwd);
           if (passwordError) return send(res, 400, { error: passwordError });
           if (body.maxDevices !== undefined && (!Number.isInteger(body.maxDevices) || body.maxDevices < 1 || body.maxDevices > 10)) return send(res, 400, { error: "同时登录设备数需为 1–10" });
+          const ipAllowlist = body.ipAllowlist === undefined ? [] : parseLoginIpAllowlist(body.ipAllowlist);
+          if (!ipAllowlist) return send(res, 400, { error: "IP 白名单只允许最多 30 个完整 IPv4 或 IPv6 地址" });
           if (db.users.some((u) => u.username === uname)) {
             return send(res, 409, { error: "用户名已存在" });
           }
@@ -992,6 +1008,7 @@ async function handleRequest(req, res) {
             role: body.role === "admin" ? "admin" : "member",
             activationMode,
             maxDevices: body.maxDevices ?? 3,
+            ipAllowlist,
             status: body.status === "disabled" ? "disabled" : activationMode === "immediate" ? "active" : "pending",
             activatedAt: body.status === "disabled" || activationMode !== "immediate" ? null : t,
             createdAt: t, updatedAt: t,
@@ -1040,6 +1057,11 @@ async function handleRequest(req, res) {
       if (method === "PUT" || method === "PATCH") {
         const body = await readBody(req);
         if (body.maxDevices !== undefined && (!Number.isInteger(body.maxDevices) || body.maxDevices < 1 || body.maxDevices > 10)) return send(res, 400, { error: "同时登录设备数需为 1–10" });
+        const ipAllowlist = body.ipAllowlist === undefined ? undefined : parseLoginIpAllowlist(body.ipAllowlist);
+        if (body.ipAllowlist !== undefined && !ipAllowlist) return send(res, 400, { error: "IP 白名单只允许最多 30 个完整 IPv4 或 IPv6 地址" });
+        if (target.id === me.id && ipAllowlist?.length && !ipAllowlist.includes(requestLoginIp(req))) {
+          return send(res, 400, { error: "当前连接 IP 不在白名单中，不能将自己锁在账号外" });
+        }
         const changingPassword = typeof body.password === "string" && body.password.length > 0;
         if (changingPassword) {
           const passwordError = passwordPolicyError(body.password);
@@ -1053,6 +1075,7 @@ async function handleRequest(req, res) {
         if (body.maxDevices !== undefined) {
           target.maxDevices = body.maxDevices;
         }
+        if (ipAllowlist) target.ipAllowlist = ipAllowlist;
         if (body.role === "admin" || body.role === "member") {
           if (target.role === "admin" && body.role !== "admin" && adminCount() <= 1) {
             return send(res, 400, { error: "不能降级唯一的管理员" });
@@ -2243,7 +2266,7 @@ const server = http.createServer((req, res) => {
   void withData(() => handleRequest(req, res)).then(({ changed }) => {
     const pending = res.__pending || { status: 500, payload: { error: "接口没有返回结果" } };
     send(res, pending.status, pending.payload);
-    if (changed) notifyLive();
+    if (changed || (req.method === 'POST' && new URL(req.url, 'http://localhost').pathname === '/api/auth/login' && pending.status === 200)) notifyLive();
     if (req.method === 'POST' && new URL(req.url, 'http://localhost').pathname === '/api/alerts/channels/test' && pending.status === 201) notifyLive();
     if (req.method === 'PUT' && new URL(req.url, 'http://localhost').pathname.startsWith('/api/settings/') && pending.status === 200) notifyLive('settings_changed');
   }).catch(error => {

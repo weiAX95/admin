@@ -353,6 +353,7 @@ export interface Account {
   activationMode?: ActivationMode;
   activatedAt?: string | null;
   maxDevices?: number;
+  ipAllowlist?: string[];
   deletedAt?: string | null;
   createdAt: string;
   updatedAt: string;
