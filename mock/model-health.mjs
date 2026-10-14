@@ -43,7 +43,7 @@ export async function processModelHealthAlerts(pool) {
         ON CONFLICT(model_id) DO UPDATE SET degraded=EXCLUDED.degraded,generation=model_health_alert_state.generation+1,updated_at=now()
         WHERE model_health_alert_state.degraded IS DISTINCT FROM EXCLUDED.degraded RETURNING generation`, [model.id,degraded])).rows[0];
       if (!degraded || !changed) continue;
-      const admins = (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows;
+      const admins = (await client.query("SELECT id FROM users WHERE role IN ('admin','super_admin') AND status='active'")).rows;
       for (const admin of admins) await notifyUser(client,admin.id,'model-health',`${model.id}:${changed.generation}`,'模型健康异常',`${model.displayName}：近 5 分钟 5xx 错误率 ${model.errorRate5xx}% ，P95 ${model.p95Ms} ms。`,'/model-health');
     }
     await client.query('COMMIT');

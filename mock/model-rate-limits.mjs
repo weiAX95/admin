@@ -68,7 +68,7 @@ export async function reserveModelRate(client, runRequests, checked) {
     const before = Math.max(item.calls/item.limit.rpm,item.tokens/Number(item.limit.tpm));
     const after = Math.max((item.calls+item.request.calls)/item.limit.rpm,(item.tokens+item.request.tokens)/Number(item.limit.tpm));
     if (before <= .9 && after > .9) {
-      for (const admin of (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows) await notifyUser(client,admin.id,'model_rate_near_limit',`${item.modelId}:${minute}`,`模型 ${item.modelId} 接近速率上限`,`本分钟已预留 ${item.calls+item.request.calls}/${item.limit.rpm} 次请求、${item.tokens+item.request.tokens}/${item.limit.tpm} token。`,'/experiments');
+      for (const admin of (await client.query("SELECT id FROM users WHERE role IN ('admin','super_admin') AND status='active'")).rows) await notifyUser(client,admin.id,'model_rate_near_limit',`${item.modelId}:${minute}`,`模型 ${item.modelId} 接近速率上限`,`本分钟已预留 ${item.calls+item.request.calls}/${item.limit.rpm} 次请求、${item.tokens+item.request.tokens}/${item.limit.tpm} token。`,'/experiments');
     }
   }
 }

@@ -52,7 +52,7 @@ export async function finalizeExperimentBatch(pool, batchId) {
           const alertId = crypto.randomUUID();
           const affected=new Set(degraded.map(item=>item.caseKey)).size;
           const inserted = await client.query('INSERT INTO evaluation_alerts(id,batch_id,baseline_batch_id,metric_version_id,affected_count,details) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(batch_id) DO NOTHING RETURNING id', [alertId,batch.id,setup.baseline_batch_id,setup.metric_version_id,affected,JSON.stringify(degraded)]);
-          if (inserted.rowCount) for (const admin of (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_regression',batch.id,`${title}：发现 ${affected} 条退化用例`,'请检查回归报告中的指标下降和失败分类。',`/evaluation/alerts`);
+          if (inserted.rowCount) for (const admin of (await client.query("SELECT id FROM users WHERE role IN ('admin','super_admin') AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_regression',batch.id,`${title}：发现 ${affected} 条退化用例`,'请检查回归报告中的指标下降和失败分类。',`/evaluation/alerts`);
         }
       }
       const occurrence = (await client.query("UPDATE experiment_schedule_occurrences SET status=$2 WHERE batch_id=$1 AND status='queued' RETURNING schedule_id,id", [batch.id,batch.status])).rows[0];
@@ -61,7 +61,7 @@ export async function finalizeExperimentBatch(pool, batchId) {
         if (schedule && !schedule.active && schedule.failure_streak >= 3) await notifyUser(client,schedule.owner_id,'schedule_paused',occurrence.schedule_id,`${title}：调度已暂停`,'连续三个调度周期失败，请检查模型配置和运行错误。','/experiments/schedules');
       }
       const evaluationOccurrence = (await client.query("UPDATE evaluation_schedule_occurrences SET status=$2 WHERE batch_id=$1 AND status='queued' RETURNING id", [batch.id,batch.status])).rows[0];
-      if (evaluationOccurrence && batch.status !== 'completed') for (const admin of (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_schedule_failed',evaluationOccurrence.id,`${title}：定时评测部分失败`,'部分用例重试后仍失败，已保留成功结果。','/evaluation/schedules');
+      if (evaluationOccurrence && batch.status !== 'completed') for (const admin of (await client.query("SELECT id FROM users WHERE role IN ('admin','super_admin') AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_schedule_failed',evaluationOccurrence.id,`${title}：定时评测部分失败`,'部分用例重试后仍失败，已保留成功结果。','/evaluation/schedules');
     }
     await client.query('COMMIT');
     return batch;

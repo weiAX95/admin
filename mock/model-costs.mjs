@@ -82,7 +82,7 @@ export async function handleModelCostBudget({ pathname, method, client, me, read
 
 export async function notifyModelCostAlerts(client) {
   const budget = await monthlyCostStatus(client);
-  const admins = (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows;
+  const admins = (await client.query("SELECT id FROM users WHERE role IN ('admin','super_admin') AND status='active'")).rows;
   if (budget.percentage !== null) for (const threshold of [80, 100, 120]) if (budget.percentage >= threshold) {
     for (const admin of admins) await notifyUser(client, admin.id, 'model_cost_budget', `${budget.month}:${threshold}`, `模型月预算达到 ${threshold}%`, `本月已记账 $${Number(budget.spentUsd).toFixed(6)}，预算 $${Number(budget.monthlyBudgetUsd).toFixed(6)}。`, '/model-costs');
   }

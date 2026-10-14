@@ -445,7 +445,7 @@ async function enqueueAlertWebhooks(client, rule, incident, kind, occurredAt) {
 async function notifyIncident(client, rule, incident, value) {
   if (rule.level === 'info') return;
   if (await isSilenced(client,rule,incident.opened_at)) return;
-  const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
+  const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role IN ('admin','super_admin') AND status='active'")).rows;
   for (const admin of admins) {
     const email = (rule.level === 'critical' || rule.channels.includes('email')) && admin.review_email_enabled ? admin.review_email : null;
     const inApp = rule.level === 'critical' || rule.channels.includes('in_app');
@@ -460,7 +460,7 @@ async function notifyIncident(client, rule, incident, value) {
 }
 
 async function notifyEscalation(client, incident) {
-  const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
+  const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role IN ('admin','super_admin') AND status='active'")).rows;
   for (const admin of admins) {
     const email = admin.review_email_enabled ? admin.review_email : null;
     await client.query(`INSERT INTO app_notifications
@@ -477,7 +477,7 @@ async function notifyEscalation(client, incident) {
 
 async function notifyReminder(client, incident) {
   if (await isSilenced(client,incident,incident.last_reminded_at)) return;
-  const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role='admin' AND status='active'")).rows;
+  const admins = (await client.query("SELECT id,review_email,review_email_enabled FROM users WHERE role IN ('admin','super_admin') AND status='active'")).rows;
   const reminderKey = `${incident.id}:reminder:${new Date(incident.last_reminded_at).getTime()}`;
   for (const admin of admins) {
     const email = (incident.level === 'critical' || incident.channels.includes('email')) && admin.review_email_enabled ? admin.review_email : null;

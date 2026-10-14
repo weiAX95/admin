@@ -17,7 +17,7 @@ async function dispatch(client, schedule, dueAt) {
   if (result.status === 202) await client.query('UPDATE evaluation_schedule_occurrences SET batch_id=$2 WHERE id=$1', [occurrenceId,result.data.batchId]);
   else {
     await client.query("UPDATE evaluation_schedule_occurrences SET status='failed',error=$2 WHERE id=$1", [occurrenceId,result.data.error]);
-    for (const admin of (await client.query("SELECT id FROM users WHERE role='admin' AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_schedule_failed',occurrenceId,'定时评测未能启动',result.data.error,'/evaluation/schedules');
+    for (const admin of (await client.query("SELECT id FROM users WHERE role IN ('admin','super_admin') AND status='active'")).rows) await notifyUser(client,admin.id,'evaluation_schedule_failed',occurrenceId,'定时评测未能启动',result.data.error,'/evaluation/schedules');
   }
   return { occurrenceId, ...result.data };
 }
