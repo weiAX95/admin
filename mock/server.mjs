@@ -1,4 +1,4 @@
-import { isAdministrator } from './roles.mjs';
+import { isAdministrator, isSuperAdmin } from './roles.mjs';
 /**
  * 本地 API 层（node:http + PostgreSQL）。
  * 覆盖：登录鉴权、学习任务 CRUD + 审计、会话记录、学习笔记、实验记录、统计看板。
@@ -956,6 +956,7 @@ async function handleRequest(req, res) {
       }
       if (pathname === "/api/users/invitations" && method === "POST") {
         const body = await readProjectBody(req);
+        if (body.role === "super_admin") return send(res, 400, { error: "SuperAdmin 账号不能通过邀请创建" });
         const username = String(body.username || "").trim();
         const name = String(body.name || "").trim().slice(0, 30);
         const role = body.role === "admin" ? "admin" : "member";
@@ -998,6 +999,7 @@ async function handleRequest(req, res) {
         }
         if (method === "POST") {
           const body = await readBody(req);
+          if (body.role === "super_admin") return send(res, 400, { error: "SuperAdmin 全局唯一，不能直接创建" });
           const uname = String(body.username || "").trim();
           const pwd = String(body.password || "");
           if (!uname) return send(res, 400, { error: "username 为必填项" });
@@ -1040,6 +1042,9 @@ async function handleRequest(req, res) {
       const target = db.users[index];
       res.__accountBefore = structuredClone(target);
       const adminCount = () => db.users.filter((u) => u.role === "admin" && !u.deletedAt).length;
+      if (target.role === "super_admin" && (!isSuperAdmin(me) || target.id !== me.id)) {
+        return send(res, 403, { error: "只有 SuperAdmin 本人可维护该账号" });
+      }
 
       if (pathname.endsWith("/restore") && method === "POST") {
         if (!target.deletedAt) return send(res, 409, { error: "账号不在回收站" });
@@ -1067,6 +1072,10 @@ async function handleRequest(req, res) {
 
       if (method === "PUT" || method === "PATCH") {
         const body = await readBody(req);
+        if (body.role === "super_admin" && target.role !== "super_admin") return send(res, 400, { error: "SuperAdmin 全局唯一，不能直接授予" });
+        if (target.role === "super_admin" && ((body.role && body.role !== "super_admin") || (body.status && body.status !== "active"))) {
+          return send(res, 403, { error: "SuperAdmin 不能降级或停用" });
+        }
         if (body.maxDevices !== undefined && (!Number.isInteger(body.maxDevices) || body.maxDevices < 1 || body.maxDevices > 10)) return send(res, 400, { error: "同时登录设备数需为 1–10" });
         const ipAllowlist = body.ipAllowlist === undefined ? undefined : parseLoginIpAllowlist(body.ipAllowlist);
         if (body.ipAllowlist !== undefined && !ipAllowlist) return send(res, 400, { error: "IP 白名单只允许最多 30 个完整 IPv4 或 IPv6 地址" });
@@ -1120,6 +1129,7 @@ async function handleRequest(req, res) {
       }
 
       if (method === "DELETE") {
+        if (target.role === "super_admin") return send(res, 403, { error: "SuperAdmin 不能删除" });
         if (target.username === me.username) {
           return send(res, 400, { error: "不能删除当前登录账号" });
         }

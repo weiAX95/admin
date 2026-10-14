@@ -31,6 +31,7 @@ import type { Account, AccountPayload, AuthUser } from "../types";
 import AccountInvitations from "../components/AccountInvitations";
 
 const ROLE_OPTIONS = [
+  { value: "super_admin", label: "超级管理员", disabled: true },
   { value: "admin", label: "管理员" },
   { value: "member", label: "普通成员" },
 ];
@@ -153,13 +154,13 @@ function AccountFormDrawer({ open, initial, onClose, onSaved }: DrawerProps) {
           <Typography.Text type={validPassword ? "success" : "secondary"}>{!validPassword ? "弱" : strength >= 100 ? "强" : "中"} · 至少 8 位，包含大小写字母和数字</Typography.Text>
         </div>}
         <Form.Item name="role" label="角色">
-          <Select options={ROLE_OPTIONS} />
+          <Select options={ROLE_OPTIONS} disabled={initial?.role === "super_admin"} />
         </Form.Item>
         {!initial && <Form.Item name="activationMode" label="激活方式" extra="首次登录或手动激活时，账号会先处于待激活状态。">
           <Select options={ACTIVATION_OPTIONS} />
         </Form.Item>}
         <Form.Item name="status" label="状态">
-          <Select options={STATUS_OPTIONS} />
+          <Select options={STATUS_OPTIONS} disabled={initial?.role === "super_admin"} />
         </Form.Item>
         <Form.Item name="maxDevices" label="最多同时登录设备" rules={[{ required: true, message: '请选择 1–10 台设备' }]}>
           <InputNumber min={1} max={10} style={{ width: '100%' }} />
@@ -252,7 +253,7 @@ export default function Accounts() {
       key: "role",
       width: 110,
       render: (v: Account["role"]) =>
-        v === "admin" ? <Tag color="gold">管理员</Tag> : <Tag>普通成员</Tag>,
+        v === "super_admin" ? <Tag color="purple">超级管理员</Tag> : v === "admin" ? <Tag color="gold">管理员</Tag> : <Tag>普通成员</Tag>,
     },
     {
       title: "状态",
@@ -281,6 +282,7 @@ export default function Accounts() {
       render: (_, a) => {
         if (a.deletedAt) return <Space size={4}><Button type="link" size="small" onClick={() => void restore(a)}>恢复</Button><Button type="link" size="small" danger onClick={() => purge(a)}>永久删除</Button></Space>;
         const isSelf = current?.username === a.username;
+        if (a.role === "super_admin" && !isSelf) return <Typography.Text type="secondary">受保护账号</Typography.Text>;
         return (
           <Space size={4}>
             <Button
@@ -296,7 +298,7 @@ export default function Accounts() {
             <Button
               type="link"
               size="small"
-              disabled={isSelf}
+              disabled={isSelf || a.role === "super_admin"}
               onClick={() => void toggleStatus(a)}
             >
               {a.status === "pending" ? "激活" : a.status === "active" ? "禁用" : "启用"}
@@ -305,10 +307,10 @@ export default function Accounts() {
               title="将该账号移入回收站？"
               okText="移入回收站"
               cancelText="取消"
-              disabled={isSelf}
+              disabled={isSelf || a.role === "super_admin"}
               onConfirm={() => void remove(a)}
             >
-              <Button type="link" size="small" danger disabled={isSelf}>
+              <Button type="link" size="small" danger disabled={isSelf || a.role === "super_admin"}>
                 删除
               </Button>
             </Popconfirm>
@@ -334,7 +336,7 @@ export default function Accounts() {
         <Button type={showDeleted ? 'primary' : 'default'} onClick={() => setShowDeleted(value => !value)}>{showDeleted ? '返回账号列表' : '查看回收站'}</Button>
         <AccountInvitations />
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          仅管理员可管理账号；不能禁用或删除当前登录账号。回收站账号满 30 天自动永久清理。
+          仅管理员可管理账号；超级管理员全局唯一，不可降级、停用或删除。回收站账号满 30 天自动永久清理。
         </Typography.Text>
       </Space>
       <Table

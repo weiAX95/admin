@@ -229,6 +229,12 @@ export async function assertEmpty(client) {
 
 export async function importJson(client, data, sourceHash) {
   await assertEmpty(client);
+  if ((data.users || []).length && !data.users.some(user => user.role === 'super_admin')) {
+    const owner = data.users.filter(user => user.role === 'admin' && user.status === 'active' && !user.deletedAt)
+      .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')) || String(a.id).localeCompare(String(b.id)))[0];
+    if (!owner) throw new Error('旧数据没有可提升为 SuperAdmin 的启用管理员');
+    owner.role = 'super_admin';
+  }
   if (!Array.isArray(data.noteTagDefinitions)) data.noteTagDefinitions = [];
   for (const note of data.notes || []) note.tags = canonicalNoteTags(data.noteTagDefinitions, note.tags || [], note.createdAt);
   if (!Array.isArray(data.noteVersions)) data.noteVersions = (data.notes || []).map(note => ({ id: crypto.randomUUID(), noteId: note.id, versionNumber: 1, title: note.title || "", content: note.content || "", reason: "baseline", createdAt: note.updatedAt || note.createdAt || new Date().toISOString() }));
