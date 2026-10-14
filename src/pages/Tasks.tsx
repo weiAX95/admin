@@ -59,6 +59,7 @@ import type {
 import { exportFields, exportTaskCsv } from "../utils/taskCsv";
 import { COLUMN_LABELS, MOVABLE_COLUMNS, normalizeColumnConfig, nextTaskSort, readTaskQuery, readTaskSort, sortTasks, writeTaskParams, type TaskColumnConfig, type TaskColumnKey, type TaskSortKey } from "../utils/taskTable";
 import { markdownSummary } from "../utils/markdown-summary";
+import { isAdministrator } from "../utils/roles";
 
 function download(filename: string, content: string | Blob, type: string) {
   const blob = content instanceof Blob ? content : new Blob([content], { type });
@@ -143,6 +144,7 @@ export default function Tasks() {
   const [csvOpen, setCsvOpen] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const accountId = getStoredUser<AuthUser>()?.id || "anonymous";
+  const canEditTasks = isAdministrator(getStoredUser<AuthUser>());
   const columnStorageKey = `admin-task-columns-v1:${accountId}`;
   const [columnConfig, setColumnConfig] = useState<TaskColumnConfig>(() => {
     try { return normalizeColumnConfig(JSON.parse(localStorage.getItem(columnStorageKey) || "null")); }
@@ -168,10 +170,9 @@ export default function Tasks() {
 
   useEffect(() => {
     if (searchParams.get("create") !== "1") return;
-    setEditing(null);
-    setDrawerOpen(true);
+    if (canEditTasks) { setEditing(null); setDrawerOpen(true); }
     setSearchParams(previous => { const next = new URLSearchParams(previous); next.delete("create"); return next; }, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, canEditTasks]);
 
   const refresh = useCallback(
     async (q: TaskQuery) => {
@@ -394,12 +395,14 @@ export default function Tasks() {
       width: 220,
       render: (_, task) => (
         <Space size={4}>
+          {canEditTasks && <>
           <Button type="link" size="small" onClick={() => openEdit(task)}>
             编辑
           </Button>
           <Button type="link" size="small" onClick={() => void toggleDone(task)}>
             {task.status === "done" ? "重开" : "完成"}
           </Button>
+          </>}
           <Button
             type="link"
             size="small"
@@ -408,7 +411,7 @@ export default function Tasks() {
           >
             历史
           </Button>
-          <Popconfirm
+          {canEditTasks && <Popconfirm
             title="删除该学习任务？"
             okText="删除"
             cancelText="取消"
@@ -417,7 +420,7 @@ export default function Tasks() {
             <Button type="link" size="small" danger>
               删除
             </Button>
-          </Popconfirm>
+          </Popconfirm>}
         </Space>
       ),
     },
@@ -486,10 +489,10 @@ export default function Tasks() {
           onChange={(value) => setQuery((prev) => ({ ...prev, category: value }))}
         />
         <Select mode="multiple" aria-label="标签筛选，全部匹配" placeholder="标签筛选（全部匹配）" allowClear style={{ minWidth: 180, maxWidth: 300 }} value={query.tags || []} options={availableTags.map(tag => ({ value: tag, label: tag }))} onChange={tags => setQuery(previous => ({ ...previous, tags }))} />
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+        {canEditTasks && <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
           新建任务
-        </Button>
-        <Dropdown menu={{ items: [{ key: "json", label: "导入 JSON" }, { key: "csv", label: "导入 CSV" }], onClick: ({ key }) => key === "json" ? fileRef.current?.click() : setCsvOpen(true) }}><Button icon={<UploadOutlined />}>导入</Button></Dropdown>
+        </Button>}
+        {canEditTasks && <Dropdown menu={{ items: [{ key: "json", label: "导入 JSON" }, { key: "csv", label: "导入 CSV" }], onClick: ({ key }) => key === "json" ? fileRef.current?.click() : setCsvOpen(true) }}><Button icon={<UploadOutlined />}>导入</Button></Dropdown>}
         <Dropdown menu={{ items: [
           { key: "json", label: "导出 JSON" }, { key: "md", label: "导出 Markdown" },
           { key: "csv-all", label: "导出 CSV · 全部字段" }, { key: "csv-visible", label: "导出 CSV · 当前可见列" },
@@ -514,7 +517,7 @@ export default function Tasks() {
         />
       </Space>
 
-      {view === "table" && <Space className="task-selection-tools" wrap>
+      {view === "table" && canEditTasks && <Space className="task-selection-tools" wrap>
         <Button size="small" disabled={loading || bulkBusy || !allIds.length} onClick={() => setSelectedKeys(allIds)}>全选当前筛选（{allIds.length}）</Button>
         <Button size="small" disabled={loading || bulkBusy || !allIds.length} onClick={() => setSelectedKeys(allIds.filter(id => !selectedSet.has(id)))}>反选</Button>
         <Typography.Text type="secondary">已选 {selectedKeys.length} 条</Typography.Text>
@@ -525,13 +528,13 @@ export default function Tasks() {
         loading={loading}
         columns={tableColumns}
         dataSource={sortedItems}
-        rowSelection={{
+        rowSelection={canEditTasks ? {
           selectedRowKeys: selectedKeys,
           preserveSelectedRowKeys: true,
           onChange: keys => setSelectedKeys(keys.map(String)),
           columnTitle: <Checkbox aria-label="全选当前筛选任务" disabled={bulkBusy || !allIds.length} checked={allIds.length > 0 && selectedKeys.length === allIds.length} indeterminate={selectedKeys.length > 0 && selectedKeys.length < allIds.length} onChange={event => setSelectedKeys(event.target.checked ? allIds : [])} />,
           getCheckboxProps: () => ({ disabled: bulkBusy }),
-        }}
+        } : undefined}
         virtual={virtualized}
         scroll={narrowScreen ? undefined : virtualized ? { x: 1100, y: 560 } : { x: 1100 }}
         expandable={narrowScreen ? { expandedRowRender: task => <div className="task-mobile-details">
@@ -539,16 +542,16 @@ export default function Tasks() {
           <div>进度 <Progress percent={task.progress} size="small" /></div>
           <div>到期：{task.dueDate ? task.dueDate.slice(0, 10) : "未设置"}</div>
           <Space wrap size={4}>
-            <Button size="small" onClick={() => openEdit(task)}>编辑</Button>
-            <Button size="small" onClick={() => void toggleDone(task)}>{task.status === "done" ? "重开" : "完成"}</Button>
+            {canEditTasks && <Button size="small" onClick={() => openEdit(task)}>编辑</Button>}
+            {canEditTasks && <Button size="small" onClick={() => void toggleDone(task)}>{task.status === "done" ? "重开" : "完成"}</Button>}
             <Button size="small" onClick={() => navigate(`/tasks/${task.id}?tab=history`)}>历史</Button>
-            <Popconfirm title="删除该学习任务？" okText="删除" cancelText="取消" onConfirm={() => void remove(task)}><Button size="small" danger>删除</Button></Popconfirm>
+            {canEditTasks && <Popconfirm title="删除该学习任务？" okText="删除" cancelText="取消" onConfirm={() => void remove(task)}><Button size="small" danger>删除</Button></Popconfirm>}
           </Space>
         </div> } : undefined}
         pagination={virtualized ? false : { pageSize, showSizeChanger: false }}
-      /> : view === "gantt" ? <Spin spinning={loading}><TaskGantt tasks={sortedItems} onRefresh={() => refresh(query)} /></Spin> : <Spin spinning={loading}><TaskKanban tasks={sortedItems} onRefresh={() => refresh(query)} /></Spin>}
+      /> : view === "gantt" ? <Spin spinning={loading}><TaskGantt tasks={sortedItems} onRefresh={() => refresh(query)} readOnly={!canEditTasks} /></Spin> : <Spin spinning={loading}><TaskKanban tasks={sortedItems} onRefresh={() => refresh(query)} readOnly={!canEditTasks} /></Spin>}
 
-      {view === "table" && selectedKeys.length > 0 && <div className="task-bulk-bar" role="region" aria-label="批量操作">
+      {view === "table" && canEditTasks && selectedKeys.length > 0 && <div className="task-bulk-bar" role="region" aria-label="批量操作">
         <Space wrap size={8}>
           <strong>已选 {selectedKeys.length} 条</strong>
           <Select aria-label="批量修改字段" style={{ width: 110 }} value={bulkField} disabled={bulkBusy} onChange={field => { setBulkField(field); setBulkValue(""); }} options={[
@@ -566,13 +569,13 @@ export default function Tasks() {
         </Space>
       </div>}
 
-      <TaskFormDrawer
+      {canEditTasks && <TaskFormDrawer
         open={drawerOpen}
         initial={editing}
         onClose={() => setDrawerOpen(false)}
         onSaved={handleSaved}
-      />
-      <TaskCsvImport open={csvOpen} onClose={() => setCsvOpen(false)} onImported={() => void refresh(query)} />
+      />}
+      {canEditTasks && <TaskCsvImport open={csvOpen} onClose={() => setCsvOpen(false)} onImported={() => void refresh(query)} />}
     </Card>
   );
 }

@@ -4,12 +4,16 @@ import { FileTextOutlined, PlusOutlined, ReadOutlined } from "@ant-design/icons"
 import { useNavigate } from "react-router-dom";
 import { getQuickActionCounts, getQuickPreview } from "../api/dashboard";
 import type { QuickActionCounts, QuickActionKind, QuickPreviewItem } from "../api/dashboard";
+import { getStoredUser } from "../api/client";
+import type { AuthUser } from "../types";
+import { isAdministrator } from "../utils/roles";
 
 const CACHE_MS = 60_000;
 type PreviewState = { items: QuickPreviewItem[]; loading: boolean; error: string };
 
 export default function DashboardQuickActions({ refreshKey = 0 }: { refreshKey?: number }) {
   const navigate = useNavigate();
+  const canCreateTask = isAdministrator(getStoredUser<AuthUser>());
   const [counts, setCounts] = useState<QuickActionCounts | null>(null);
   const [countsError, setCountsError] = useState("");
   const [countsRetry, setCountsRetry] = useState(0);
@@ -57,7 +61,7 @@ export default function DashboardQuickActions({ refreshKey = 0 }: { refreshKey?:
   const unavailable = (kind: "sessions" | "notes") => countsError || (counts === null ? "正在加载记录" : kind === "sessions" ? "暂无会话" : "暂无笔记");
   return <Card size="small" className="dashboard-quick-actions">
     <div className="quick-actions-inner"><div><strong>快速操作</strong><p>从这里继续今天的学习</p></div><Space wrap size={8}>
-      <Popover trigger={["hover", "focus"]} onOpenChange={open => { if (open) loadPreview("tasks"); }} content={recent("tasks")}><Button type="primary" icon={<PlusOutlined />} onClick={() => navigate("/tasks?create=1")}>创建任务</Button></Popover>
+      {canCreateTask ? <Popover trigger={["hover", "focus"]} onOpenChange={open => { if (open) loadPreview("tasks"); }} content={recent("tasks")}><Button type="primary" icon={<PlusOutlined />} onClick={() => navigate("/tasks?create=1")}>创建任务</Button></Popover> : <Tooltip title="普通成员只能查看任务"><span className="quick-disabled-wrap"><Button icon={<PlusOutlined />} disabled>创建任务</Button></span></Tooltip>}
       {counts?.sessions ? <Popover trigger={["hover", "focus"]} onOpenChange={open => { if (open) loadPreview("sessions"); }} content={recent("sessions")}><Button icon={<ReadOutlined />} onClick={() => navigate("/sessions")}>最新会话</Button></Popover> : <Tooltip title={unavailable("sessions")}><span className="quick-disabled-wrap"><Button icon={<ReadOutlined />} disabled>最新会话</Button></span></Tooltip>}
       {counts?.notes ? <Popover trigger={["hover", "focus"]} onOpenChange={open => { if (open) loadPreview("notes"); }} content={recent("notes")}><Button icon={<FileTextOutlined />} onClick={() => navigate("/notes")}>最近笔记</Button></Popover> : <Tooltip title={unavailable("notes")}><span className="quick-disabled-wrap"><Button icon={<FileTextOutlined />} disabled>最近笔记</Button></span></Tooltip>}
     </Space>{countsError && <Button size="small" type="link" onClick={() => setCountsRetry(n => n + 1)}>重试入口状态</Button>}</div>

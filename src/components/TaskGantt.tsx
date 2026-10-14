@@ -13,10 +13,10 @@ const day = (value: string) => Date.parse(`${key(value)}T00:00:00Z`) / DAY;
 const date = (value: number) => new Date(value * DAY).toISOString().slice(0, 10);
 const title = (value: number, mode: "day" | "week") => mode === "day" ? (date(value).endsWith("-01") ? date(value).slice(5).replace("-", "/") : date(value).slice(8)) : `${date(value).slice(5)} 周`;
 
-interface Props { tasks: LearningTask[]; onRefresh: () => Promise<void> | void; }
+interface Props { tasks: LearningTask[]; onRefresh: () => Promise<void> | void; readOnly?: boolean; }
 interface Preview { id: string; start: number; end: number; }
 
-export default function TaskGantt({ tasks, onRefresh }: Props) {
+export default function TaskGantt({ tasks, onRefresh, readOnly = false }: Props) {
   const [mode, setMode] = useState<"day" | "week">("week");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState("");
@@ -34,6 +34,7 @@ export default function TaskGantt({ tasks, onRefresh }: Props) {
   const position = new Map(rows.map((row, index) => [row.task.id, { index, start: row.start, end: row.end }]));
 
   const startDrag = (event: ReactPointerEvent<HTMLButtonElement>, row: typeof rows[number], edge: "start" | "end") => {
+    if (readOnly) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const origin = event.clientX;
@@ -73,7 +74,7 @@ export default function TaskGantt({ tasks, onRefresh }: Props) {
   };
 
   return <Space direction="vertical" size={12} style={{ width: "100%" }}>
-    <Space wrap><Typography.Text type="secondary">时间粒度</Typography.Text><Segmented value={mode} onChange={value => setMode(value as "day" | "week")} options={[{ label: "按天", value: "day" }, { label: "按周", value: "week" }]} /><Typography.Text type="secondary">拖动横条两端调整日期，松开后确认保存</Typography.Text></Space>
+    <Space wrap><Typography.Text type="secondary">时间粒度</Typography.Text><Segmented value={mode} onChange={value => setMode(value as "day" | "week")} options={[{ label: "按天", value: "day" }, { label: "按周", value: "week" }]} />{!readOnly && <Typography.Text type="secondary">拖动横条两端调整日期，松开后确认保存</Typography.Text>}</Space>
     {error && <Alert type="error" showIcon message={error} />}
     {!rows.length ? <Empty description="暂无任务" /> : <div className="gantt-scroll" role="region" aria-label="任务甘特图，可横向滚动" tabIndex={0}>
       <div className="gantt-inner" style={{ width: LABEL_WIDTH + timelineWidth }}>
@@ -87,8 +88,8 @@ export default function TaskGantt({ tasks, onRefresh }: Props) {
             <div className="gantt-track" style={{ width: timelineWidth, backgroundSize: `${mode === "day" ? cell : cell * 7}px 100%` }}>
               <div className={`gantt-bar${shown.end < shown.start ? " invalid" : ""}`} style={{ left, width }} title={`${date(shown.start)} → ${date(shown.end)} · 进度 ${row.task.progress}%`}>
                 <div className="gantt-bar-fill" style={{ width: `${row.task.progress}%` }} />
-                <button className="gantt-handle start" aria-label={`调整 ${row.task.title} 的计划开始日期`} onPointerDown={event => startDrag(event, row, "start")} />
-                <button className="gantt-handle end" aria-label={`调整 ${row.task.title} 的截止日期`} onPointerDown={event => startDrag(event, row, "end")} />
+                {!readOnly && <button className="gantt-handle start" aria-label={`调整 ${row.task.title} 的计划开始日期`} onPointerDown={event => startDrag(event, row, "start")} />}
+                {!readOnly && <button className="gantt-handle end" aria-label={`调整 ${row.task.title} 的截止日期`} onPointerDown={event => startDrag(event, row, "end")} />}
               </div>
             </div>
           </div>;

@@ -690,6 +690,9 @@ async function handleRequest(req, res) {
     if (passwordChangeRequired && !["/api/auth/password", "/api/auth/logout", "/api/auth/me"].includes(pathname)) {
       return send(res, 403, { error: "密码已过期，请先修改密码", code: "password_expired" });
     }
+    if (method !== "GET" && !isAdministrator(me) && /^\/api\/(?:tasks(?:\/|$)|task-templates(?:\/|$)|recurring-series(?:\/|$))/.test(pathname)) {
+      return send(res, 403, { error: "普通成员只能查看学习任务，不能修改任务、模板或重复配置" });
+    }
     const accountTasks = db.tasks.filter(task => canUseDependency(task, me));
     const accountTaskIds = new Set(accountTasks.map(task => task.id));
     const linkedTaskVisible = taskId => !taskId || accountTaskIds.has(taskId);

@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { App, Select, Space, Typography } from "antd";
+import { App, Select, Space, Tag, Typography } from "antd";
 import { getTask, saveTaskTags } from "../api/tasks";
 import { ApiError } from "../api/client";
 import type { LearningTask } from "../types";
 import { PRESET_TASK_TAGS } from "./TaskMeta";
 
-export default function TaskTagEditor({ task, onChanged }: { task: LearningTask; onChanged: (task: LearningTask) => void }) {
+export default function TaskTagEditor({ task, onChanged, readOnly = false }: { task: LearningTask; onChanged: (task: LearningTask) => void; readOnly?: boolean }) {
   const [saving, setSaving] = useState(false);
   const { message } = App.useApp();
   const options = [...new Set([...PRESET_TASK_TAGS, ...(task.tags || [])])].map(tag => ({ value: tag, label: tag }));
@@ -20,7 +20,9 @@ export default function TaskTagEditor({ task, onChanged }: { task: LearningTask;
     } finally { setSaving(false); }
   };
   return <Space direction="vertical" size={8} style={{ width: "100%" }}>
-    <Typography.Text type="secondary">选择预置标签，或输入自定义标签后按 Enter；变更会立即保存。</Typography.Text>
-    <Select mode="tags" aria-label="任务标签" value={task.tags || []} options={options} disabled={saving} onChange={values => void change(values)} placeholder="添加标签" tokenSeparators={[","]} style={{ width: "100%" }} />
+    {readOnly ? (task.tags?.length ? <Space wrap>{task.tags.map(tag => <Tag key={tag}>{tag}</Tag>)}</Space> : <Typography.Text type="secondary">暂无标签</Typography.Text>) : <>
+      <Typography.Text type="secondary">选择预置标签，或输入自定义标签后按 Enter；变更会立即保存。</Typography.Text>
+      <Select mode="tags" aria-label="任务标签" value={task.tags || []} options={options} disabled={saving} onChange={values => void change(values)} placeholder="添加标签" tokenSeparators={[","]} style={{ width: "100%" }} />
+    </>}
   </Space>;
 }

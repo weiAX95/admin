@@ -5,9 +5,9 @@ import { getTask, saveChecklist } from "../api/tasks";
 import { ApiError } from "../api/client";
 import type { ChecklistItem, LearningTask } from "../types";
 
-interface Props { task: LearningTask; onChanged: (task: LearningTask) => void; }
+interface Props { task: LearningTask; onChanged: (task: LearningTask) => void; readOnly?: boolean; }
 
-export default function TaskChecklist({ task, onChanged }: Props) {
+export default function TaskChecklist({ task, onChanged, readOnly = false }: Props) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -39,14 +39,14 @@ export default function TaskChecklist({ task, onChanged }: Props) {
   return <Space direction="vertical" size={12} style={{ width: "100%" }}>
     {error && <Alert type="warning" showIcon message={error} />}
     <Typography.Text type="secondary">{items.length ? `${items.filter(item => item.done).length}/${items.length} 项完成 · 进度自动计算` : `无检查项 · 使用手动进度 ${task.manualProgress}%`}</Typography.Text>
-    <List dataSource={items} locale={{ emptyText: "暂无检查项" }} renderItem={(item, index) => <List.Item actions={[
+    <List dataSource={items} locale={{ emptyText: "暂无检查项" }} renderItem={(item, index) => <List.Item actions={readOnly ? [] : [
       <Button key="up" type="text" aria-label={`上移 ${item.text}`} icon={<ArrowUpOutlined />} disabled={busy || index === 0} onClick={() => move(index, -1)} />,
       <Button key="down" type="text" aria-label={`下移 ${item.text}`} icon={<ArrowDownOutlined />} disabled={busy || index === items.length - 1} onClick={() => move(index, 1)} />,
       <Button key="remove" type="text" danger aria-label={`删除 ${item.text}`} icon={<DeleteOutlined />} disabled={busy} onClick={() => void commit(items.filter(other => other.id !== item.id))} />,
-    ]}><Checkbox checked={item.done} disabled={busy} onChange={event => void commit(items.map(other => other.id === item.id ? { ...other, done: event.target.checked } : other))}>{item.text}</Checkbox></List.Item>} />
-    <Space.Compact style={{ width: "100%" }}>
+    ]}><Checkbox checked={item.done} disabled={busy || readOnly} onChange={event => void commit(items.map(other => other.id === item.id ? { ...other, done: event.target.checked } : other))}>{item.text}</Checkbox></List.Item>} />
+    {!readOnly && <Space.Compact style={{ width: "100%" }}>
       <Input value={draft} maxLength={200} placeholder="添加检查项" disabled={busy} onChange={event => setDraft(event.target.value)} onPressEnter={() => void add()} />
       <Button icon={<PlusOutlined />} disabled={busy || !draft.trim()} onClick={() => void add()}>添加</Button>
-    </Space.Compact>
+    </Space.Compact>}
   </Space>;
 }

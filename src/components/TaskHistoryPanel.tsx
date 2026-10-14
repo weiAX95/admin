@@ -21,9 +21,10 @@ interface Props {
   task: LearningTask;
   onChanged: (task: LearningTask) => void;
   onReload: () => void;
+  readOnly?: boolean;
 }
 
-export default function TaskHistoryPanel({ task, onChanged, onReload }: Props) {
+export default function TaskHistoryPanel({ task, onChanged, onReload, readOnly = false }: Props) {
   const { modal, message } = App.useApp();
   const [items, setItems] = useState<TaskChangeLog[]>([]);
   const [legacyItems, setLegacyItems] = useState<Activity[]>([]);
@@ -70,7 +71,7 @@ export default function TaskHistoryPanel({ task, onChanged, onReload }: Props) {
           <div><strong>{FIELD_LABELS[entry.fieldName] || entry.fieldName}</strong> {entry.action === "rollback" && <Tag color="purple">回滚</Tag>}
             <Typography.Text type="secondary">{entry.changedByName || entry.changedBy} · {new Date(entry.changedAt).toLocaleString("zh-CN", { hour12: false })}</Typography.Text>
           </div>
-          <Button size="small" disabled={alreadyRestored} onClick={() => confirmRollback(entry)}>{alreadyRestored ? "已是旧值" : "回滚"}</Button>
+          {!readOnly && <Button size="small" disabled={alreadyRestored} onClick={() => confirmRollback(entry)}>{alreadyRestored ? "已是旧值" : "回滚"}</Button>}
         </div>
         <div className="task-history-diff"><pre>{displayValue(entry.oldValue)}</pre><span aria-hidden="true">→</span><pre>{displayValue(entry.newValue)}</pre></div>
       </div>;

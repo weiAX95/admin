@@ -25,7 +25,7 @@ function elapsed(start: string, end: string) {
 
 const dateTime = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
 
-export default function TaskTimeTracking({ task }: { task: LearningTask }) {
+export default function TaskTimeTracking({ task, readOnly = false }: { task: LearningTask; readOnly?: boolean }) {
   const { message } = App.useApp();
   const [form] = Form.useForm<FormValues>();
   const mode = Form.useWatch("mode", form);
@@ -88,7 +88,7 @@ export default function TaskTimeTracking({ task }: { task: LearningTask }) {
     catch (cause) { message.error(cause instanceof Error ? cause.message : "删除失败"); }
   };
 
-  return <Card title="工作量估算与追踪" extra={<Button type="primary" onClick={() => openForm(null)}>记录工时</Button>}>
+  return <Card title="工作量估算与追踪" extra={!readOnly && <Button type="primary" onClick={() => openForm(null)}>记录工时</Button>}>
     <div className="task-time-summary">
       <Statistic title="预估工时" value={estimatedHours === null ? "未设置" : `${estimatedHours} 小时`} />
       <Statistic title="实际投入" value={`${Math.round(actualMinutes / 60 * 100) / 100} 小时`} />
@@ -100,13 +100,13 @@ export default function TaskTimeTracking({ task }: { task: LearningTask }) {
     {task.status !== "done" && task.activeCycleStartedAt && <Typography.Paragraph type="secondary">当前周期进行中：自 {dateTime(task.activeCycleStartedAt)} 开始；任务历时不会计入实际投入。</Typography.Paragraph>}
     <Typography.Title level={5} className="task-time-records-title">实际工时记录</Typography.Title>
     {loading ? <Spin className="task-detail-loading" /> : entries.length === 0 ? <Empty description="暂无工时记录" /> : <div className="task-time-entries">{entries.map(entry => {
-      const editable = isAdministrator(current) || current?.id === entry.recordedBy;
+      const editable = !readOnly && (isAdministrator(current) || current?.id === entry.recordedBy);
       return <div className="task-time-entry" key={entry.id}>
         <div><strong>{Math.round(entry.durationMinutes / 60 * 100) / 100} 小时</strong><Typography.Text type="secondary">{entry.mode === "interval" && entry.startedAt && entry.endedAt ? `${dateTime(entry.startedAt)} — ${dateTime(entry.endedAt)}` : entry.workDate} · {entry.recordedByName}</Typography.Text>{entry.note && <p>{entry.note}</p>}</div>
         {editable && <Space><Button size="small" onClick={() => openForm(entry)}>编辑</Button><Popconfirm title="删除这条工时记录？" onConfirm={() => void remove(entry)}><Button size="small" danger>删除</Button></Popconfirm></Space>}
       </div>;
     })}</div>}
-    <Drawer title={editing ? "编辑工时记录" : "记录实际工时"} width={480} open={open} onClose={() => setOpen(false)} extra={<Button type="primary" loading={saving} onClick={() => form.submit()}>保存</Button>}>
+    {!readOnly && <Drawer title={editing ? "编辑工时记录" : "记录实际工时"} width={480} open={open} onClose={() => setOpen(false)} extra={<Button type="primary" loading={saving} onClick={() => form.submit()}>保存</Button>}>
       <Form form={form} layout="vertical" onFinish={save}>
         <Form.Item name="mode" label="记录方式"><Select options={[{ value: "duration", label: "实际时长" }, { value: "interval", label: "开始与结束" }]} /></Form.Item>
         {mode === "interval" ? <>
@@ -119,6 +119,6 @@ export default function TaskTimeTracking({ task }: { task: LearningTask }) {
         </>}
         <Form.Item name="note" label="备注"><Input.TextArea rows={3} maxLength={500} /></Form.Item>
       </Form>
-    </Drawer>
+    </Drawer>}
   </Card>;
 }
