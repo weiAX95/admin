@@ -112,6 +112,17 @@ export const PERMISSION_RESOURCES = [
     read: { super_admin: 'own', admin: 'own', member: 'own' }, create: { super_admin: 'own', admin: 'own', member: 'own' },
     update: nobody, delete: nobody, manage: { super_admin: 'own', admin: 'own', member: 'own' },
   } },
+  { id: 'project_baselines', label: '项目需求基线', description: '只能读取自己仓库的需求版本并创建新版本；已有版本不可修改或删除。', access: {
+    read: { super_admin: 'own', admin: 'own', member: 'own' }, create: { super_admin: 'own', admin: 'own', member: 'own' },
+    update: nobody, delete: nobody, manage: nobody,
+  } },
+  { id: 'project_feedback', label: '项目结论反馈', description: '仅能为自己仓库已完成报告中的结论提交人工反馈；反馈随报告详情读取。', access: {
+    read: nobody, create: { super_admin: 'own', admin: 'own', member: 'own' }, update: nobody, delete: nobody, manage: nobody,
+  } },
+  { id: 'project_suggestions', label: '项目建议处理', description: '所有账号可忽略自己仓库的建议；仅管理员可预览并接受建议转任务。', access: {
+    read: { super_admin: 'own', admin: 'own', member: 'none' }, create: { super_admin: 'own', admin: 'own', member: 'none' },
+    update: nobody, delete: nobody, manage: { super_admin: 'own', admin: 'own', member: 'own' },
+  } },
 ];
 
 const byResource = new Map(PERMISSION_RESOURCES.map(resource => [resource.id, resource]));

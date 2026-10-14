@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import pg from 'pg';
 import { containsKnownSecret } from './project-scan.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
+import { canAccess } from './permissions.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status,error) => ({ status, data: { error } });
@@ -13,8 +14,9 @@ export async function handleProjectRequirementBaselines({ pathname, method, clie
   const [,repositoryId,baselineId] = match;
   if (!UUID.test(repositoryId) || baselineId && !UUID.test(baselineId)) return fail(404,'需求文档不存在');
   if (method === 'GET') {
-    const owner = (await client.query('SELECT id FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
+    const owner = (await client.query('SELECT id,owner_id FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
     if (!owner) return fail(404,'项目不存在');
+    if (!canAccess(me,'project_baselines','read',{ownerId:owner.owner_id})) return fail(403,'无权查看需求基线');
     if (baselineId) {
       const row = (await client.query('SELECT * FROM project_requirement_baselines WHERE id=$1 AND repository_id=$2',[baselineId,repositoryId])).rows[0];
       return row ? { status: 200, data: view(row) } : fail(404,'需求文档不存在');
@@ -31,8 +33,9 @@ export async function handleProjectRequirementBaselines({ pathname, method, clie
   const connection = pooled ? await client.connect() : client;
   try {
     await connection.query('BEGIN');
-    const repository = (await connection.query('SELECT baseline_version_id FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR UPDATE',[repositoryId,me.id])).rows[0];
+    const repository = (await connection.query('SELECT baseline_version_id,owner_id FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR UPDATE',[repositoryId,me.id])).rows[0];
     if (!repository) { await connection.query('ROLLBACK'); return fail(404,'项目不存在'); }
+    if (!canAccess(me,'project_baselines','create',{ownerId:repository.owner_id})) { await connection.query('ROLLBACK'); return fail(403,'无权创建需求基线'); }
     if (repository.baseline_version_id !== expected) { await connection.query('ROLLBACK'); return fail(409,'需求文档已有新版本，请刷新后重试'); }
     const next = (await connection.query('SELECT COALESCE(max(version),0)+1 AS version FROM project_requirement_baselines WHERE repository_id=$1',[repositoryId])).rows[0].version;
     const id = crypto.randomUUID();

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { appendSecurityAudit } from './account-audit.mjs';
+import { canAccess } from './permissions.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const statuses = new Set(['implemented','partial','not_found','unverified']);
@@ -20,11 +21,12 @@ export async function handleProjectFindingFeedback({ pathname, method, client, m
   const connection = pooled ? await client.connect() : client;
   try {
     await connection.query('BEGIN');
-    const finding = (await connection.query(`SELECT f.id FROM project_analysis_findings f
+    const finding = (await connection.query(`SELECT f.id,r.owner_id AS repository_owner_id FROM project_analysis_findings f
       JOIN project_analyses a ON a.id=f.analysis_id
       JOIN project_repositories r ON r.id=a.repository_id
       WHERE f.id=$1 AND a.id=$2 AND r.id=$3 AND r.owner_id=$4 AND a.status='completed'`,[findingId,analysisId,repositoryId,me.id])).rows[0];
     if (!finding) { await connection.query('ROLLBACK'); return fail(404,'结论不存在'); }
+    if (!canAccess(me,'project_feedback','create',{ownerId:finding.repository_owner_id})) { await connection.query('ROLLBACK'); return fail(403,'无权提交结论反馈'); }
     const result = (await connection.query('INSERT INTO project_finding_feedback(id,analysis_id,finding_id,owner_id,corrected_status,reason) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,corrected_status,reason,created_at',[crypto.randomUUID(),analysisId,findingId,me.id,status,reason])).rows[0];
     if (req) await appendSecurityAudit(connection,req,me,'create','project_finding_feedback',result.id);
     await connection.query('COMMIT');

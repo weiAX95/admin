@@ -37,13 +37,15 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
     await connection.query('BEGIN');
     await connection.query('SELECT pg_advisory_xact_lock(748201)');
     const row = (await connection.query(`SELECT s.*,a.id AS analysis_id,a.status AS analysis_status,a.goal AS report_goal,a.requirement_baseline AS report_baseline,a.commit_sha,a.full_name,
-      a.baseline_version_id AS report_baseline_version_id,r.goal AS current_goal,r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,r.commit_sha AS current_commit,r.branch AS current_branch,
+      a.baseline_version_id AS report_baseline_version_id,r.owner_id AS repository_owner_id,r.goal AS current_goal,r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,r.commit_sha AS current_commit,r.branch AS current_branch,
       f.title AS finding_title,f.requirement_id AS finding_requirement_id,f.evidence_path,f.evidence_line
       FROM project_analysis_suggestions s JOIN project_analyses a ON a.id=s.analysis_id
       JOIN project_repositories r ON r.id=a.repository_id
       LEFT JOIN project_analysis_findings f ON f.id=s.finding_id
       WHERE s.id=$1 AND a.id=$2 AND a.repository_id=$3 AND r.owner_id=$4 FOR UPDATE OF s FOR SHARE OF r`, [suggestionId,analysisId,repositoryId,me.id])).rows[0];
     if (!row) { await connection.query('ROLLBACK'); return fail(404,'建议不存在'); }
+    const operation = action === 'ignore' ? 'manage' : action === 'preview' ? 'read' : 'create';
+    if (!canAccess(me,'project_suggestions',operation,{ownerId:row.repository_owner_id})) { await connection.query('ROLLBACK'); return fail(403,'无权处理该项目建议'); }
     if (row.analysis_status !== 'completed') { await connection.query('ROLLBACK'); return fail(409,'报告尚未完成'); }
     const existing = (await connection.query('SELECT * FROM project_suggestion_decisions WHERE suggestion_id=$1', [suggestionId])).rows[0];
     if (existing) {
