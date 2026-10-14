@@ -1,7 +1,8 @@
-import { isAdministrator } from './roles.mjs';
+import { canAccess, permissionScope } from './permissions.mjs';
 export async function handleAccountAudit({ pathname, method, url, client, me }) {
   if (pathname !== '/api/account-audit') return null;
   if (method !== 'GET') return { status: 405, data: { error: 'method not allowed' } };
+  if (!canAccess(me, 'account_audit', 'read', { ownerId: me.id })) return { status: 403, data: { error: '无权查看操作审计' } };
   const page = Number(url.searchParams.get('page') || 1);
   const pageSize = Number(url.searchParams.get('pageSize') || 50);
   if (!Number.isInteger(page) || page < 1 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 200) {
@@ -9,7 +10,7 @@ export async function handleAccountAudit({ pathname, method, url, client, me }) 
   }
   const clauses = [], values = [];
   const bind = value => { values.push(value); return `$${values.length}`; };
-  const actorId = isAdministrator(me) ? url.searchParams.get('actorId') : me.id;
+  const actorId = permissionScope(me.role, 'account_audit', 'read') === 'all' ? url.searchParams.get('actorId') : me.id;
   if (actorId) clauses.push(`actor_id=${bind(actorId)}`);
   const action = url.searchParams.get('action');
   if (action) clauses.push(`action=${bind(action)}`);

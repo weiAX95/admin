@@ -49,6 +49,12 @@ export const PERMISSION_RESOURCES = [
     delete: { super_admin: 'non_super_admin', admin: 'non_super_admin', member: 'none' },
     manage: { super_admin: 'all', admin: 'non_super_admin', member: 'none' },
   } },
+  { id: 'account_audit', label: '操作审计', description: '成员只能读取自己的历史；审计记录不可通过业务接口改写或删除。', access: {
+    read: { super_admin: 'all', admin: 'all', member: 'own' }, create: nobody, update: nobody, delete: nobody, manage: nobody,
+  } },
+  { id: 'alerts', label: '告警监控', description: '告警规则、指标、静默与处置仅管理员可访问。', access: {
+    read: admins, create: admins, update: admins, delete: admins, manage: admins,
+  } },
 ];
 
 const byResource = new Map(PERMISSION_RESOURCES.map(resource => [resource.id, resource]));
