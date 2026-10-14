@@ -43,8 +43,7 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
     const existing = await client.query('SELECT 1 FROM retention_cleanup_runs WHERE local_date=$1', [clock.date]);
     if (existing.rowCount) { await client.query('COMMIT'); return null; }
     await client.query('INSERT INTO retention_cleanup_runs(local_date) VALUES($1)', [clock.date]);
-    await client.query("SET LOCAL app.audit_retention='on'");
-    const audit = await client.query('DELETE FROM security_audit_logs WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
+    const auditDeleted = Number((await client.query('SELECT public.cleanup_security_audit_logs() AS deleted')).rows[0].deleted);
     const modelAudit = await client.query('DELETE FROM model_call_audit WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
     const rateRejections = await client.query('DELETE FROM model_rate_rejections WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
     const modelSecurity = await client.query('DELETE FROM model_security_events WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
@@ -82,9 +81,9 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
         }
       }
     }
-    await client.query('UPDATE retention_cleanup_runs SET completed_at=now(),audit_deleted=$2,sessions_deleted=$3,candidates_deleted=$4,tasks_deleted=$5,notes_deleted=$6,experiments_deleted=$7,prompts_deleted=$8,purge_failures=$9,webhook_events_deleted=$10,users_deleted=$11 WHERE local_date=$1', [clock.date,audit.rowCount+modelAudit.rowCount+rateRejections.rowCount+modelSecurity.rowCount+clientErrors.rowCount+loginHistory.rowCount,sessions,candidates,purged.tasks,purged.notes,purged.experiments,purged.prompt_library,JSON.stringify(failures),webhookEvents.rowCount,purged.users]);
+    await client.query('UPDATE retention_cleanup_runs SET completed_at=now(),audit_deleted=$2,sessions_deleted=$3,candidates_deleted=$4,tasks_deleted=$5,notes_deleted=$6,experiments_deleted=$7,prompts_deleted=$8,purge_failures=$9,webhook_events_deleted=$10,users_deleted=$11 WHERE local_date=$1', [clock.date,auditDeleted+modelAudit.rowCount+rateRejections.rowCount+modelSecurity.rowCount+clientErrors.rowCount+loginHistory.rowCount,sessions,candidates,purged.tasks,purged.notes,purged.experiments,purged.prompt_library,JSON.stringify(failures),webhookEvents.rowCount,purged.users]);
     await client.query('COMMIT');
-    return { localDate: clock.date, auditDeleted: audit.rowCount+modelAudit.rowCount+rateRejections.rowCount+modelSecurity.rowCount+clientErrors.rowCount+loginHistory.rowCount, webhookEventsDeleted: webhookEvents.rowCount, sessionsDeleted: sessions, candidatesDeleted: candidates, purged, failures };
+    return { localDate: clock.date, auditDeleted: auditDeleted+modelAudit.rowCount+rateRejections.rowCount+modelSecurity.rowCount+clientErrors.rowCount+loginHistory.rowCount, webhookEventsDeleted: webhookEvents.rowCount, sessionsDeleted: sessions, candidatesDeleted: candidates, purged, failures };
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }

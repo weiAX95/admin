@@ -28,7 +28,8 @@ import { parseLoginIpAllowlist, requestLoginIp } from './login-network.mjs';
 import { recordAccountAction } from './account-audit.mjs';
 import { handleAccountAudit } from './account-audit-api.mjs';
 import { handleAccountActivity, markInactiveAccounts } from './account-activity.mjs';
-import { pool, loadData, saveData, sha256, assertSchemaCurrent } from "./postgres-store.mjs";
+import { runtimePool as pool, loadData, saveData, sha256, assertSchemaCurrent } from "./postgres-store.mjs";
+if (process.env.NODE_ENV === 'production' && !process.env.APP_DATABASE_URL) throw new Error('生产环境必须配置独立的 APP_DATABASE_URL 运行账号');
 import { hashPassword, passwordPolicyError, verifyPassword } from "./passwords.mjs";
 import { consumeMfaFactor, getMfaChallenge, handleAccountMfa, issueMfaChallenge, mfaConfigured, mfaState } from './account-mfa.mjs';
 import { createPasswordExpiryReminders } from "./password-expiry.mjs";
@@ -2445,7 +2446,7 @@ server.on("error", (err) => {
 });
 
 try {
-  await assertSchemaCurrent();
+  await assertSchemaCurrent(pool);
   await recoverBackupJobs(pool);
   await resumeProjectScans(pool);
   await resumeProjectAnalyses(pool);

@@ -27,8 +27,8 @@ async function run(program, args, env = process.env) {
   });
 }
 
-export async function dumpPostgres(target, databaseUrl = process.env.DATABASE_URL) {
-  if (!databaseUrl) throw new Error('缺少 DATABASE_URL');
+export async function dumpPostgres(target, databaseUrl = process.env.BACKUP_DATABASE_URL || process.env.APP_DATABASE_URL || process.env.DATABASE_URL) {
+  if (!databaseUrl) throw new Error('缺少备份数据库连接地址');
   const url = new URL(databaseUrl);
   if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname || !url.pathname.slice(1)) throw new Error('DATABASE_URL 无效');
   const env = { ...process.env, PGHOST: url.hostname, PGPORT: url.port || '5432', PGUSER: decodeURIComponent(url.username), PGPASSWORD: decodeURIComponent(url.password), PGDATABASE: decodeURIComponent(url.pathname.slice(1)) };

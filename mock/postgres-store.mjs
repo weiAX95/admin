@@ -12,6 +12,9 @@ import { saveSessionQuality } from './session-quality.mjs';
 pg.types.setTypeParser(1700, value => Number(value));
 const root = path.dirname(fileURLToPath(import.meta.url));
 export const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL || "postgres://admin:admin_local_only@127.0.0.1:55432/agent_admin" });
+export const runtimePool = process.env.APP_DATABASE_URL
+  ? new pg.Pool({ connectionString: process.env.APP_DATABASE_URL })
+  : pool;
 
 const snake = name => name.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
 const spec = (name, table, fields, children = []) => ({ name, table, fields, children });
