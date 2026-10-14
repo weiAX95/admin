@@ -149,6 +149,8 @@ export default function Settings() {
         { title: '结果', dataIndex: 'succeeded', render: value => value ? <Tag color="success">成功</Tag> : <Tag color="error">失败</Tag> },
         { title: '原因', dataIndex: 'reason', render: value => ({ success: '登录成功', invalid_credentials: '凭据错误', locked: '尝试过多', pending: '待激活', disabled: '已停用', ip_denied: 'IP 不在白名单' }[value as string] || value) },
         { title: 'IP', dataIndex: 'ipAddress' },
+        { title: '地域', render: (_, item: LoginHistoryItem) => item.geoCountry ? `${item.geoCountry}${item.geoSubdivision ? ` / ${item.geoSubdivision}` : ''}` : '未知' },
+        { title: '异常', dataIndex: 'remoteDevice', render: value => value ? <Tag color="warning">异地新设备</Tag> : '—' },
         { title: '设备', dataIndex: 'userAgent', ellipsis: true, render: value => <Typography.Text ellipsis={{ tooltip: value }}>{value || '未知设备'}</Typography.Text> },
       ]} />
     </Card>

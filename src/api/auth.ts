@@ -10,7 +10,7 @@ export const confirmMfaSetup = (code: string) => http.post<{ enabled: true; reco
 export const disableMfa = (currentPassword: string, code: string) => http.post<{ enabled: false }>('/auth/mfa/disable', { currentPassword, code });
 export const verifyMfaLogin = (challengeToken: string, code: string, deviceFingerprint?: string) =>
   http.post<LoginResponse>('/auth/mfa/verify', { challengeToken, code, deviceFingerprint });
-export interface LoginHistoryItem { id: string; ipAddress: string; userAgent: string; succeeded: boolean; reason: string; createdAt: string }
+export interface LoginHistoryItem { id: string; ipAddress: string; userAgent: string; succeeded: boolean; reason: string; geoCountry: string | null; geoSubdivision: string | null; remoteDevice: boolean; createdAt: string }
 export const loginHistory = () => http.get<{ items: LoginHistoryItem[] }>("/auth/login-history");
 export const changePassword = (currentPassword: string, newPassword: string) =>
   http.post<LoginResponse>("/auth/password", { currentPassword, newPassword });

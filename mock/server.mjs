@@ -25,6 +25,7 @@ import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
 import crypto from "node:crypto";
 import { parseLoginIpAllowlist, requestLoginIp } from './login-network.mjs';
+import { differentLoginRegion, loginLocation } from './login-geolocation.mjs';
 import { recordAccountAction } from './account-audit.mjs';
 import { handleAccountAudit } from './account-audit-api.mjs';
 import { handleAccountActivity, markInactiveAccounts } from './account-activity.mjs';
@@ -303,17 +304,22 @@ async function revokeUserSessions(userId) {
   for (const [ws, liveToken] of liveClients) if (revoked.has(sha256(liveToken))) { ws.close(1008, 'authentication expired'); liveClients.delete(ws); }
 }
 
-async function recordLoginAttempt(req, account, username, deviceHash, succeeded, reason) {
-  await activeClient.query(`INSERT INTO account_login_history(id,user_id,username,ip_address,user_agent,device_hash,succeeded,reason)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [newId(), account?.id || null, String(username || '').slice(0, 30), requestLoginIp(req), String(req.headers['user-agent'] || '').slice(0, 500), deviceHash, succeeded, reason]);
+async function recordLoginAttempt(req, account, username, deviceHash, succeeded, reason, location = null, remoteDevice = false) {
+  await activeClient.query(`INSERT INTO account_login_history(id,user_id,username,ip_address,user_agent,device_hash,succeeded,reason,geo_country,geo_subdivision,remote_device)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, [newId(), account?.id || null, String(username || '').slice(0, 30), requestLoginIp(req), String(req.headers['user-agent'] || '').slice(0, 500), deviceHash, succeeded, reason, location?.country || null, location?.subdivision || null, remoteDevice]);
 }
 
 async function createLoginSession(req, account, deviceHint, setupRequired = false) {
   const token = crypto.randomBytes(32).toString('hex');
   const deviceHash = deviceHint || sha256(token);
-  const previousLogin = (await activeClient.query(`SELECT device_hash FROM account_login_history
+  const location = setupRequired ? null : await loginLocation(requestLoginIp(req));
+  const previousLogin = (await activeClient.query(`SELECT device_hash,geo_country,geo_subdivision FROM account_login_history
     WHERE user_id=$1 AND succeeded=true ORDER BY created_at DESC LIMIT 1`, [account.id])).rows[0];
-  if (!setupRequired && previousLogin?.device_hash && deviceHint) {
+  const remoteDevice = Boolean(!setupRequired && previousLogin?.device_hash && deviceHint && previousLogin.device_hash !== deviceHash && differentLoginRegion(previousLogin, location));
+  if (remoteDevice) {
+    await notifyUser(activeClient, account.id, 'account_remote_device', newId(),
+      '异地新设备登录提醒', `账号 ${account.username} 在新的地域和设备登录，连接 IP：${requestLoginIp(req)}，地域：${location.country}${location.subdivision ? ` / ${location.subdivision}` : ''}。如非本人操作，请立即修改密码。`, '/settings');
+  } else if (!setupRequired && previousLogin?.device_hash && deviceHint) {
     const seen = (await activeClient.query(`SELECT 1 FROM account_login_history
       WHERE user_id=$1 AND succeeded=true AND device_hash=$2 LIMIT 1`, [account.id, deviceHash])).rowCount;
     if (!seen) await notifyUser(activeClient, account.id, 'account_new_device', sha256(`${account.id}:${deviceHash}`),
@@ -323,7 +329,7 @@ async function createLoginSession(req, account, deviceHint, setupRequired = fals
   await activeClient.query(`INSERT INTO auth_sessions(token_hash,user_id,expires_at,device_hash,mfa_setup_required)
     VALUES($1,$2,now()+($3 * interval '1 hour'),$4,$5)`, [sha256(token), account.id, sessionHours, deviceHash, setupRequired]);
   await enforceDeviceLimit(account);
-  await recordLoginAttempt(req, account, account.username, deviceHash, !setupRequired, setupRequired ? 'mfa_setup_required' : 'success');
+  await recordLoginAttempt(req, account, account.username, deviceHash, !setupRequired, setupRequired ? 'mfa_setup_required' : 'success', location, remoteDevice);
   if (!setupRequired) afterSave(client => client.query('UPDATE users SET last_login_at=now(),inactive_since=NULL WHERE id=$1', [account.id]));
   const passwordChangedAt = (await activeClient.query('SELECT changed_at FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 1', [account.id])).rows[0]?.changed_at;
   const passwordChangeRequired = Boolean(passwordChangedAt && new Date(passwordChangedAt).getTime() <= Date.now() - 90 * 24 * 60 * 60 * 1000);
@@ -862,10 +868,11 @@ async function handleRequest(req, res) {
       return send(res, 200, { ...publicUser(me), passwordChangeRequired, mfaSetupRequired: auth.mfa_setup_required });
     }
     if (method === "GET" && pathname === "/api/auth/login-history") {
-      const items = (await activeClient.query(`SELECT id,ip_address,user_agent,succeeded,reason,created_at
+      const items = (await activeClient.query(`SELECT id,ip_address,user_agent,succeeded,reason,geo_country,geo_subdivision,remote_device,created_at
         FROM account_login_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT 20`, [me.id])).rows;
       return send(res, 200, { items: items.map(item => ({ id: item.id, ipAddress: item.ip_address,
-        userAgent: item.user_agent, succeeded: item.succeeded, reason: item.reason, createdAt: item.created_at })) });
+        userAgent: item.user_agent, succeeded: item.succeeded, reason: item.reason, geoCountry: item.geo_country,
+        geoSubdivision: item.geo_subdivision, remoteDevice: item.remote_device, createdAt: item.created_at })) });
     }
     if (method === "POST" && pathname === "/api/auth/password") {
       const body = await readBody(req);
