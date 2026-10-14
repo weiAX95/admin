@@ -30,6 +30,7 @@ import { handleAccountAudit } from './account-audit-api.mjs';
 import { handleAccountActivity, markInactiveAccounts } from './account-activity.mjs';
 import { pool, loadData, saveData, sha256, assertSchemaCurrent } from "./postgres-store.mjs";
 import { hashPassword, passwordPolicyError, verifyPassword } from "./passwords.mjs";
+import { consumeMfaFactor, getMfaChallenge, handleAccountMfa, issueMfaChallenge, mfaConfigured, mfaState } from './account-mfa.mjs';
 import { createPasswordExpiryReminders } from "./password-expiry.mjs";
 import { recordTaskTrendEvent, recordTaskTrendSnapshot, computeTaskTrends, trendDateKey } from "./task-trends.mjs";
 import { applyTaskProgress, clampProgress as normalizeProgress, normalizeChecklist } from "./task-checklist.mjs";
@@ -288,20 +289,44 @@ function serialized(work) {
   requestTail = current.catch(() => {});
   return current;
 }
-async function lookupSession(token, client = pool, allowExpiredPassword = false) {
+async function lookupSession(token, client = pool, allowExpiredPassword = false, allowMfaSetup = false) {
   if (typeof token !== "string" || !token) return null;
-  const result = await client.query(`SELECT u.id,u.username,u.role FROM auth_sessions a JOIN users u ON u.id=a.user_id
+  const result = await client.query(`SELECT u.id,u.username,u.role,a.mfa_setup_required FROM auth_sessions a JOIN users u ON u.id=a.user_id
     WHERE a.token_hash=$1 AND a.revoked_at IS NULL AND a.expires_at>now() AND u.status='active'
-    AND ($2::boolean OR COALESCE((SELECT changed_at FROM password_history WHERE user_id=u.id ORDER BY changed_at DESC,id DESC LIMIT 1),now()) > now()-interval '90 days')`, [sha256(token), allowExpiredPassword]);
+    AND ($3::boolean OR a.mfa_setup_required=false)
+    AND ($2::boolean OR COALESCE((SELECT changed_at FROM password_history WHERE user_id=u.id ORDER BY changed_at DESC,id DESC LIMIT 1),now()) > now()-interval '90 days')`, [sha256(token), allowExpiredPassword, allowMfaSetup]);
   return result.rows[0] || null;
 }
 async function revokeUserSessions(userId) {
-  await activeClient.query("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL", [userId]);
+  const revoked = new Set((await activeClient.query("UPDATE auth_sessions SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL RETURNING token_hash", [userId])).rows.map(row => row.token_hash));
+  for (const [ws, liveToken] of liveClients) if (revoked.has(sha256(liveToken))) { ws.close(1008, 'authentication expired'); liveClients.delete(ws); }
 }
 
 async function recordLoginAttempt(req, account, username, deviceHash, succeeded, reason) {
   await activeClient.query(`INSERT INTO account_login_history(id,user_id,username,ip_address,user_agent,device_hash,succeeded,reason)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, [newId(), account?.id || null, String(username || '').slice(0, 30), requestLoginIp(req), String(req.headers['user-agent'] || '').slice(0, 500), deviceHash, succeeded, reason]);
+}
+
+async function createLoginSession(req, account, deviceHint, setupRequired = false) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const deviceHash = deviceHint || sha256(token);
+  const previousLogin = (await activeClient.query(`SELECT device_hash FROM account_login_history
+    WHERE user_id=$1 AND succeeded=true ORDER BY created_at DESC LIMIT 1`, [account.id])).rows[0];
+  if (!setupRequired && previousLogin?.device_hash && deviceHint) {
+    const seen = (await activeClient.query(`SELECT 1 FROM account_login_history
+      WHERE user_id=$1 AND succeeded=true AND device_hash=$2 LIMIT 1`, [account.id, deviceHash])).rowCount;
+    if (!seen) await notifyUser(activeClient, account.id, 'account_new_device', sha256(`${account.id}:${deviceHash}`),
+      '新设备登录提醒', `账号 ${account.username} 从新设备登录，连接 IP：${requestLoginIp(req)}。如非本人操作，请立即修改密码。`, '/settings');
+  }
+  const { sessionHours } = await getGlobalSettings(activeClient);
+  await activeClient.query(`INSERT INTO auth_sessions(token_hash,user_id,expires_at,device_hash,mfa_setup_required)
+    VALUES($1,$2,now()+($3 * interval '1 hour'),$4,$5)`, [sha256(token), account.id, sessionHours, deviceHash, setupRequired]);
+  await enforceDeviceLimit(account);
+  await recordLoginAttempt(req, account, account.username, deviceHash, !setupRequired, setupRequired ? 'mfa_setup_required' : 'success');
+  if (!setupRequired) afterSave(client => client.query('UPDATE users SET last_login_at=now(),inactive_since=NULL WHERE id=$1', [account.id]));
+  const passwordChangedAt = (await activeClient.query('SELECT changed_at FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 1', [account.id])).rows[0]?.changed_at;
+  const passwordChangeRequired = Boolean(passwordChangedAt && new Date(passwordChangedAt).getTime() <= Date.now() - 90 * 24 * 60 * 60 * 1000);
+  return { token, user: { ...publicUser(account), passwordChangeRequired, mfaSetupRequired: setupRequired } };
 }
 
 async function enforceDeviceLimit(account) {
@@ -395,7 +420,7 @@ function readProjectBody(req) {
 async function authUser(req) {
   const header = req.headers.authorization || "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  return (await lookupSession(token, activeClient, true))?.username || null;
+  return lookupSession(token, activeClient, true, true);
 }
 
 async function annotationView(client, sessionId, messageId, reviewerId) {
@@ -659,37 +684,73 @@ async function handleRequest(req, res) {
         await recordLoginAttempt(req, account, body.username, deviceHint, false, account.status);
         return send(res, 403, { error: account.status === "pending" ? "账号等待管理员激活" : "账号已停用，请联系管理员" });
       }
-      await activeClient.query("DELETE FROM login_security_state WHERE user_id=$1", [account.id]);
-      const passwordChangedAt = (await activeClient.query("SELECT changed_at FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 1", [account.id])).rows[0]?.changed_at;
-      const passwordChangeRequired = Boolean(passwordChangedAt && new Date(passwordChangedAt).getTime() <= Date.now() - 90 * 24 * 60 * 60 * 1000);
-      const token = crypto.randomBytes(32).toString("hex");
-      const deviceHash = deviceHint || sha256(token);
-      const previousLogin = (await activeClient.query(`SELECT device_hash FROM account_login_history
-        WHERE user_id=$1 AND succeeded=true ORDER BY created_at DESC LIMIT 1`, [account.id])).rows[0];
-      if (previousLogin?.device_hash && deviceHint) {
-        const seen = (await activeClient.query(`SELECT 1 FROM account_login_history
-          WHERE user_id=$1 AND succeeded=true AND device_hash=$2 LIMIT 1`, [account.id, deviceHash])).rowCount;
-        if (!seen) await notifyUser(activeClient, account.id, 'account_new_device', sha256(`${account.id}:${deviceHash}`),
-          '新设备登录提醒', `账号 ${account.username} 从新设备登录，连接 IP：${loginIp}。如非本人操作，请立即修改密码。`, '/settings');
+      const factor = await mfaState(activeClient, account.id);
+      if ((factor?.enabled_at || account.role !== 'member') && !mfaConfigured()) {
+        return send(res, 503, { error: '双因素认证尚未配置；请设置 MFA_ENCRYPTION_KEY' });
       }
-      const { sessionHours } = await getGlobalSettings(activeClient);
-      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at,device_hash) VALUES($1,$2,now()+($3 * interval '1 hour'),$4)", [sha256(token), account.id, sessionHours, deviceHash]);
-      await enforceDeviceLimit(account);
-      await recordLoginAttempt(req, account, body.username, deviceHash, true, 'success');
-      afterSave(client => client.query('UPDATE users SET last_login_at=now(),inactive_since=NULL WHERE id=$1', [account.id]));
-      return send(res, 200, { token, user: { ...publicUser(account), passwordChangeRequired } });
+      if (factor?.enabled_at) {
+        const challengeToken = await issueMfaChallenge(activeClient, account.id, deviceHint);
+        return send(res, 202, { mfaRequired: true, challengeToken, expiresInSeconds: 300 });
+      }
+      await activeClient.query('DELETE FROM login_security_state WHERE user_id=$1', [account.id]);
+      return send(res, 200, await createLoginSession(req, account, deviceHint, account.role !== 'member'));
+    }
+
+    if (method === 'POST' && pathname === '/api/auth/mfa/verify') {
+      const body = await readBody(req);
+      const challenge = await getMfaChallenge(activeClient, body.challengeToken);
+      if (!challenge) return send(res, 401, { error: '验证请求已过期，请重新登录' });
+      const account = db.users.find(user => user.id === challenge.user_id);
+      if (!account || account.status !== 'active') return send(res, 401, { error: '验证请求已过期，请重新登录' });
+      const fingerprint = typeof body.deviceFingerprint === 'string' && /^[a-f0-9]{64}$/i.test(body.deviceFingerprint) ? body.deviceFingerprint.toLowerCase() : null;
+      const deviceHint = fingerprint ? sha256(`${fingerprint}:${String(req.headers['user-agent'] || '')}`) : null;
+      if (challenge.device_hash !== deviceHint) return send(res, 401, { error: '登录设备已变化，请重新登录' });
+      const security = (await activeClient.query('SELECT locked_until FROM login_security_state WHERE user_id=$1', [account.id])).rows[0];
+      if (security?.locked_until && new Date(security.locked_until).getTime() > Date.now()) return send(res, 429, { error: '登录尝试过多，请稍后重试' });
+      if (!await consumeMfaFactor(activeClient, account.id, body.code)) {
+        await activeClient.query(`UPDATE account_mfa_login_challenges SET attempts=attempts+1 WHERE token_hash=$1`, [challenge.token_hash]);
+        if (challenge.attempts >= 4) await activeClient.query('DELETE FROM account_mfa_login_challenges WHERE token_hash=$1', [challenge.token_hash]);
+        const failure = (await activeClient.query(`INSERT INTO login_security_state(user_id,failed_attempts,updated_at) VALUES($1,1,now())
+          ON CONFLICT(user_id) DO UPDATE SET failed_attempts=login_security_state.failed_attempts+1,updated_at=now() RETURNING failed_attempts`, [account.id])).rows[0];
+        if (failure.failed_attempts >= 5) {
+          await activeClient.query("UPDATE login_security_state SET locked_until=now()+interval '15 minutes',failed_attempts=0 WHERE user_id=$1", [account.id]);
+        }
+        await recordLoginAttempt(req, account, account.username, deviceHint, false, 'mfa_invalid');
+        return send(res, 401, { error: '验证码或恢复码无效' });
+      }
+      await activeClient.query('DELETE FROM account_mfa_login_challenges WHERE token_hash=$1', [challenge.token_hash]);
+      await activeClient.query('DELETE FROM login_security_state WHERE user_id=$1', [account.id]);
+      return send(res, 200, await createLoginSession(req, account, deviceHint));
     }
 
     // ---- 其余接口需鉴权 ----
-    const username = await authUser(req);
-    if (!username) return send(res, 401, { error: "未登录或登录已过期" });
-    const me = db.users.find((u) => u.username === username) || null;
+    const auth = await authUser(req);
+    if (!auth) return send(res, 401, { error: "未登录或登录已过期" });
+    const me = db.users.find((u) => u.username === auth.username) || null;
     if (!me) return send(res, 401, { error: "登录账号不存在，请重新登录" });
     res.__actor = { id: me.id, username: me.username };
+    const currentTokenHash = sha256((req.headers.authorization || '').replace(/^Bearer /, ''));
     const latestPassword = (await activeClient.query("SELECT changed_at FROM password_history WHERE user_id=$1 ORDER BY changed_at DESC,id DESC LIMIT 1", [me.id])).rows[0]?.changed_at;
     const passwordChangeRequired = Boolean(latestPassword && new Date(latestPassword).getTime() <= Date.now() - 90 * 24 * 60 * 60 * 1000);
-    if (passwordChangeRequired && !["/api/auth/password", "/api/auth/logout", "/api/auth/me"].includes(pathname)) {
+    if (passwordChangeRequired && !["/api/auth/password", "/api/auth/logout", "/api/auth/me"].includes(pathname) && !pathname.startsWith('/api/auth/mfa')) {
       return send(res, 403, { error: "密码已过期，请先修改密码", code: "password_expired" });
+    }
+    if (auth.mfa_setup_required && !['/api/auth/me', '/api/auth/logout', '/api/auth/password'].includes(pathname) && !pathname.startsWith('/api/auth/mfa')) {
+      return send(res, 403, { error: '请先绑定双因素认证', code: 'mfa_setup_required' });
+    }
+    const mfaResponse = await handleAccountMfa({ pathname, method, client: activeClient, me, readBody: () => readBody(req), tokenHash: currentTokenHash, verifyPassword });
+    if (mfaResponse) {
+      if ((pathname === '/api/auth/mfa/confirm' || pathname === '/api/auth/mfa/disable') && mfaResponse.status === 200) {
+        const revoked = new Set((await activeClient.query(`UPDATE auth_sessions SET revoked_at=now()
+          WHERE user_id=$1 AND token_hash<>$2 AND revoked_at IS NULL RETURNING token_hash`, [me.id, currentTokenHash])).rows.map(row => row.token_hash));
+        for (const [ws, liveToken] of liveClients) if (revoked.has(sha256(liveToken))) { ws.close(1008, 'authentication changed'); liveClients.delete(ws); }
+      }
+      if (pathname === '/api/auth/mfa/confirm' && mfaResponse.status === 200 && auth.mfa_setup_required) {
+        const deviceHash = (await activeClient.query('SELECT device_hash FROM auth_sessions WHERE token_hash=$1', [currentTokenHash])).rows[0]?.device_hash || null;
+        await recordLoginAttempt(req, me, me.username, deviceHash, true, 'success');
+        afterSave(client => client.query('UPDATE users SET last_login_at=now(),inactive_since=NULL WHERE id=$1', [me.id]));
+      }
+      return send(res, mfaResponse.status, mfaResponse.data);
     }
     if (pathname === '/api/permissions/matrix' && method === 'GET') return send(res, 200, permissionMatrix());
     const guardedResource = pathname.startsWith('/api/tasks/') || pathname === '/api/tasks' ? 'tasks'
@@ -797,7 +858,7 @@ async function handleRequest(req, res) {
     }
 
     if (method === "GET" && pathname === "/api/auth/me") {
-      return send(res, 200, { ...publicUser(me), passwordChangeRequired });
+      return send(res, 200, { ...publicUser(me), passwordChangeRequired, mfaSetupRequired: auth.mfa_setup_required });
     }
     if (method === "GET" && pathname === "/api/auth/login-history") {
       const items = (await activeClient.query(`SELECT id,ip_address,user_agent,succeeded,reason,created_at
@@ -819,13 +880,12 @@ async function handleRequest(req, res) {
       const token = crypto.randomBytes(32).toString("hex");
       const previousSessions = (await activeClient.query("SELECT token_hash,device_hash FROM auth_sessions WHERE user_id=$1 AND revoked_at IS NULL", [me.id])).rows;
       const previousTokens = new Set(previousSessions.map(row => row.token_hash));
-      const currentTokenHash = sha256((req.headers.authorization || '').replace(/^Bearer /, ''));
       const currentDeviceHash = previousSessions.find(row => row.token_hash === currentTokenHash)?.device_hash || sha256(token);
       await revokeUserSessions(me.id);
       for (const [ws, liveToken] of liveClients) if (previousTokens.has(sha256(liveToken))) { ws.close(1008, "authentication expired"); liveClients.delete(ws); }
       const { sessionHours } = await getGlobalSettings(activeClient);
-      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at,device_hash) VALUES($1,$2,now()+($3 * interval '1 hour'),$4)", [sha256(token), me.id, sessionHours, currentDeviceHash]);
-      return send(res, 200, { token, user: publicUser(me) });
+      await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at,device_hash,mfa_setup_required) VALUES($1,$2,now()+($3 * interval '1 hour'),$4,$5)", [sha256(token), me.id, sessionHours, currentDeviceHash, auth.mfa_setup_required]);
+      return send(res, 200, { token, user: { ...publicUser(me), mfaSetupRequired: auth.mfa_setup_required } });
     }
     if (method === "POST" && pathname === "/api/auth/logout") {
       const token = (req.headers.authorization || "").replace(/^Bearer /, "");
@@ -1122,6 +1182,7 @@ async function handleRequest(req, res) {
           if (target.role === "admin" && body.role !== "admin" && adminCount() <= 1) {
             return send(res, 400, { error: "不能降级唯一的管理员" });
           }
+          if (target.role !== body.role) await revokeUserSessions(target.id);
           target.role = body.role;
         }
         if (body.superAdminCandidate !== undefined) target.superAdminCandidate = body.superAdminCandidate;

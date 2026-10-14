@@ -19,6 +19,14 @@ if (!process.env.WEBHOOK_MASTER_KEY) {
   process.loadEnvFile(localEnv);
 }
 if (!/^[a-f\d]{64}$/i.test(process.env.WEBHOOK_MASTER_KEY || "")) throw new Error("WEBHOOK_MASTER_KEY 必须是 32 字节随机密钥的十六进制值");
+if (!process.env.MFA_ENCRYPTION_KEY) {
+  const existing = fs.readFileSync(localEnv, 'utf8');
+  if (/^MFA_ENCRYPTION_KEY\s*=/m.test(existing)) throw new Error('.env.local 中的 MFA_ENCRYPTION_KEY 无效，请检查后重试');
+  fs.appendFileSync(localEnv, `${existing && !existing.endsWith('\n') ? '\n' : ''}MFA_ENCRYPTION_KEY=${crypto.randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+  fs.chmodSync(localEnv, 0o600);
+  process.loadEnvFile(localEnv);
+}
+if (!/^[a-f\d]{64}$/i.test(process.env.MFA_ENCRYPTION_KEY || '')) throw new Error('MFA_ENCRYPTION_KEY 必须是 32 字节随机密钥的十六进制值');
 
 const children = [];
 

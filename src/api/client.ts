@@ -125,8 +125,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (res.status === 403 && (data as { code?: string } | null)?.code === "password_expired" && window.location.pathname !== "/change-password") {
       window.location.assign("/change-password");
     }
+    if (res.status === 403 && (data as { code?: string } | null)?.code === 'mfa_setup_required' && window.location.pathname !== '/mfa/setup') {
+      window.location.assign('/mfa/setup');
+    }
     // 登录接口自身的 401 是“密码错误”，不跳转；其余 401 视为登录态失效
-    if (res.status === 401 && !path.startsWith("/auth/login")) {
+    if (res.status === 401 && !path.startsWith("/auth/login") && path !== '/auth/mfa/verify') {
       clearAuth();
       if (window.location.pathname !== "/login") {
         window.location.assign("/login");

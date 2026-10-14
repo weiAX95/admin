@@ -41,6 +41,7 @@ const PermissionMatrix = lazy(() => import("./pages/PermissionMatrix"));
 const Login = lazy(() => import("./pages/Login"));
 const Register = lazy(() => import("./pages/Register"));
 const ChangePassword = lazy(() => import("./pages/ChangePassword"));
+const MfaSetup = lazy(() => import('./pages/MfaSetup'));
 const Settings = lazy(() => import("./pages/Settings"));
 const ModelCosts = lazy(() => import("./pages/ModelCosts"));
 const ModelCallAudit = lazy(() => import("./pages/ModelCallAudit"));
@@ -65,6 +66,7 @@ export default function App() {
             <Route path="/share/experiments/:token" element={<SharedExperiment />} />
             <Route path="/share/evaluation-reports/:token" element={<SharedEvaluationReport />} />
             <Route element={<RequireAuth />}>
+              <Route path="/mfa/setup" element={<MfaSetup />} />
               <Route element={<AdminLayout />}>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/tasks" element={<Tasks />} />

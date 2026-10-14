@@ -372,6 +372,7 @@ export interface AuthUser {
   name: string;
   role: AccountRole;
   passwordChangeRequired?: boolean;
+  mfaSetupRequired?: boolean;
 }
 
 export interface LoginResponse {

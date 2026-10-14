@@ -12,6 +12,7 @@ import SessionModelPriceSettings from '../components/SessionModelPriceSettings';
 import RetentionSettings from '../components/RetentionSettings';
 import BackupSettings from '../components/BackupSettings';
 import WebhookSettings from '../components/WebhookSettings';
+import MfaPanel from '../components/MfaPanel';
 import { getVersionInfo, type VersionInfo } from '../api/version-info';
 
 const languageOptions = [{ value: 'zh-CN', label: '简体中文' }, { value: 'en-US', label: 'English' }];
@@ -141,6 +142,7 @@ export default function Settings() {
         <Button type="primary" htmlType="submit" loading={saving}>更新密码</Button>
       </Form>
     </Card>
+    <Card title="双因素认证"><MfaPanel /></Card>
     <Card title="最近登录记录" extra={<Typography.Text type="secondary">最近 20 次</Typography.Text>}>
       <Table rowKey="id" size="small" dataSource={loginRows} pagination={{ pageSize: 5 }} scroll={{ x: 760 }} columns={[
         { title: '时间', dataIndex: 'createdAt', render: value => new Date(value as string).toLocaleString('zh-CN', { hour12: false }) },
