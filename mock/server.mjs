@@ -25,6 +25,7 @@ import crypto from "node:crypto";
 import { parseLoginIpAllowlist, requestLoginIp } from './login-network.mjs';
 import { recordAccountAction } from './account-audit.mjs';
 import { handleAccountAudit } from './account-audit-api.mjs';
+import { handleAccountActivity, markInactiveAccounts } from './account-activity.mjs';
 import { pool, loadData, saveData, sha256, assertSchemaCurrent } from "./postgres-store.mjs";
 import { hashPassword, passwordPolicyError, verifyPassword } from "./passwords.mjs";
 import { createPasswordExpiryReminders } from "./password-expiry.mjs";
@@ -673,6 +674,7 @@ async function handleRequest(req, res) {
       await activeClient.query("INSERT INTO auth_sessions(token_hash,user_id,expires_at,device_hash) VALUES($1,$2,now()+($3 * interval '1 hour'),$4)", [sha256(token), account.id, sessionHours, deviceHash]);
       await enforceDeviceLimit(account);
       await recordLoginAttempt(req, account, body.username, deviceHash, true, 'success');
+      afterSave(client => client.query('UPDATE users SET last_login_at=now(),inactive_since=NULL WHERE id=$1', [account.id]));
       return send(res, 200, { token, user: { ...publicUser(account), passwordChangeRequired } });
     }
 
@@ -723,6 +725,8 @@ async function handleRequest(req, res) {
     if (settingsResponse) return send(res, settingsResponse.status, settingsResponse.data);
     const accountAuditResponse = await handleAccountAudit({ pathname, method, url, client: activeClient, me });
     if (accountAuditResponse) return send(res, accountAuditResponse.status, accountAuditResponse.data);
+    const accountActivityResponse = await handleAccountActivity({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    if (accountActivityResponse) return send(res, accountActivityResponse.status, accountActivityResponse.data);
     const connectionResponse = await handleModelConnections({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (connectionResponse) return send(res, connectionResponse.status, connectionResponse.data);
     const retentionResponse = await handleRetentionSettings({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
@@ -2359,6 +2363,9 @@ try {
     const remindExpiringPasswords = () => { void createPasswordExpiryReminders(pool).then(count => { if (count) notifyLive(); }).catch(error => console.error('[password-expiry] reminder failed:', error)); };
     remindExpiringPasswords();
     setInterval(remindExpiringPasswords, 3600_000).unref();
+    const refreshInactiveAccounts = () => { void markInactiveAccounts(pool).catch(error => console.error('[accounts] inactivity refresh failed:', error)); };
+    refreshInactiveAccounts();
+    setInterval(refreshInactiveAccounts, 3600_000).unref();
     let webhookRunning = false;
     const runWebhooks = async () => {
       if (webhookRunning) return;

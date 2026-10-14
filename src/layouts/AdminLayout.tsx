@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Avatar, Badge, Button, Drawer, Empty, Layout, Menu, Popover, Space, Spin, Typography } from "antd";
 import {
   BellOutlined, DashboardOutlined, ExperimentOutlined, FileTextOutlined, LogoutOutlined,
@@ -13,6 +13,7 @@ import type { ReviewNotification } from "../types";
 import { listNotifications, markNotificationRead } from "../api/reviews";
 import { useSettings } from "../components/SettingsProvider";
 import { getVersionInfo, type VersionInfo } from "../api/version-info";
+import { recordPageView } from "../api/accountActivity";
 import GlobalSearch from "../components/GlobalSearch";
 import ErrorBoundary from "../components/ErrorBoundary";
 
@@ -33,6 +34,7 @@ const MENU_ITEMS = [
 ];
 const ACCOUNTS_ITEM = { key: "/accounts", icon: <TeamOutlined />, label: "账号管理" };
 const ACCOUNT_AUDIT_ITEM = { key: "/account-audit", icon: <ProfileOutlined />, label: "操作审计" };
+const ACCOUNT_ACTIVITY_ITEM = { key: "/account-activity", icon: <DashboardOutlined />, label: "账号活跃度" };
 const SETTINGS_ITEM = { key: "/settings", icon: <SettingOutlined />, label: "系统设置" };
 const EVALUATION_ADMIN_ITEM = { key: "/evaluation/candidates", icon: <ExperimentOutlined />, label: "评测候选池" };
 const EVALUATION_ALERTS_ITEM = { key: "/evaluation/alerts", icon: <BellOutlined />, label: "退化告警" };
@@ -57,6 +59,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/project-analysis": { title: "项目分析", description: "接入公开仓库，逐步建立可追溯的项目进度与学习建议。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
   "/account-audit": { title: "操作审计", description: "核对登录、退出和资源操作记录。", section: "系统管理" },
+  "/account-activity": { title: "账号活跃度", description: "查看团队近期登录、操作和常访问页面。", section: "系统管理" },
   "/settings": { title: "系统设置", description: "配置工作空间与个人偏好。", section: "系统管理" },
   "/model-costs": { title: "模型成本", description: "按模型、账号和模块查看已记账的调用费用。", section: "系统管理" },
   "/model-call-audit": { title: "模型调用审计", description: "核对模型请求、用量与脱敏提示词预览。", section: "系统管理" },
@@ -69,11 +72,17 @@ export default function AdminLayout() {
   const menuTheme = preferences?.theme === 'light' ? 'light' : 'dark';
   const navigate = useNavigate();
   const location = useLocation();
+  const lastTrackedPath = useRef<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifications, setNotifications] = useState<ReviewNotification[]>([]);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    if (lastTrackedPath.current === location.pathname) return;
+    lastTrackedPath.current = location.pathname;
+    void recordPageView(location.pathname).catch(() => undefined);
+  }, [location.pathname]);
   const refreshNotifications = useCallback(() => { void listNotifications().then(result => { setNotifications(result.items); setUnread(result.unread); }).catch(() => undefined); }, []);
   useEffect(() => {
     refreshNotifications();
@@ -106,7 +115,7 @@ export default function AdminLayout() {
     return () => socket.close();
   }, [refreshNotifications, refresh]);
   const user = getStoredUser<AuthUser>();
-  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, MODEL_COSTS_ITEM, MODEL_AUDIT_ITEM, MODEL_HEALTH_ITEM, ALERTS_ITEM, ACCOUNTS_ITEM, ACCOUNT_AUDIT_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, ACCOUNT_AUDIT_ITEM, SETTINGS_ITEM];
+  const menuItems = user?.role === "admin" ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, MODEL_COSTS_ITEM, MODEL_AUDIT_ITEM, MODEL_HEALTH_ITEM, ALERTS_ITEM, ACCOUNTS_ITEM, ACCOUNT_AUDIT_ITEM, ACCOUNT_ACTIVITY_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, ACCOUNT_AUDIT_ITEM, SETTINGS_ITEM];
   const selected = menuItems.map((m) => m.key)
     .filter((k) => k === "/" ? location.pathname === "/" : location.pathname.startsWith(k))
     .sort((a, b) => b.length - a.length)[0] || "/";

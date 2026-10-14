@@ -9,6 +9,7 @@ export async function recordAccountAction(client, req, res) {
   if (!actor || !response || response.status < 200 || response.status >= 300 || !WRITE_METHODS.has(req.method)) return;
   const pathname = new URL(req.url, 'http://localhost').pathname;
   if (!pathname.startsWith('/api/')) return;
+  if (pathname === '/api/account-activity/page-view') return;
   const parts = pathname.slice(5).split('/').filter(Boolean);
   const action = pathname === '/api/auth/logout' ? 'logout' : pathname === '/api/auth/password' ? 'password_change'
     : parts.at(-1) && namedActions.has(parts.at(-1)) ? parts.at(-1)
