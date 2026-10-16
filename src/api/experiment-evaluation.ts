@@ -27,6 +27,8 @@ export const createDatasetVersion = (id: string, cases: DatasetCase[]) => http.p
 export const createDatasetSubset = (id: string, versionId: string, name: string, caseKeys: string[], folderId?: string) => http.post<{ id: string }>(`/evaluation/datasets/${id}/subset`, { versionId, name, caseKeys, folderId });
 export const listEvaluationFolders = () => http.get<{ items: { id: string; name: string; parent_id: string | null }[] }>('/evaluation/folders');
 export const createEvaluationFolder = (name: string, parentId?: string) => http.post<{ id: string }>('/evaluation/folders', { name, parentId });
+export const renameEvaluationFolder = (id: string, name: string, parentId: string | null) => http.patch<{ id: string }>(`/evaluation/folders/${id}`, { name, parentId });
+export const deleteEvaluationFolder = (id: string) => http.del<{ deleted: boolean }>(`/evaluation/folders/${id}`);
 export interface EvaluationSettings { global_media_bytes: string | number; dataset_media_bytes: string | number; min_free_percent: string | number }
 export const getEvaluationSettings = () => http.get<EvaluationSettings>('/evaluation/settings');
 export const updateEvaluationSettings = (value: { globalMediaBytes: number; datasetMediaBytes: number; minFreePercent: number }) => http.put<EvaluationSettings>('/evaluation/settings', value);
