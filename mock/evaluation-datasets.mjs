@@ -35,12 +35,14 @@ export function validateEvaluationCases(cases) {
     if (context.length > 50) throw new Error(`${label}上下文最多 50 条`);
     const tags = item.tags ?? [];
     if (!Array.isArray(tags) || tags.length > 30 || tags.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 32)) throw new Error(`${label}标签无效`);
-    const difficultyScore = item.difficulty === undefined || item.difficulty === null || typeof item.difficulty === 'string' ? null : item.difficulty;
+    const legacyDifficulty = typeof item.difficulty === 'string' && item.input === undefined && item.variables !== undefined;
+    if (typeof item.difficulty === 'string' && !legacyDifficulty) throw new Error(`${label}难度须为 1–5`);
+    const difficultyScore = legacyDifficulty ? null : item.difficulty == null ? 3 : item.difficulty;
     if (difficultyScore !== null && (!Number.isInteger(difficultyScore) || difficultyScore < 1 || difficultyScore > 5)) throw new Error(`${label}难度须为 1–5`);
     const source = item.source || 'manual';
     if (!sources.has(source)) throw new Error(`${label}来源无效`);
     if (item.expectedTools != null && (!Array.isArray(item.expectedTools) || item.expectedTools.some(tool => typeof tool.name !== 'string' || !tool.name || typeof tool.arguments !== 'object' || tool.arguments === null || Array.isArray(tool.arguments)))) throw new Error(`${label}期望工具调用无效`);
-    return { id: crypto.randomUUID(), key, variables, input, expected, context, tags: [...new Set(tags.map(tag => tag.trim()))], difficultyScore, difficulty: typeof item.difficulty === 'string' ? item.difficulty.slice(0, 50) : difficultyScore === null ? null : String(difficultyScore), category: item.category ? String(item.category).slice(0, 50) : null, source, expectedTools: item.expectedTools ?? null, referenceAnswer: typeof item.referenceAnswer === 'string' ? item.referenceAnswer : expected?.parts.every(part => part.type === 'text') ? expected.parts.map(part => part.text).join('\n') : null };
+    return { id: crypto.randomUUID(), key, variables, input, expected, context, tags: [...new Set(tags.map(tag => tag.trim()))], difficultyScore, difficulty: legacyDifficulty ? item.difficulty.slice(0, 50) : String(difficultyScore), category: item.category ? String(item.category).slice(0, 50) : null, source, expectedTools: item.expectedTools ?? null, referenceAnswer: typeof item.referenceAnswer === 'string' ? item.referenceAnswer : expected?.parts.every(part => part.type === 'text') ? expected.parts.map(part => part.text).join('\n') : null };
   });
 }
 

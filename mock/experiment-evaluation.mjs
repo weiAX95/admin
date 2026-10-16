@@ -69,7 +69,7 @@ export async function syncEvaluationCandidate(client, { sourceType, annotationId
   [uuid(),sourceType,annotationId,sourceEntityId,rating,JSON.stringify(input),JSON.stringify(expected),JSON.stringify(context),tags,status]);
 }
 
-const caseFromRow = row => ({ caseKey: row.case_key, variables: row.variables, input: row.input_payload, expectedOutput: row.expected_payload, context: row.context_payload, tags: row.tags, difficulty: row.difficulty_score ?? row.difficulty, category: row.category, source: row.source, expectedTools: row.expected_tools });
+const caseFromRow = row => ({ caseKey: row.case_key, variables: row.variables, input: row.input_payload, expectedOutput: row.expected_payload, context: row.context_payload, tags: row.tags, difficulty: row.difficulty_score ?? 3, category: row.category ?? (row.difficulty_score == null ? row.difficulty : null), source: row.source, expectedTools: row.expected_tools });
 
 function summary(values) {
   const sorted = values.filter(Number.isFinite).sort((a,b) => a-b);
