@@ -14,7 +14,7 @@ const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队�
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
 const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' };
 const taskStates: Record<string, string> = { todo: '待办', in_progress: '进行中', done: '已完成', blocked: '阻塞' };
-const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用', ANALYSIS_BUDGET_EXCEEDED: '本次分析预算已不足以发起剩余模型调用' };
+const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用', ANALYSIS_BUDGET_EXCEEDED: '本次分析预算已不足以发起剩余模型调用', MODEL_CONNECTION_CHANGED: '模型连接配置已变化，请新建分析' };
 
 export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void }) {
   const canEditTasks = isAdministrator(getStoredUser<AuthUser>());
@@ -232,6 +232,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       { title: '模型', dataIndex: 'model' },
       { title: '状态', render: (_, item: ProjectAnalysisJob) => <Space><Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'canceled' ? 'default' : 'processing'}>{states[item.status]}</Tag><Typography.Text type="secondary">{item.attempts}/{item.maxAttempts} 次</Typography.Text></Space> },
       { title: '覆盖', render: (_, item: ProjectAnalysisJob) => item.status === 'completed' ? `${item.selectedFileCount}/${item.availableFileCount} 文件` : '—' },
+      { title: '复用', render: (_, item: ProjectAnalysisJob) => item.reusedCallCount ? `${item.reusedCallCount} 次调用` : '—' },
       { title: '本次上限', render: (_, item: ProjectAnalysisJob) => `${item.tokenBudget === null ? '系统 token 配额' : `${item.tokenBudget.toLocaleString()} token`} / ${item.costBudgetUsd === null ? '每日费用预算' : `$${item.costBudgetUsd.toFixed(2)}`}` },
       { title: '说明', render: (_, item: ProjectAnalysisJob) => item.errorCode ? errors[item.errorCode] || item.errorCode : '—' },
       { title: '操作', render: (_, item: ProjectAnalysisJob) => <Space size="small">
@@ -252,6 +253,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     {report && <Card size="small" title={`报告 · ${report.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setReport(null)}>关闭</Button>}>
       {report.staleReasons.length > 0 && <Alert type="warning" showIcon message="报告基线已变化，旧建议需重审" description={<Space direction="vertical"><span>{report.staleReasons.join('；')}</span>{reviewScan && reviewModelAvailable ? <Popconfirm title="按当前基线重新分析？" description="会重新调用模型，可能产生费用；旧报告和人工处理记录仍保留。" onConfirm={() => void start(reviewScan.id, report.modelId)}><Button size="small" loading={starting}>重新分析当前扫描</Button></Popconfirm> : <span>{reviewScan ? '原模型当前不可用，请选择其他模型生成报告。' : '请先扫描当前 commit，再生成新报告。'}</span>}</Space>} style={{ marginBottom: 12 }} />}
       {!report.analysisCoverageComplete && <Alert type="warning" showIcon message="本次报告只覆盖部分已扫描内容；未发现实现不代表整个仓库没有实现" style={{ marginBottom: 12 }} />}
+      {report.reusedCalls.length > 0 && <Alert type="info" showIcon message={`复用 ${report.reusedCalls.length} 次已验证的模块输出`} description={<Space wrap>{report.reusedCalls.map(item => <Tag key={item.moduleKey}>{item.moduleKey.startsWith('@cross-module') ? '跨模块综合' : item.moduleKey} · 来源 commit {item.sourceCommitSha?.slice(0, 10) || '未知'}</Tag>)}</Space>} style={{ marginBottom: 12 }} />}
       <Typography.Paragraph><strong>项目目标：</strong>{report.goal}</Typography.Paragraph>
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
       {report.baselineVersionId && <Button size="small" loading={requirementLoading} onClick={() => void showRequirement()}>查看本报告固定的需求正文</Button>}

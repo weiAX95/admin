@@ -268,6 +268,8 @@ flowchart LR
 
 `project_analyses.token_budget` 和 `cost_budget_usd` 由 [112_project_analysis_budgets.sql](../db/migrations/112_project_analysis_budgets.sql) 新增，作为可空的每作业上限；旧作业保持空值。提交与重试先检查预计用量，运行中在每次新模型调用前结合该作业历次实际消费复核，详见[分析预算](project-analysis-budgets.md)。
 
+[114_project_analysis_call_cache.sql](../db/migrations/114_project_analysis_call_cache.sql) 为模块调用增加输入指纹、复用标记、来源报告 ID 与来源 commit，并为已完成调用建立指纹索引；分析头部增加模型连接版本及复用调用数。来源报告 ID 仅用于历史溯源，不设置 SQL 外键，避免旧报告清理后改变已保存的来源记录；当前分析与尝试的原有外键仍生效。详见[分析结果复用](project-analysis-cache.md)。
+
 `project_analysis_flows` 按分析与模块保存模型提出的有序核心流程线索；跨模块流程的 `module_key` 为 `NULL`，其步骤必须引用至少两个不同目录模块。`project_analysis_flow_steps` 保存每个步骤的说明、代码或测试证据类型、文件路径、行号、原文及固定 Git SHA。每一步均需逐字匹配本次进入模型的源码或测试行；文档、目录名及无法定位的文字不能形成流程。流程与其他报告内容在同一事务中保存，任一步校验失败时整份报告不得置为成功。页面展示固定 commit 的行链接，并明确静态线索不是运行验收。`project_analyses.analysis_plan_version` 固定模型调用计划：旧作业保持版本 1 的逐模块分析，新作业使用版本 2，在至少两个模块有源码或测试证据时增加一次跨模块综合调用；该调用也进入调用记录、预算、费用和恢复逻辑。
 
 ## 页面如何读写数据

@@ -69,12 +69,14 @@ export interface ProjectAnalysisJob {
   attempts: number; maxAttempts: number; canceledAt: string | null;
   errorCode: string | null; summary: string | null; selectedFileCount: number;
   availableFileCount: number; analysisCoverageComplete: boolean;
+  reusedCallCount: number;
   tokenBudget: number | null; costBudgetUsd: number | null;
   promptTokens: number | null; completionTokens: number | null; costUsd: number | null;
   createdAt: string; startedAt: string | null; finishedAt: string | null;
 }
 export interface ProjectAnalysisReport extends ProjectAnalysisJob {
   fullName: string; goal: string; requirementBaseline: string; staleReasons: string[];
+  reusedCalls: { moduleKey: string; sourceCommitSha: string | null }[];
   requirements: { id: string; text: string }[];
   modules: { moduleKey: string; indexedCount: number; readCount: number; selectedCount: number; truncatedCount: number; excludedCount: number; failedCount: number; unscannedCount: number; summary: string | null }[];
   flows: { id: string; moduleKey: string | null; title: string; steps: { description: string; evidence: { type: 'code' | 'test'; path: string; line: number; excerpt: string; gitSha: string } }[] }[];
