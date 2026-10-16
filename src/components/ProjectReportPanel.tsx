@@ -7,12 +7,12 @@ import { addProjectFindingFeedback, cancelProjectAnalysis, compareProjectAnalyse
 import ProjectReportComparison from './ProjectReportComparison';
 import { getStoredUser } from '../api/client';
 import { isAdministrator } from '../utils/roles';
+import { orderProjectSuggestions } from '../utils/projectSuggestionOrder';
 import type { AuthUser } from '../types';
 
 const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败', canceled: '已取消' };
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
 const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' };
-const impactOrder = { high: 0, medium: 1, low: 2 };
 const taskStates: Record<string, string> = { todo: '待办', in_progress: '进行中', done: '已完成', blocked: '阻塞' };
 const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用' };
 
@@ -207,6 +207,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   };
   const reviewScan = report && scans.find(scan => scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status));
   const reviewModelAvailable = report && models.some(model => model.id === report.modelId);
+  const suggestionOrder = report ? orderProjectSuggestions(report.suggestions) : null;
   const renderSnapshotTask = (task: ProjectAnalysisReport['linkedTasks'][number]) => <Space key={task.id} size="small" wrap><Tag>{taskStates[task.status] || task.status} · {task.progress === null ? '进度未知' : `${Math.round(task.progress)}%`}</Tag>{task.currentlyAvailable ? <Link to={`/tasks/${task.id}`}>{task.title}</Link> : <Typography.Text type="secondary">{task.title}（当前不可访问）</Typography.Text>}</Space>;
 
   return <Card title="项目分析报告">
@@ -289,10 +290,12 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <Button size="small" onClick={() => { setFeedbackFindingId(finding.id); setFeedbackStatus(finding.feedback[0]?.correctedStatus || finding.status); setFeedbackReason(''); }}>修正判断</Button>
       </Card>) : <Empty description="暂无结论" />}
       <Typography.Title level={5}>学习建议</Typography.Title>
-      {report.suggestions.length ? report.suggestions.slice().sort((a,b) => (a.impact ? impactOrder[a.impact] : 3) - (b.impact ? impactOrder[b.impact] : 3)).map(suggestion => <Card key={suggestion.id} size="small" style={{ marginBottom: 8 }} title={<Space>{suggestion.topic}{suggestion.impact && <Tag color={suggestion.impact === 'high' ? 'red' : suggestion.impact === 'medium' ? 'orange' : 'blue'}>{impactLabels[suggestion.impact]}（模型估计）</Tag>}</Space>}>
+      {suggestionOrder?.hasCycle && <Alert type="warning" showIcon message="学习建议的前置关系存在循环，相关条目仍按影响程度展示，请人工核对" style={{ marginBottom: 12 }} />}
+      {suggestionOrder?.items.length ? suggestionOrder.items.map(suggestion => <Card key={suggestion.id} size="small" style={{ marginBottom: 8 }} title={<Space>{suggestion.topic}{suggestion.impact && <Tag color={suggestion.impact === 'high' ? 'red' : suggestion.impact === 'medium' ? 'orange' : 'blue'}>{impactLabels[suggestion.impact]}（模型估计）</Tag>}</Space>}>
         <Typography.Paragraph>{suggestion.reason}</Typography.Paragraph>
         {suggestion.impactReason && <Typography.Paragraph><strong>影响下一步开发：</strong>{suggestion.impactReason}</Typography.Paragraph>}
         <Typography.Paragraph><strong>前置知识：</strong>{suggestion.prerequisites.length ? suggestion.prerequisites.join('、') : '暂无明确前置知识'}</Typography.Paragraph>
+        {!!suggestionOrder.dependencies.get(suggestion.id)?.length && <Typography.Paragraph type="secondary">先处理本报告建议：{suggestionOrder.dependencies.get(suggestion.id)!.map(item => item.topic).join('、')}</Typography.Paragraph>}
         <Typography.Paragraph><strong>实践：</strong>{suggestion.practice}</Typography.Paragraph>
         <Typography.Paragraph><strong>验收：</strong>{suggestion.acceptance}</Typography.Paragraph>
         {!suggestion.decision && suggestion.possibleDuplicates.length > 0 && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={suggestion.possibleDuplicates.some(item => item.exact) ? '相同建议已创建任务' : '可能已有相关学习任务，请先核对'} description={<Space wrap>{suggestion.possibleDuplicates.map(item => <Link key={item.taskId} to={`/tasks/${item.taskId}`}>{item.title}</Link>)}</Space>} />}
