@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createBatch } from './experiment-platform.mjs';
 import { promptMediaPath } from './prompt-media.mjs';
-import { validateEvaluationCases, referencedAssetIds, caseInputFingerprint } from './evaluation-datasets.mjs';
+import { validateEvaluationCases, prepareEvaluationImportRows, referencedAssetIds, caseInputFingerprint } from './evaluation-datasets.mjs';
 import { BUILT_IN_METRICS, TOKENIZER_VERSION, summarizeEfficiency } from './evaluation-metrics.mjs';
 import { rankModels, validateGoalRanges } from './evaluation-ranking.mjs';
 import { judgeQuality } from './evaluation-judge-quality.mjs';
@@ -12,6 +12,7 @@ import { pythonMetricAvailable } from './evaluation-python-worker.mjs';
 import { degradedRunMetrics } from './evaluation-regression.mjs';
 
 const uuid = () => crypto.randomUUID();
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ok = (data, status = 200) => ({ status, data });
 const fail = (error, status = 400) => ok({ error }, status);
 const allowedTags = new Set(['幻觉','不完整','格式错误','推理错误','完美','偏题','冗余']);
@@ -283,6 +284,43 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
       await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version,goal_ranges,custom_script_id,normalized_regression_threshold) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION,JSON.stringify(goalRanges),body.ruleType==='custom_python'?body.customScriptId:null,normalizedThreshold]);
       return ok({ id, version }, 201);
     }
+  }
+  if (pathname === '/api/evaluation/datasets/import-preview' || pathname === '/api/evaluation/datasets/import') {
+    if (method !== 'POST') return fail('不支持的导入操作',405);
+    const body = await readBody();
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return fail('导入请求无效');
+    if (body.datasetId != null && (typeof body.datasetId !== 'string' || !UUID.test(body.datasetId))) return fail('数据集 ID 无效');
+    if (body.folderId != null && (typeof body.folderId !== 'string' || !UUID.test(body.folderId))) return fail('文件夹 ID 无效');
+    let dataset = null;
+    if (body.datasetId) {
+      dataset = (await client.query('SELECT id,owner_id FROM experiment_datasets WHERE id=$1',[body.datasetId])).rows[0];
+      if (!dataset) return fail('数据集不存在',404);
+      if (!isAdministrator(me) && dataset.owner_id !== me.id) return fail('无权修改数据集',403);
+    } else {
+      if (typeof body.name !== 'string' || !body.name.trim()) return fail('数据集名称为必填');
+      if (body.folderId && !(await client.query('SELECT 1 FROM evaluation_folders WHERE id=$1',[body.folderId])).rowCount) return fail('文件夹不存在',404);
+    }
+    let prepared;
+    try { prepared = prepareEvaluationImportRows(body.rows); }
+    catch (error) { return fail(error instanceof Error ? error.message : '导入行无效'); }
+    const report = { valid: prepared.cases.length, invalid: prepared.errors.length, errors: prepared.errors, globalErrors: [] };
+    if (prepared.cases.length) {
+      try { await validateAssets(client,dataset?.id || uuid(),validatedCases(prepared.cases),me); }
+      catch (error) { report.globalErrors.push(error instanceof Error ? error.message : '媒体附件校验失败'); }
+    }
+    if (pathname.endsWith('/import-preview')) return ok(report);
+    if (report.globalErrors.length || prepared.errors.length && body.skipInvalid !== true || !prepared.cases.length) {
+      return ok({ ...report, imported: 0, skipped: report.invalid,
+        error: report.globalErrors[0] || (!prepared.cases.length ? '没有可导入的用例' : '存在无效行，请修正或选择跳过') },422);
+    }
+    let datasetId = dataset?.id;
+    if (!datasetId) {
+      datasetId = uuid();
+      await client.query('INSERT INTO experiment_datasets(id,name,owner_id,folder_id) VALUES($1,$2,$3,$4)',[datasetId,body.name.trim(),me.id,body.folderId || null]);
+    }
+    const nextVersion = dataset ? (await client.query('SELECT COALESCE(max(version),0)+1 AS next FROM experiment_dataset_versions WHERE dataset_id=$1',[datasetId])).rows[0].next : 1;
+    const version = await insertVersion(client,datasetId,nextVersion,prepared.cases,me);
+    return ok({ ...report, datasetId, version, imported: report.valid, skipped: report.invalid },201);
   }
   if (pathname === '/api/experiment-datasets') {
     if (method === 'GET') return ok({ items: (await client.query('SELECT d.*,v.id AS latest_version_id,v.version AS latest_version FROM experiment_datasets d LEFT JOIN LATERAL (SELECT id,version FROM experiment_dataset_versions WHERE dataset_id=d.id ORDER BY version DESC LIMIT 1) v ON true ORDER BY d.created_at DESC')).rows });

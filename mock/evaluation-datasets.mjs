@@ -44,6 +44,34 @@ export function validateEvaluationCases(cases) {
   });
 }
 
+export function prepareEvaluationImportRows(rows) {
+  if (!Array.isArray(rows) || !rows.length || rows.length > 10000) throw new Error('导入文件须包含 1–10,000 行');
+  const seenRows = new Set();
+  const seenKeys = new Set();
+  const cases = [];
+  const errors = [];
+  for (const row of rows) {
+    const rowNumber = row?.rowNumber;
+    if (!Number.isInteger(rowNumber) || rowNumber < 1 || seenRows.has(rowNumber)) throw new Error('原始行号无效或重复');
+    seenRows.add(rowNumber);
+    try {
+      if (row.parseErrors !== undefined) {
+        if (!Array.isArray(row.parseErrors) || row.parseErrors.length > 10 || row.parseErrors.some(reason => typeof reason !== 'string' || !reason.trim() || reason.length > 200)) throw new Error('解析错误列表无效');
+        if (row.parseErrors.length) throw new Error(row.parseErrors.join('；'));
+      }
+      if (!row.data || typeof row.data !== 'object' || Array.isArray(row.data)) throw new Error('用例字段无效');
+      const normalized = validateEvaluationCases([row.data])[0];
+      if (seenKeys.has(normalized.key)) throw new Error('用例 ID 重复');
+      seenKeys.add(normalized.key);
+      cases.push(row.data);
+    } catch (error) {
+      errors.push({ rowNumber, caseKey: typeof row?.data?.caseKey === 'string' ? row.data.caseKey : null,
+        reason: (error instanceof Error ? error.message : '用例无效').replace(/^第 1 条/, '') });
+    }
+  }
+  return { cases, errors };
+}
+
 export function referencedAssetIds(cases) {
   const ids = new Set();
   const visit = value => { for (const part of value?.parts || []) if (mediaTypes.has(part.type)) ids.add(part.assetId); };

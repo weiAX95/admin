@@ -2,8 +2,9 @@ import { isAdministrator } from '../utils/roles';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { App, Alert, Button, Card, Checkbox, Empty, Form, Input, InputNumber, Modal, Select, Space, Spin, Table, Tag, Typography, Upload } from 'antd';
 import { Link, useSearchParams } from 'react-router-dom';
-import { createDataset, createDatasetSubset, createDatasetVersion, createEvaluationFolder, getDatasetCase, getDatasetVersion, getDatasetVersions, getEvaluationSettings, listDatasets, listEvaluationFolders, updateEvaluationSettings } from '../api/experiment-evaluation';
-import { getStoredUser } from '../api/client';
+import { createDataset, createDatasetSubset, createDatasetVersion, createEvaluationFolder, previewEvaluationImport, confirmEvaluationImport, getDatasetCase, getDatasetVersion, getDatasetVersions, getEvaluationSettings, listDatasets, listEvaluationFolders, updateEvaluationSettings } from '../api/experiment-evaluation';
+import type { EvaluationImportReport, EvaluationImportRequest } from '../api/experiment-evaluation';
+import { ApiError, getStoredUser } from '../api/client';
 import type { Dataset, DatasetCase } from '../api/experiment-evaluation';
 import { EVALUATION_FIELDS, parseEvaluationFile, previewEvaluationRows } from '../utils/evaluationImport';
 import type { EvaluationField, EvaluationImportSource } from '../utils/evaluationImport';
@@ -31,6 +32,9 @@ export default function ExperimentDatasets() {
   const [encoding, setEncoding] = useState<'auto' | 'utf-8' | 'gbk'>('auto');
   const [skipInvalid, setSkipInvalid] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [serverPreviewState, setServerPreview] = useState<{ request: EvaluationImportRequest; report: EvaluationImportReport } | null>(null);
+  const [serverPreviewLoading, setServerPreviewLoading] = useState(false);
+  const [serverPreviewError, setServerPreviewError] = useState('');
   const [subset, setSubset] = useState<{ dataset: Dataset; versionId: string; cases: { case_key: string }[] }>();
   const [subsetKeys, setSubsetKeys] = useState<string[]>([]);
   const [subsetName, setSubsetName] = useState('');
@@ -68,7 +72,24 @@ export default function ExperimentDatasets() {
   }, []);
   useEffect(() => { void load(); }, [load]);
   const preview = useMemo(() => source ? previewEvaluationRows(source) : [], [source]);
-  const invalid = preview.filter(row => row.errors.length).length;
+  const importRequest = useMemo<EvaluationImportRequest>(() => ({
+    rows: preview.map(row => ({ rowNumber: row.rowNumber, data: row.data, parseErrors: row.errors })),
+    ...(target === 'new' ? { name, folderId } : target ? { datasetId: target.id } : {}),
+  }), [preview,target,name,folderId]);
+  const serverPreview = serverPreviewState?.request === importRequest ? serverPreviewState.report : null;
+  const invalid = serverPreview?.invalid ?? preview.filter(row => row.errors.length).length;
+  const serverErrors = useMemo(() => new Map(serverPreview?.errors.map(row => [row.rowNumber,row.reason]) || []), [serverPreview]);
+  useEffect(() => {
+    if (!importOpen || !preview.length) { setServerPreview(null); setServerPreviewLoading(false); setServerPreviewError(''); return; }
+    let active = true;
+    setServerPreview(null); setServerPreviewLoading(true); setServerPreviewError('');
+    const timer = window.setTimeout(() => {
+      void previewEvaluationImport(importRequest).then(report => { if (active) setServerPreview({ request: importRequest, report }); })
+        .catch(cause => { if (active) setServerPreviewError(cause instanceof Error ? cause.message : '服务端校验失败'); })
+        .finally(() => { if (active) setServerPreviewLoading(false); });
+    }, 250);
+    return () => { active = false; window.clearTimeout(timer); };
+  }, [importOpen,preview,importRequest]);
   const folderOptions = folders.map(folder => ({ label: folder.name, value: folder.id }));
   const saveCases = async (cases: DatasetCase[]) => {
     if (target === 'new') await createDataset(name, cases, folderId);
@@ -90,13 +111,17 @@ export default function ExperimentDatasets() {
   };
   const openImport = (item: Dataset | 'new') => { setTarget(item); setImportOpen(true); setSource(undefined); setFile(undefined); setSkipInvalid(false); if (item === 'new') { setName(''); setFolderId(undefined); } };
   const confirmImport = async () => {
-    if (!source || !preview.length) return;
-    if (invalid && !skipInvalid) { message.error('请修正无效行或勾选跳过'); return; }
-    const cases = preview.filter(row => !row.errors.length).map(row => row.data);
-    if (!cases.length) { message.error('没有可导入的用例'); return; }
+    if (!source || !serverPreview || serverPreviewLoading || !serverPreview.valid || serverPreview.globalErrors.length) return;
+    if (serverPreview.invalid && !skipInvalid) { message.error('请修正无效行或勾选跳过'); return; }
     setBusy(true);
-    try { await saveCases(cases); message.success(`已导入 ${cases.length} 条，跳过 ${invalid} 条`); setImportOpen(false); setTarget(null); await load(); }
-    catch (cause) { message.error(cause instanceof Error ? cause.message : '导入失败'); }
+    try {
+      const result = await confirmEvaluationImport({ ...importRequest, skipInvalid });
+      message.success(`已导入 ${result.imported} 条，跳过 ${result.skipped} 条`);
+      setImportOpen(false); setTarget(null); await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.payload && typeof cause.payload === 'object' && 'errors' in cause.payload) setServerPreview({ request: importRequest, report: cause.payload as EvaluationImportReport });
+      message.error(cause instanceof Error ? cause.message : '导入失败');
+    }
     finally { setBusy(false); }
   };
   const showVersions = async (item: Dataset) => {
@@ -120,10 +145,17 @@ export default function ExperimentDatasets() {
       <Form.Item label="用例 JSON" htmlFor="dataset-cases"><Input.TextArea id="dataset-cases" rows={14} value={casesText} onChange={event => setCasesText(event.target.value)} /></Form.Item>
       <Typography.Text type="secondary">字段：caseKey、input、expectedOutput、context、tags、difficulty、source；旧 variables/referenceAnswer 保持兼容。</Typography.Text>
     </Modal>
-    <Modal title="导入评测用例" open={importOpen} onCancel={() => { setImportOpen(false); setTarget(null); }} onOk={() => void confirmImport()} okText="确认导入" okButtonProps={{ loading: busy, disabled: !source || !preview.length || (invalid > 0 && !skipInvalid) }} width={960}>
+    <Modal title="导入评测用例" open={importOpen} onCancel={() => { setImportOpen(false); setTarget(null); }} onOk={() => void confirmImport()} okText="确认导入" okButtonProps={{ loading: busy, disabled: !source || !serverPreview || serverPreviewLoading || !serverPreview.valid || serverPreview.globalErrors.length > 0 || (invalid > 0 && !skipInvalid) }} width={960}>
       {target === 'new' && <><Form.Item label="数据集名称" htmlFor="dataset-import-name"><Input id="dataset-import-name" value={name} onChange={event => setName(event.target.value)} /></Form.Item><Form.Item label="文件夹" htmlFor="dataset-import-folder"><Select id="dataset-import-folder" allowClear value={folderId} onChange={setFolderId} options={folderOptions} /></Form.Item></>}
       <Space wrap><Upload accept=".csv,.jsonl" showUploadList={false} beforeUpload={candidate => { void readFile(candidate); return false; }}><Button>选择 CSV／JSONL</Button></Upload><Select value={encoding} style={{ width: 125 }} options={[{ value: 'auto', label: '自动编码' }, { value: 'utf-8', label: 'UTF-8' }, { value: 'gbk', label: 'GBK' }]} onChange={value => { setEncoding(value); if (file) void readFile(file, value); }} />{file?.name}</Space>
-      {source && <><Typography.Paragraph style={{ marginTop: 16 }}>共 {preview.length} 行，{invalid} 行无效。编码：{source.encoding}</Typography.Paragraph><Space wrap style={{ marginBottom: 12 }}>{source.headers.map((header, index) => <Space key={index} direction="vertical" size={0}><Typography.Text>{header || `第 ${index + 1} 列`}</Typography.Text><Select value={source.mapping[index]} style={{ width: 140 }} options={[{ value: '', label: '忽略' }, ...EVALUATION_FIELDS.map(field => ({ value: field, label: field }))]} onChange={(field: EvaluationField | '') => setSource(current => current ? { ...current, mapping: current.mapping.map((value, i) => i === index ? field : value) } : current)} /></Space>)}</Space><Table size="small" rowKey="rowNumber" dataSource={preview} pagination={{ pageSize: 10 }} rowClassName={row => row.errors.length ? 'evaluation-invalid-row' : ''} columns={[{ title: '原始行', dataIndex: 'rowNumber' }, { title: '用例 ID', render: (_, row) => row.data.caseKey }, { title: '输入', render: (_, row) => typeof row.data.input === 'string' ? row.data.input.slice(0, 100) : '[结构化输入]' }, { title: '校验', render: (_, row) => row.errors.length ? <Tag color="red">{row.errors.join('；')}</Tag> : <Tag color="green">有效</Tag> }]} /><Checkbox checked={skipInvalid} onChange={event => setSkipInvalid(event.target.checked)}>跳过无效行</Checkbox></>}
+      {source && <>
+        <Typography.Paragraph style={{ marginTop: 16 }}>共 {preview.length} 行，{invalid} 行无效。编码：{source.encoding}。{serverPreviewLoading ? '服务端正在校验…' : serverPreview ? '已完成服务端校验' : '等待服务端校验'}</Typography.Paragraph>
+        {serverPreviewError && <Alert type="error" showIcon message={serverPreviewError} style={{ marginBottom: 12 }} />}
+        {serverPreview?.globalErrors.map(reason => <Alert key={reason} type="error" showIcon message={reason} style={{ marginBottom: 12 }} />)}
+        <Space wrap style={{ marginBottom: 12 }}>{source.headers.map((header, index) => <Space key={index} direction="vertical" size={0}><Typography.Text>{header || `第 ${index + 1} 列`}</Typography.Text><Select value={source.mapping[index]} style={{ width: 140 }} options={[{ value: '', label: '忽略' }, ...EVALUATION_FIELDS.map(field => ({ value: field, label: field }))]} onChange={(field: EvaluationField | '') => setSource(current => current ? { ...current, mapping: current.mapping.map((value, i) => i === index ? field : value) } : current)} /></Space>)}</Space>
+        <Table size="small" rowKey="rowNumber" dataSource={preview} pagination={{ pageSize: 10 }} rowClassName={row => row.errors.length || serverErrors.has(row.rowNumber) ? 'evaluation-invalid-row' : ''} columns={[{ title: '原始行', dataIndex: 'rowNumber' }, { title: '用例 ID', render: (_, row) => row.data.caseKey }, { title: '输入', render: (_, row) => typeof row.data.input === 'string' ? row.data.input.slice(0, 100) : '[结构化输入]' }, { title: '校验', render: (_, row) => { const errors = [...new Set([...row.errors,...(serverErrors.has(row.rowNumber) ? [serverErrors.get(row.rowNumber)!] : [])])]; return errors.length ? <Tag color="red">{errors.join('；')}</Tag> : <Tag color="green">有效</Tag>; } }]} />
+        <Checkbox checked={skipInvalid} onChange={event => setSkipInvalid(event.target.checked)}>跳过无效行</Checkbox>
+      </>}
     </Modal>
     <Modal title="从固定版本创建子集" open={Boolean(subset)} onCancel={() => setSubset(undefined)} onOk={() => { if (!subset) return; void createDatasetSubset(subset.dataset.id, subset.versionId, subsetName, subsetKeys, folderId).then(() => { message.success('子集已创建'); setSubset(undefined); return load(); }).catch(cause => message.error(cause.message)); }} okButtonProps={{ disabled: !subsetKeys.length || !subsetName.trim() }} width={720}>
       <Input aria-label="子集名称" value={subsetName} onChange={event => setSubsetName(event.target.value)} style={{ marginBottom: 12 }} /><Select mode="multiple" aria-label="选择用例" maxTagCount="responsive" value={subsetKeys} onChange={setSubsetKeys} options={subset?.cases.map(item => ({ value: item.case_key, label: item.case_key }))} style={{ width: '100%' }} placeholder="选择源版本中的用例" />
