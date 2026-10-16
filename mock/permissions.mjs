@@ -123,6 +123,9 @@ export const PERMISSION_RESOURCES = [
     read: { super_admin: 'own', admin: 'own', member: 'none' }, create: { super_admin: 'own', admin: 'own', member: 'none' },
     update: nobody, delete: nobody, manage: { super_admin: 'own', admin: 'own', member: 'own' },
   } },
+  { id: 'evaluation_folders', label: '评测文件夹', description: '所有登录账号可浏览文件夹；创建、重命名和删除仅管理员可操作。', access: {
+    read: { super_admin: 'all', admin: 'all', member: 'all' }, create: admins, update: admins, delete: admins, manage: nobody,
+  } },
 ];
 
 const byResource = new Map(PERMISSION_RESOURCES.map(resource => [resource.id, resource]));

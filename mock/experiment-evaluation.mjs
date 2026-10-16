@@ -1,4 +1,5 @@
 import { isAdministrator } from './roles.mjs';
+import { canAccess } from './permissions.mjs';
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import { createBatch } from './experiment-platform.mjs';
@@ -224,8 +225,12 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     }
   }
   if (pathname === '/api/evaluation/folders') {
-    if (method === 'GET') return ok({ items: (await client.query('SELECT * FROM evaluation_folders ORDER BY name,id')).rows });
+    if (method === 'GET') {
+      if (!canAccess(me,'evaluation_folders','read')) return fail('无权查看评测文件夹',403);
+      return ok({ items: (await client.query('SELECT * FROM evaluation_folders ORDER BY name,id')).rows });
+    }
     if (method === 'POST') {
+      if (!canAccess(me,'evaluation_folders','create')) return fail('仅管理员可创建评测文件夹',403);
       const body = await readBody();
       if (!String(body.name || '').trim() || String(body.name).length > 120) return fail('文件夹名称须为 1–120 字');
       if (body.parentId && !(await client.query('SELECT 1 FROM evaluation_folders WHERE id=$1', [body.parentId])).rowCount) return fail('父文件夹不存在', 404);
@@ -235,8 +240,9 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     }
   }
   const folderRoute = pathname.match(/^\/api\/evaluation\/folders\/([^/]+)$/);
-  if (folderRoute && isAdministrator(me)) {
+  if (folderRoute) {
     if (method === 'PATCH') {
+      if (!canAccess(me,'evaluation_folders','update')) return fail('仅管理员可管理文件夹',403);
       const body = await readBody();
       if (!String(body.name || '').trim() || String(body.name).length > 120) return fail('文件夹名称须为 1–120 字');
       if (body.parentId) {
@@ -247,11 +253,12 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
       return result.rowCount ? ok(result.rows[0]) : fail('文件夹不存在', 404);
     }
     if (method === 'DELETE') {
+      if (!canAccess(me,'evaluation_folders','delete')) return fail('仅管理员可管理文件夹',403);
       const result = await client.query('DELETE FROM evaluation_folders WHERE id=$1 AND NOT EXISTS(SELECT 1 FROM evaluation_folders WHERE parent_id=$1) AND NOT EXISTS(SELECT 1 FROM experiment_datasets WHERE folder_id=$1) RETURNING id', [folderRoute[1]]);
       return result.rowCount ? ok({ deleted: true }) : fail('文件夹非空或不存在', 409);
     }
   }
-  if (folderRoute) return fail('仅管理员可管理文件夹', 403);
+  if (folderRoute) return fail('不支持的文件夹操作',405);
   if (pathname === '/api/experiment-baselines' && method === 'GET') {
     const datasetVersionId = url.searchParams.get('datasetVersionId');
     const metricVersionId = url.searchParams.get('metricVersionId');
