@@ -23,9 +23,11 @@ export function validateEvaluationCases(cases) {
     const label = `第 ${index + 1} 条`; const key = String(item?.caseKey || '').trim();
     if (!key || key.length > 200 || keys.has(key)) throw new Error(`${label}用例 ID 缺失、过长或重复`);
     keys.add(key);
+    if (item.input == null && item.variables == null) throw new Error(`${label}输入不能为空`);
     const variables = item.variables ?? (item.input === undefined ? null : { question: (typeof item.input === 'string' ? item.input : item.input.parts?.filter(part => part.type === 'text').map(part => part.text).join('\n')) || '' });
     if (!variables || typeof variables !== 'object' || Array.isArray(variables) || Object.values(variables).some(value => typeof value !== 'string')) throw new Error(`${label}变量必须是字符串映射`);
     const input = payload(item.input ?? variables.question ?? '', `${label}输入`);
+    if (input.parts.every(part => part.type === 'text' && !part.text.trim())) throw new Error(`${label}输入不能为空`);
     const expected = item.expectedOutput === undefined ? (item.referenceAnswer === undefined || item.referenceAnswer === null ? null : payload(item.referenceAnswer, `${label}参考答案`, true)) : (item.expectedOutput === null ? null : payload(item.expectedOutput, `${label}参考答案`, true));
     if (item.context !== undefined && !Array.isArray(item.context)) throw new Error(`${label}上下文必须是消息数组`);
     const context = (item.context || []).map((message, i) => {
@@ -39,7 +41,7 @@ export function validateEvaluationCases(cases) {
     if (typeof item.difficulty === 'string' && !legacyDifficulty) throw new Error(`${label}难度须为 1–5`);
     const difficultyScore = legacyDifficulty ? null : item.difficulty == null ? 3 : item.difficulty;
     if (difficultyScore !== null && (!Number.isInteger(difficultyScore) || difficultyScore < 1 || difficultyScore > 5)) throw new Error(`${label}难度须为 1–5`);
-    const source = item.source || 'manual';
+    const source = item.source ?? 'manual';
     if (!sources.has(source)) throw new Error(`${label}来源无效`);
     if (item.expectedTools != null && (!Array.isArray(item.expectedTools) || item.expectedTools.some(tool => typeof tool.name !== 'string' || !tool.name || typeof tool.arguments !== 'object' || tool.arguments === null || Array.isArray(tool.arguments)))) throw new Error(`${label}期望工具调用无效`);
     return { id: crypto.randomUUID(), key, variables, input, expected, context, tags: [...new Set(tags.map(tag => tag.trim()))], difficultyScore, difficulty: legacyDifficulty ? item.difficulty.slice(0, 50) : String(difficultyScore), category: item.category ? String(item.category).slice(0, 50) : null, source, expectedTools: item.expectedTools ?? null, referenceAnswer: typeof item.referenceAnswer === 'string' ? item.referenceAnswer : expected?.parts.every(part => part.type === 'text') ? expected.parts.map(part => part.text).join('\n') : null };

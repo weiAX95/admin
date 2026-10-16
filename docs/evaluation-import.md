@@ -8,4 +8,4 @@
 
 两个接口均接受最多 10,000 行；媒体通过已上传的附件 ID 引用，不把文件内容放入 CSV／JSONL。页面仍保留手工 JSON 新建和新增版本入口。
 
-新用例的 `difficulty` 只接受 1–5 的整数，未填写时按 3 保存；`source` 只接受 `manual`、`session_extract`、`qa_import`，未填写时为 `manual`。旧接口的“仅 `variables`、没有 `input`”用例继续接受历史文字难度；从旧版本创建子集或发布候选时，文字难度映射到 `category`，新版本的数值难度为 3，原版本不被改写。
+每条用例必须有非空输入文本或媒体；旧式 `variables.question` 也可作为输入。新用例的 `difficulty` 只接受 1–5 的整数，未填写时按 3 保存；`source` 只接受 `manual`、`session_extract`、`qa_import`，未填写时为 `manual`。旧接口的“仅 `variables`、没有 `input`”用例继续接受历史文字难度；从旧版本创建子集或发布候选时，文字难度映射到 `category`，新版本的数值难度为 3，原版本不被改写。
