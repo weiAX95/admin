@@ -40,6 +40,8 @@ export interface ProjectScan {
   treeSha: string | null;
   status: 'queued' | 'scanning' | 'completed' | 'partial' | 'failed';
   coverageComplete: boolean;
+  budgetFileLimit: number;
+  budgetByteLimit: number;
   readCount: number;
   attemptedCount: number;
   excludedCount: number;
@@ -54,7 +56,7 @@ export interface ProjectScan {
 }
 export interface ProjectScanFile { path: string; gitSha: string; size: number | null; category: string; status: 'read' | 'excluded' | 'failed' | 'unscanned'; reason: string | null; contentSha256: string | null }
 export const listProjectScans = (repositoryId: string) => http.get<{ items: ProjectScan[] }>(`/project-repositories/${repositoryId}/scans`);
-export const startProjectScan = (repositoryId: string) => http.post<ProjectScan>(`/project-repositories/${repositoryId}/scans`, {});
+export const startProjectScan = (repositoryId: string, budget: { budgetFileLimit: number; budgetByteLimit: number }) => http.post<ProjectScan>(`/project-repositories/${repositoryId}/scans`, budget);
 export const getProjectScan = (repositoryId: string, scanId: string) => http.get<ProjectScan & { files: ProjectScanFile[] }>(`/project-repositories/${repositoryId}/scans/${scanId}`);
 export const getProjectScanFile = (repositoryId: string, scanId: string, path: string) => http.get<{ path: string; gitSha: string; contentSha256: string | null; content: string }>(`/project-repositories/${repositoryId}/scans/${scanId}/files?path=${encodeURIComponent(path)}`);
 

@@ -6,7 +6,7 @@ import { canAccess } from './permissions.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status,error) => ({ status, data: { error } });
-const view = row => ({ id: row.id, repositoryId: row.repository_id, fullName: row.full_name, branch: row.branch, commitSha: row.commit_sha.trim(), treeSha: row.tree_sha?.trim() || null, status: row.status, coverageComplete: row.coverage_complete, readCount: row.read_count, attemptedCount: row.attempted_count, excludedCount: row.excluded_count, failedCount: row.failed_count, unscannedCount: row.unscanned_count, unscannedSubtrees: row.unscanned_subtrees, totalBytes: Number(row.total_bytes), errorCode: row.error_code, createdAt: row.created_at, startedAt: row.started_at, finishedAt: row.finished_at });
+const view = row => ({ id: row.id, repositoryId: row.repository_id, fullName: row.full_name, branch: row.branch, commitSha: row.commit_sha.trim(), treeSha: row.tree_sha?.trim() || null, status: row.status, coverageComplete: row.coverage_complete, budgetFileLimit: row.budget_file_limit, budgetByteLimit: row.budget_byte_limit, readCount: row.read_count, attemptedCount: row.attempted_count, excludedCount: row.excluded_count, failedCount: row.failed_count, unscannedCount: row.unscanned_count, unscannedSubtrees: row.unscanned_subtrees, totalBytes: Number(row.total_bytes), errorCode: row.error_code, createdAt: row.created_at, startedAt: row.started_at, finishedAt: row.finished_at });
 const fileView = row => ({ path: row.path, gitSha: row.git_sha.trim(), size: row.byte_size === null ? null : Number(row.byte_size), category: row.category, status: row.status, reason: row.reason, contentSha256: row.content_sha256?.trim() || null });
 let runTail = Promise.resolve();
 function enqueue(db, id, scanRepository) {
@@ -31,11 +31,11 @@ async function saveResult(db, id, result) {
 }
 
 export async function runProjectScan(db, id, scanRepository = scanPublicRepository) {
-  const job = (await db.query('SELECT id,full_name,commit_sha FROM project_scans WHERE id=$1', [id])).rows[0];
+  const job = (await db.query('SELECT id,full_name,commit_sha,budget_file_limit,budget_byte_limit FROM project_scans WHERE id=$1', [id])).rows[0];
   if (!job) return;
   try {
     await db.query("UPDATE project_scans SET status='scanning',started_at=COALESCE(started_at,now()),error_code=NULL WHERE id=$1", [id]);
-    const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim() });
+    const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim(), maxFiles: job.budget_file_limit, maxTotalBytes: job.budget_byte_limit });
     if (result.commitSha !== job.commit_sha.trim()) throw new Error('COMMIT_MISMATCH');
     await saveResult(db,id,result);
   } catch (error) {
@@ -50,7 +50,7 @@ export async function resumeProjectScans(db, scanRepository = scanPublicReposito
   return jobs.length;
 }
 
-export async function handleProjectScans({ pathname, method, client, me, url, scanRepository = scanPublicRepository, req }) {
+export async function handleProjectScans({ pathname, method, client, me, url, readBody, scanRepository = scanPublicRepository, req }) {
   const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/scans(?:\/([^/]+)(\/files)?)?$/);
   if (!match) return null;
   const [, repositoryId, scanId, fileRoute] = match;
@@ -77,13 +77,17 @@ export async function handleProjectScans({ pathname, method, client, me, url, sc
     return { status: 200, data: { ...view(scan), files: files.map(fileView) } };
   }
   if (method === 'POST' && !scanId) {
+    const body = readBody ? await readBody() : {};
+    const budgetFileLimit = body?.budgetFileLimit ?? 200;
+    const budgetByteLimit = body?.budgetByteLimit ?? 5242880;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || ![50,100,200,500].includes(budgetFileLimit) || ![1048576,5242880,10485760].includes(budgetByteLimit)) return fail(400,'扫描预算无效');
     const id = crypto.randomUUID();
     const pooled = client instanceof pg.Pool;
     const connection = pooled ? await client.connect() : client;
     try {
       await connection.query('BEGIN');
-      await connection.query("INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,status) VALUES($1,$2,$3,$4,$5,'queued')", [id,repositoryId,repository.full_name,repository.branch,repository.commit_sha]);
-      if (req) await appendSecurityAudit(connection,req,me,'create','project_scans',id,{repositoryId,commitSha:repository.commit_sha.trim()});
+      await connection.query("INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,budget_file_limit,budget_byte_limit,status) VALUES($1,$2,$3,$4,$5,$6,$7,'queued')", [id,repositoryId,repository.full_name,repository.branch,repository.commit_sha,budgetFileLimit,budgetByteLimit]);
+      if (req) await appendSecurityAudit(connection,req,me,'create','project_scans',id,{repositoryId,commitSha:repository.commit_sha.trim(),budgetFileLimit,budgetByteLimit});
       await connection.query('COMMIT');
     }
     catch (error) {

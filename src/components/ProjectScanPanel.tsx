@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, App, Button, Card, Modal, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { getProjectScan, getProjectScanFile, listProjectScans, startProjectScan, type ProjectRepository, type ProjectScan, type ProjectScanFile } from '../api/projectRepositories';
 import ProjectReportPanel from './ProjectReportPanel';
 
@@ -11,6 +11,8 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
   const [items, setItems] = useState<ProjectScan[]>([]);
   const [detail, setDetail] = useState<(ProjectScan & { files: ProjectScanFile[] }) | null>(null);
   const [starting, setStarting] = useState(false);
+  const [budgetFileLimit, setBudgetFileLimit] = useState(200);
+  const [budgetByteLimit, setBudgetByteLimit] = useState(5 * 1024 * 1024);
   const [source, setSource] = useState<{ path: string; content: string } | null>(null);
   const [sourceLoading, setSourceLoading] = useState(false);
   const [error, setError] = useState('');
@@ -30,7 +32,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
 
   const start = async () => {
     setStarting(true);
-    try { const scan = await startProjectScan(repository.id); setItems(current => [scan, ...current.filter(item => item.id !== scan.id)]); message.success('扫描任务已提交'); }
+    try { const scan = await startProjectScan(repository.id, { budgetFileLimit, budgetByteLimit }); setItems(current => [scan, ...current.filter(item => item.id !== scan.id)]); message.success('扫描任务已提交'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '扫描提交失败'); }
     finally { setStarting(false); }
   };
@@ -46,18 +48,25 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
     finally { setSourceLoading(false); }
   };
 
-  return <Card title={`${repository.fullName} · 扫描记录`} extra={<Button type="primary" loading={starting} disabled={items.some(item => item.status === 'queued' || item.status === 'scanning')} onClick={() => void start()}>扫描当前 commit</Button>}>
+  return <Card title={`${repository.fullName} · 扫描记录`}>
     <Typography.Paragraph type="secondary">每次扫描固定提交时的 commit SHA。目录和文件读取预算有限；“部分覆盖”表示仍有失败或未扫描范围，不能据此认定项目已完整分析。已读取的文本正文保存在服务端，仅仓库所属账号可按需查看。</Typography.Paragraph>
+    <Space wrap style={{ marginBottom: 16 }}>
+      <Select aria-label="扫描文件上限" value={budgetFileLimit} onChange={setBudgetFileLimit} style={{ width: 170 }} options={[50,100,200,500].map(value => ({ value, label: `最多 ${value} 个文件` }))} />
+      <Select aria-label="扫描读取总量上限" value={budgetByteLimit} onChange={setBudgetByteLimit} style={{ width: 170 }} options={[1,5,10].map(value => ({ value: value * 1024 * 1024, label: `最多读取 ${value} MiB` }))} />
+      <Button type="primary" loading={starting} disabled={items.some(item => item.status === 'queued' || item.status === 'scanning')} onClick={() => void start()}>扫描当前 commit</Button>
+    </Space>
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
     <Table rowKey="id" size="small" dataSource={items} pagination={{ pageSize: 5 }} scroll={{ x: 760 }} columns={[
       { title: '提交时间', dataIndex: 'createdAt', render: value => new Date(value).toLocaleString('zh-CN') },
       { title: 'commit', dataIndex: 'commitSha', render: (value: string) => <code title={value}>{value.slice(0, 10)}</code> },
       { title: '状态', render: (_, item: ProjectScan) => <Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'partial' ? 'warning' : 'processing'}>{statusLabels[item.status]}</Tag> },
       { title: '覆盖', render: (_, item: ProjectScan) => `${item.readCount} 读取 / ${item.excludedCount} 排除 / ${item.failedCount} 失败 / ${item.unscannedCount} 未扫描` },
+      { title: '预算', render: (_, item: ProjectScan) => `${item.budgetFileLimit} 文件 / ${item.budgetByteLimit / 1024 / 1024} MiB` },
       { title: '未扫描目录', dataIndex: 'unscannedSubtrees' },
       { title: '操作', render: (_, item: ProjectScan) => <Button type="link" onClick={() => void show(item.id)}>查看文件</Button> },
     ]} />
     {detail && <Card size="small" title={`文件索引 · ${detail.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setDetail(null)}>关闭</Button>}>
+      <Typography.Paragraph type="secondary">扫描预算：最多 {detail.budgetFileLimit} 个文件、读取 {detail.budgetByteLimit / 1024 / 1024} MiB；实际尝试 {detail.attemptedCount} 个文件、读取 {(detail.totalBytes / 1024 / 1024).toFixed(2)} MiB。单文件上限固定为 256 KiB。</Typography.Paragraph>
       {!detail.coverageComplete && <Alert type="warning" showIcon message="本次为部分覆盖，不能视作完整分析" description={detail.errorCode || (detail.unscannedSubtrees ? `${detail.unscannedSubtrees} 个目录未展开` : undefined)} style={{ marginBottom: 12 }} />}
       <Table rowKey="path" size="small" dataSource={detail.files} pagination={{ pageSize: 10 }} scroll={{ x: 680 }} columns={[
         { title: '路径', dataIndex: 'path' },
