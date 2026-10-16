@@ -293,7 +293,9 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     const baselineDocument = job.baseline_version_id ? (await client.query('SELECT content FROM project_requirement_baselines WHERE id=$1',[job.baseline_version_id])).rows[0]?.content : null;
     const requirements = parseProjectRequirements(baselineDocument);
     const reusedCalls = (await client.query("SELECT module_key,reused_source_commit_sha FROM project_analysis_module_calls WHERE analysis_id=$1 AND attempt=$2 AND reused=true ORDER BY module_key",[analysisId,job.attempts])).rows.map(row => ({ moduleKey: row.module_key, sourceCommitSha: row.reused_source_commit_sha?.trim() || null }));
-    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, requirements, staleReasons, findings, suggestions, modules, flows: [...flowsById.values()], technologies, linkedTasks, reusedCalls } };
+    const scanScope = (await client.query('SELECT s.force_full,s.baseline_commit_sha,s.coverage_complete,b.coverage_complete AS baseline_coverage_complete FROM project_scans s LEFT JOIN project_scans b ON b.id=s.baseline_scan_id WHERE s.id=$1',[job.scan_id])).rows[0];
+    const changeCounts = (await client.query('SELECT change_kind,count(*)::integer AS count FROM project_scan_changes WHERE scan_id=$1 GROUP BY change_kind',[job.scan_id])).rows;
+    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, requirements, staleReasons, findings, suggestions, modules, flows: [...flowsById.values()], technologies, linkedTasks, reusedCalls, scanScope: { forceFull: scanScope?.force_full || false, baselineCommitSha: scanScope?.baseline_commit_sha?.trim() || null, comparisonComplete: Boolean(scanScope?.coverage_complete && scanScope?.baseline_coverage_complete), changes: Object.fromEntries(changeCounts.map(row => [row.change_kind,row.count])) } } };
   }
   if (method === 'POST' && analysisId && action === 'cancel') {
     const pooled = client instanceof pg.Pool;
@@ -391,7 +393,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (!selected.length) return fail(422,'扫描没有可分析的文本，请重新扫描');
   const jobInput = { repository_id: repositoryId, full_name: scan.full_name, branch: scan.branch, commit_sha: scan.commit_sha, goal: repository.goal, requirement_baseline: repository.requirement_baseline, requirement_document: repository.requirement_document, baseline_version_id: repository.baseline_version_id, analysis_plan_version: 2, model_id: model.id, provider: model.provider, api_model: model.api_model, connection_id: modelConnection?.id || null, connection_version: modelConnection?.version || null };
   const plan = modelPlan(jobInput,selected);
-  const reusable = modelConnection ? await findReusableProjectCalls(client,jobInput,plan) : new Map();
+  const reusable = modelConnection && !scan.force_full ? await findReusableProjectCalls(client,jobInput,plan) : new Map();
   const pendingPlan = plan.filter(group => !reusable.has(group.moduleKey));
   const budget = modelBudget(pendingPlan,model);
   if (model.context_window && budget.maxCallTokens > model.context_window) return fail(409,'模型上下文窗口小于本次分析预算');

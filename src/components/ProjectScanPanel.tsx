@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react';
-import { Alert, App, Button, Card, Modal, Select, Space, Table, Tag, Typography } from 'antd';
-import { getProjectScan, getProjectScanFile, listProjectScans, startProjectScan, type ProjectRepository, type ProjectScan, type ProjectScanFile } from '../api/projectRepositories';
+import { Alert, App, Button, Card, Checkbox, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { getProjectScan, getProjectScanFile, listProjectScans, startProjectScan, type ProjectRepository, type ProjectScan, type ProjectScanChange, type ProjectScanFile } from '../api/projectRepositories';
 import ProjectReportPanel from './ProjectReportPanel';
 
 const statusLabels: Record<ProjectScan['status'], string> = { queued: '排队中', scanning: '扫描中', completed: '覆盖完成', partial: '部分覆盖', failed: '扫描失败' };
 const reasonLabels: Record<string, string> = { dependency_or_build: '依赖或构建产物', sensitive_path: '敏感路径', sensitive_content: '疑似密钥内容', non_regular_file: '非普通文件', binary_type: '二进制类型', file_size: '超出单文件限制', scan_budget: '扫描预算用尽', github_rate_limit: 'GitHub 限流', blob_unavailable_or_invalid: '内容不可读取或格式无效' };
+const changeLabels: Record<ProjectScanChange['kind'], string> = { added: '新增', modified: '修改', deleted: '删除', renamed: '重命名' };
 
 export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { repository: ProjectRepository; onAnalysisCompleted: () => void }) {
   const { message } = App.useApp();
   const [items, setItems] = useState<ProjectScan[]>([]);
-  const [detail, setDetail] = useState<(ProjectScan & { files: ProjectScanFile[] }) | null>(null);
+  const [detail, setDetail] = useState<(ProjectScan & { files: ProjectScanFile[]; changes: ProjectScanChange[] }) | null>(null);
   const [starting, setStarting] = useState(false);
   const [budgetFileLimit, setBudgetFileLimit] = useState(200);
   const [budgetByteLimit, setBudgetByteLimit] = useState(5 * 1024 * 1024);
+  const [forceFull, setForceFull] = useState(false);
   const [source, setSource] = useState<{ path: string; content: string } | null>(null);
   const [sourceLoading, setSourceLoading] = useState(false);
   const [error, setError] = useState('');
@@ -32,7 +34,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
 
   const start = async () => {
     setStarting(true);
-    try { const scan = await startProjectScan(repository.id, { budgetFileLimit, budgetByteLimit }); setItems(current => [scan, ...current.filter(item => item.id !== scan.id)]); message.success('扫描任务已提交'); }
+    try { const scan = await startProjectScan(repository.id, { budgetFileLimit, budgetByteLimit, forceFull }); setItems(current => [scan, ...current.filter(item => item.id !== scan.id)]); message.success('扫描任务已提交'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '扫描提交失败'); }
     finally { setStarting(false); }
   };
@@ -53,6 +55,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
     <Space wrap style={{ marginBottom: 16 }}>
       <Select aria-label="扫描文件上限" value={budgetFileLimit} onChange={setBudgetFileLimit} style={{ width: 170 }} options={[50,100,200,500].map(value => ({ value, label: `最多 ${value} 个文件` }))} />
       <Select aria-label="扫描读取总量上限" value={budgetByteLimit} onChange={setBudgetByteLimit} style={{ width: 170 }} options={[1,5,10].map(value => ({ value: value * 1024 * 1024, label: `最多读取 ${value} MiB` }))} />
+      <Checkbox checked={forceFull} onChange={event => setForceFull(event.target.checked)}>全量重扫（不复用缓存）</Checkbox>
       <Button type="primary" loading={starting} disabled={items.some(item => item.status === 'queued' || item.status === 'scanning')} onClick={() => void start()}>扫描当前 commit</Button>
     </Space>
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
@@ -62,12 +65,19 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
       { title: '状态', render: (_, item: ProjectScan) => <Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'partial' ? 'warning' : 'processing'}>{statusLabels[item.status]}</Tag> },
       { title: '覆盖', render: (_, item: ProjectScan) => `${item.readCount} 读取 / ${item.excludedCount} 排除 / ${item.failedCount} 失败 / ${item.unscannedCount} 未扫描` },
       { title: '复用', render: (_, item: ProjectScan) => item.reusedCount ? `${item.reusedCount} 个 blob` : '—' },
+      { title: '模式', render: (_, item: ProjectScan) => item.forceFull ? <Tag color="blue">全量重扫</Tag> : '增量' },
       { title: '预算', render: (_, item: ProjectScan) => `${item.budgetFileLimit} 文件 / ${item.budgetByteLimit / 1024 / 1024} MiB` },
       { title: '未扫描目录', dataIndex: 'unscannedSubtrees' },
       { title: '操作', render: (_, item: ProjectScan) => <Button type="link" onClick={() => void show(item.id)}>查看文件</Button> },
     ]} />
     {detail && <Card size="small" title={`文件索引 · ${detail.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setDetail(null)}>关闭</Button>}>
       <Typography.Paragraph type="secondary">扫描预算：最多 {detail.budgetFileLimit} 个文件、读取 {detail.budgetByteLimit / 1024 / 1024} MiB；实际纳入预算 {detail.attemptedCount} 个文件、{(detail.totalBytes / 1024 / 1024).toFixed(2)} MiB。单文件上限固定为 256 KiB。{detail.reusedCount > 0 && <>其中 {detail.reusedCount} 个文件复用此前扫描的相同 Git blob（来源 commit {detail.cacheSourceCommitSha?.slice(0, 10)}）；本次文件路径和覆盖结论仍按当前 commit 计算。</>}</Typography.Paragraph>
+      <Typography.Paragraph type="secondary">{detail.forceFull ? '全量重扫：重新读取 GitHub blob，后续分析不复用旧报告输出。' : '增量扫描：相同 Git blob 可复用正文，未变化的目录模块可复用已验证输出。'}{detail.baselineCommitSha && ` 差异基线 commit：${detail.baselineCommitSha.slice(0, 10)}。差异只覆盖两次已索引的文件，部分覆盖时不代表完整仓库差异。`}</Typography.Paragraph>
+      {detail.baselineCommitSha && <Table rowKey={change => `${change.kind}:${change.path}`} size="small" dataSource={detail.changes} pagination={{ pageSize: 8 }} scroll={{ x: 600 }} locale={{ emptyText: '已索引文件没有差异' }} columns={[
+        { title: '变化', dataIndex: 'kind', render: (value: ProjectScanChange['kind']) => changeLabels[value] },
+        { title: '当前路径', dataIndex: 'path' },
+        { title: '原路径', dataIndex: 'oldPath', render: (value: string | null) => value || '—' },
+      ]} />}
       {!detail.coverageComplete && <Alert type="warning" showIcon message="本次为部分覆盖，不能视作完整分析" description={detail.errorCode || (detail.unscannedSubtrees ? `${detail.unscannedSubtrees} 个目录未展开` : undefined)} style={{ marginBottom: 12 }} />}
       <Table rowKey="path" size="small" dataSource={detail.files} pagination={{ pageSize: 10 }} scroll={{ x: 680 }} columns={[
         { title: '路径', dataIndex: 'path' },

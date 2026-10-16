@@ -1,12 +1,13 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { scanPublicRepository } from './project-scan.mjs';
+import { compareProjectScanFiles } from './project-scan-changes.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status,error) => ({ status, data: { error } });
-const view = row => ({ id: row.id, repositoryId: row.repository_id, fullName: row.full_name, branch: row.branch, commitSha: row.commit_sha.trim(), treeSha: row.tree_sha?.trim() || null, status: row.status, coverageComplete: row.coverage_complete, budgetFileLimit: row.budget_file_limit, budgetByteLimit: row.budget_byte_limit, readCount: row.read_count, attemptedCount: row.attempted_count, reusedCount: row.reused_count, cacheSourceCommitSha: row.cache_source_commit_sha?.trim() || null, excludedCount: row.excluded_count, failedCount: row.failed_count, unscannedCount: row.unscanned_count, unscannedSubtrees: row.unscanned_subtrees, totalBytes: Number(row.total_bytes), errorCode: row.error_code, createdAt: row.created_at, startedAt: row.started_at, finishedAt: row.finished_at });
+const view = row => ({ id: row.id, repositoryId: row.repository_id, fullName: row.full_name, branch: row.branch, commitSha: row.commit_sha.trim(), treeSha: row.tree_sha?.trim() || null, status: row.status, coverageComplete: row.coverage_complete, forceFull: row.force_full, baselineCommitSha: row.baseline_commit_sha?.trim() || null, budgetFileLimit: row.budget_file_limit, budgetByteLimit: row.budget_byte_limit, readCount: row.read_count, attemptedCount: row.attempted_count, reusedCount: row.reused_count, cacheSourceCommitSha: row.cache_source_commit_sha?.trim() || null, excludedCount: row.excluded_count, failedCount: row.failed_count, unscannedCount: row.unscanned_count, unscannedSubtrees: row.unscanned_subtrees, totalBytes: Number(row.total_bytes), errorCode: row.error_code, createdAt: row.created_at, startedAt: row.started_at, finishedAt: row.finished_at });
 const fileView = row => ({ path: row.path, gitSha: row.git_sha.trim(), size: row.byte_size === null ? null : Number(row.byte_size), category: row.category, status: row.status, reason: row.reason, contentSha256: row.content_sha256?.trim() || null });
 let runTail = Promise.resolve();
 function enqueue(db, id, scanRepository) {
@@ -15,7 +16,7 @@ function enqueue(db, id, scanRepository) {
   return current;
 }
 
-async function saveResult(db, id, result) {
+async function saveResult(db, id, result, source, changes) {
   const pooled = db instanceof pg.Pool;
   const client = pooled ? await db.connect() : db;
   try {
@@ -24,27 +25,31 @@ async function saveResult(db, id, result) {
     for (const file of result.files) {
       await client.query('INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,reason,content_sha256,content) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [id,file.path,file.gitSha,file.size,file.category,file.status,file.reason || null,file.contentSha256 || null,file.content ?? null]);
     }
-    await client.query('UPDATE project_scans SET tree_sha=$2,status=$3,coverage_complete=$4,read_count=$5,attempted_count=$6,reused_count=$7,cache_source_commit_sha=$8,excluded_count=$9,failed_count=$10,unscanned_count=$11,unscanned_subtrees=$12,total_bytes=$13,error_code=NULL,finished_at=now() WHERE id=$1', [id,result.treeSha,result.coverageComplete ? 'completed' : 'partial',result.coverageComplete,result.readCount,result.attemptedCount,result.reusedCount || 0,result.reusedCount ? result.cacheSourceCommitSha : null,result.excludedCount,result.failedCount,result.unscannedCount,result.unscannedSubtrees,result.totalBytes]);
+    await client.query('DELETE FROM project_scan_changes WHERE scan_id=$1', [id]);
+    for (const [position, change] of changes.entries()) await client.query('INSERT INTO project_scan_changes(scan_id,position,change_kind,path,old_path,old_git_sha,new_git_sha) VALUES($1,$2,$3,$4,$5,$6,$7)', [id,position,change.kind,change.path,change.oldPath,change.oldGitSha,change.newGitSha]);
+    await client.query('UPDATE project_scans SET tree_sha=$2,status=$3,coverage_complete=$4,baseline_scan_id=$5,baseline_commit_sha=$6,read_count=$7,attempted_count=$8,reused_count=$9,cache_source_commit_sha=$10,excluded_count=$11,failed_count=$12,unscanned_count=$13,unscanned_subtrees=$14,total_bytes=$15,error_code=NULL,finished_at=now() WHERE id=$1', [id,result.treeSha,result.coverageComplete ? 'completed' : 'partial',result.coverageComplete,source?.id || null,source?.commit_sha?.trim() || null,result.readCount,result.attemptedCount,result.reusedCount || 0,result.reusedCount ? result.cacheSourceCommitSha : null,result.excludedCount,result.failedCount,result.unscannedCount,result.unscannedSubtrees,result.totalBytes]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { if (pooled) client.release(); }
 }
 
 export async function runProjectScan(db, id, scanRepository = scanPublicRepository) {
-  const job = (await db.query('SELECT id,repository_id,full_name,commit_sha,created_at,budget_file_limit,budget_byte_limit FROM project_scans WHERE id=$1', [id])).rows[0];
+  const job = (await db.query('SELECT id,repository_id,full_name,commit_sha,created_at,budget_file_limit,budget_byte_limit,force_full FROM project_scans WHERE id=$1', [id])).rows[0];
   if (!job) return;
   try {
     await db.query("UPDATE project_scans SET status='scanning',started_at=COALESCE(started_at,now()),error_code=NULL WHERE id=$1", [id]);
     const source = (await db.query("SELECT id,commit_sha FROM project_scans WHERE repository_id=$1 AND id<>$2 AND created_at<$3 AND status IN ('completed','partial') ORDER BY created_at DESC,id DESC LIMIT 1", [job.repository_id,id,job.created_at])).rows[0];
     const cachedBlobs = new Map();
-    if (source) {
+    if (source && !job.force_full) {
       const rows = (await db.query("SELECT git_sha,content_sha256,content FROM project_scan_files WHERE scan_id=$1 AND status='read' AND content IS NOT NULL AND content_sha256 IS NOT NULL LIMIT 5000", [source.id])).rows;
       for (const row of rows) cachedBlobs.set(row.git_sha.trim().toLowerCase(),{ content: row.content, contentSha256: row.content_sha256.trim() });
     }
     const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim(), cachedBlobs, maxFiles: job.budget_file_limit, maxTotalBytes: job.budget_byte_limit });
     if (result.commitSha !== job.commit_sha.trim()) throw new Error('COMMIT_MISMATCH');
     result.cacheSourceCommitSha = source?.commit_sha?.trim() || null;
-    await saveResult(db,id,result);
+    const sourceFiles = source ? (await db.query('SELECT path,git_sha FROM project_scan_files WHERE scan_id=$1 ORDER BY path LIMIT 5000',[source.id])).rows.map(row => ({ path: row.path, gitSha: row.git_sha.trim() })) : null;
+    const changes = compareProjectScanFiles(sourceFiles,result.files);
+    await saveResult(db,id,result,source,changes);
   } catch (error) {
     const errorCode = error.status === 403 || error.status === 429 ? 'GITHUB_RATE_LIMIT' : error.message === 'COMMIT_MISMATCH' ? 'COMMIT_MISMATCH' : 'SCAN_FAILED';
     await db.query("UPDATE project_scans SET status='failed',coverage_complete=false,error_code=$2,finished_at=now() WHERE id=$1", [id,errorCode]);
@@ -81,27 +86,29 @@ export async function handleProjectScans({ pathname, method, client, me, url, re
     const scan = (await client.query('SELECT * FROM project_scans WHERE id=$1 AND repository_id=$2', [scanId,repositoryId])).rows[0];
     if (!scan) return fail(404,'扫描不存在');
     const files = (await client.query('SELECT * FROM project_scan_files WHERE scan_id=$1 ORDER BY path LIMIT 5000', [scanId])).rows;
-    return { status: 200, data: { ...view(scan), files: files.map(fileView) } };
+    const changes = (await client.query('SELECT change_kind,path,old_path,old_git_sha,new_git_sha FROM project_scan_changes WHERE scan_id=$1 ORDER BY position LIMIT 10000',[scanId])).rows.map(row => ({ kind: row.change_kind, path: row.path, oldPath: row.old_path, oldGitSha: row.old_git_sha?.trim() || null, newGitSha: row.new_git_sha?.trim() || null }));
+    return { status: 200, data: { ...view(scan), files: files.map(fileView), changes } };
   }
   if (method === 'POST' && !scanId) {
     const body = readBody ? await readBody() : {};
     const budgetFileLimit = body?.budgetFileLimit ?? 200;
     const budgetByteLimit = body?.budgetByteLimit ?? 5242880;
-    if (!body || typeof body !== 'object' || Array.isArray(body) || ![50,100,200,500].includes(budgetFileLimit) || ![1048576,5242880,10485760].includes(budgetByteLimit)) return fail(400,'扫描预算无效');
+    const forceFull = body?.forceFull ?? false;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || ![50,100,200,500].includes(budgetFileLimit) || ![1048576,5242880,10485760].includes(budgetByteLimit) || typeof forceFull !== 'boolean') return fail(400,'扫描预算或模式无效');
     const id = crypto.randomUUID();
     const pooled = client instanceof pg.Pool;
     const connection = pooled ? await client.connect() : client;
     try {
       await connection.query('BEGIN');
-      await connection.query("INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,budget_file_limit,budget_byte_limit,status) VALUES($1,$2,$3,$4,$5,$6,$7,'queued')", [id,repositoryId,repository.full_name,repository.branch,repository.commit_sha,budgetFileLimit,budgetByteLimit]);
-      if (req) await appendSecurityAudit(connection,req,me,'create','project_scans',id,{repositoryId,commitSha:repository.commit_sha.trim(),budgetFileLimit,budgetByteLimit});
+      await connection.query("INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,budget_file_limit,budget_byte_limit,force_full,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,'queued')", [id,repositoryId,repository.full_name,repository.branch,repository.commit_sha,budgetFileLimit,budgetByteLimit,forceFull]);
+      if (req) await appendSecurityAudit(connection,req,me,'create','project_scans',id,{repositoryId,commitSha:repository.commit_sha.trim(),budgetFileLimit,budgetByteLimit,forceFull});
       await connection.query('COMMIT');
     }
     catch (error) {
       await connection.query('ROLLBACK').catch(() => undefined);
       if (error.code !== '23505') throw error;
       const active = (await client.query("SELECT * FROM project_scans WHERE repository_id=$1 AND commit_sha=$2 AND status IN ('queued','scanning') ORDER BY created_at LIMIT 1", [repositoryId,repository.commit_sha])).rows[0];
-      return active ? { status: 202, data: view(active) } : fail(409,'扫描任务正在变化，请重试');
+      return active && active.force_full === forceFull ? { status: 202, data: view(active) } : fail(409,'同一 commit 已有不同模式的扫描任务，请稍后重试');
     }
     finally { if (pooled) connection.release(); }
     void enqueue(client,id,scanRepository);

@@ -40,6 +40,8 @@ export interface ProjectScan {
   treeSha: string | null;
   status: 'queued' | 'scanning' | 'completed' | 'partial' | 'failed';
   coverageComplete: boolean;
+  forceFull: boolean;
+  baselineCommitSha: string | null;
   budgetFileLimit: number;
   budgetByteLimit: number;
   readCount: number;
@@ -58,8 +60,9 @@ export interface ProjectScan {
 }
 export interface ProjectScanFile { path: string; gitSha: string; size: number | null; category: string; status: 'read' | 'excluded' | 'failed' | 'unscanned'; reason: string | null; contentSha256: string | null }
 export const listProjectScans = (repositoryId: string) => http.get<{ items: ProjectScan[] }>(`/project-repositories/${repositoryId}/scans`);
-export const startProjectScan = (repositoryId: string, budget: { budgetFileLimit: number; budgetByteLimit: number }) => http.post<ProjectScan>(`/project-repositories/${repositoryId}/scans`, budget);
-export const getProjectScan = (repositoryId: string, scanId: string) => http.get<ProjectScan & { files: ProjectScanFile[] }>(`/project-repositories/${repositoryId}/scans/${scanId}`);
+export type ProjectScanChange = { kind: 'added' | 'modified' | 'deleted' | 'renamed'; path: string; oldPath: string | null; oldGitSha: string | null; newGitSha: string | null };
+export const startProjectScan = (repositoryId: string, budget: { budgetFileLimit: number; budgetByteLimit: number; forceFull: boolean }) => http.post<ProjectScan>(`/project-repositories/${repositoryId}/scans`, budget);
+export const getProjectScan = (repositoryId: string, scanId: string) => http.get<ProjectScan & { files: ProjectScanFile[]; changes: ProjectScanChange[] }>(`/project-repositories/${repositoryId}/scans/${scanId}`);
 export const getProjectScanFile = (repositoryId: string, scanId: string, path: string) => http.get<{ path: string; gitSha: string; contentSha256: string | null; content: string }>(`/project-repositories/${repositoryId}/scans/${scanId}/files?path=${encodeURIComponent(path)}`);
 
 export interface ProjectAnalysisJob {
@@ -77,6 +80,7 @@ export interface ProjectAnalysisJob {
 export interface ProjectAnalysisReport extends ProjectAnalysisJob {
   fullName: string; goal: string; requirementBaseline: string; staleReasons: string[];
   reusedCalls: { moduleKey: string; sourceCommitSha: string | null }[];
+  scanScope: { forceFull: boolean; baselineCommitSha: string | null; comparisonComplete: boolean; changes: Partial<Record<ProjectScanChange['kind'], number>> };
   requirements: { id: string; text: string }[];
   modules: { moduleKey: string; indexedCount: number; readCount: number; selectedCount: number; truncatedCount: number; excludedCount: number; failedCount: number; unscannedCount: number; summary: string | null }[];
   flows: { id: string; moduleKey: string | null; title: string; steps: { description: string; evidence: { type: 'code' | 'test'; path: string; line: number; excerpt: string; gitSha: string } }[] }[];
