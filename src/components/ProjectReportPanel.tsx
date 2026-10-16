@@ -274,7 +274,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       ]} style={{ marginBottom: 16 }} /> : <Typography.Paragraph type="secondary">此报告创建时尚未记录模块覆盖信息</Typography.Paragraph>}
       <Typography.Title level={5}>核心流程线索</Typography.Title>
       <Typography.Paragraph type="secondary">每个步骤都来自本次固定 commit 的代码或测试行；静态阅读不能证明流程已在运行环境通过。</Typography.Paragraph>
-      {report.flows.length ? report.flows.map(flow => <Card key={flow.id} size="small" title={<Space>{flow.title}<Tag>{flow.moduleKey}</Tag></Space>} style={{ marginBottom: 8 }}>
+      {report.flows.length ? report.flows.map(flow => <Card key={flow.id} size="small" title={<Space>{flow.title}<Tag color={flow.moduleKey ? undefined : 'purple'}>{flow.moduleKey || '跨模块线索'}</Tag></Space>} style={{ marginBottom: 8 }}>
         <ol style={{ margin: 0, paddingLeft: 20 }}>{flow.steps.map((step,index) => <li key={`${flow.id}-${index}`} style={{ marginBottom: 10 }}>
           <Typography.Text>{step.description}</Typography.Text><br />
           <Typography.Text type="secondary">{step.evidence.type === 'test' ? '测试证据' : '代码证据'}：</Typography.Text>

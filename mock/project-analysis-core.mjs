@@ -176,6 +176,48 @@ export function groupProjectEvidence(selectedFiles) {
   return [...groups].map(([moduleKey,files]) => ({ moduleKey, files }));
 }
 
+export function selectCrossModuleEvidence(selectedFiles) {
+  const files = [];
+  for (const group of groupProjectEvidence(selectedFiles)) {
+    for (const file of group.files) {
+      if (!['source', 'test'].includes(file.category)) continue;
+      const lines = [];
+      let length = 0;
+      for (const line of file.lines.slice(0, 30)) {
+        if (length + line.length + 8 > 1200) break;
+        lines.push(line);
+        length += line.length + 8;
+      }
+      if (lines.length) {
+        files.push({ ...file, lines, numberedContent: lines.map((line, index) => `${index + 1}: ${line}`).join('\n') });
+        break;
+      }
+    }
+  }
+  return files;
+}
+
+export function validateCrossModuleFlows(raw, selectedFiles) {
+  let value;
+  try { value = JSON.parse(raw); } catch { throw new Error('跨模块流程不是有效 JSON'); }
+  if (!exactKeys(value, ['flows']) || !Array.isArray(value.flows) || value.flows.length > 2) throw new Error('跨模块流程结构无效');
+  const byPath = new Map(selectedFiles.map(file => [file.path, file]));
+  return value.flows.map(flow => {
+    if (!exactKeys(flow, ['title', 'steps']) || !boundedText(flow.title, 160) || !Array.isArray(flow.steps) || flow.steps.length < 2 || flow.steps.length > 5) throw new Error('跨模块流程步骤无效');
+    const modules = new Set();
+    const steps = flow.steps.map(step => {
+      if (!exactKeys(step, ['description', 'evidence']) || !boundedText(step.description, 300) || !exactKeys(step.evidence, ['path', 'line', 'excerpt'])) throw new Error('跨模块流程证据结构无效');
+      const file = byPath.get(step.evidence.path);
+      const line = step.evidence.line;
+      if (!file || !Number.isInteger(line) || line < 1 || line > file.lines.length || !boundedText(step.evidence.excerpt, 500) || file.lines[line - 1].trim() !== step.evidence.excerpt.trim()) throw new Error('跨模块流程证据未匹配本次输入的源码或测试行');
+      modules.add(projectModuleKey(file.path));
+      return { description: step.description.trim(), evidence: { path: file.path, line, excerpt: step.evidence.excerpt, type: file.category === 'test' ? 'test' : 'code', gitSha: file.gitSha } };
+    });
+    if (modules.size < 2) throw new Error('跨模块流程须包含至少两个目录模块的证据');
+    return { title: flow.title.trim(), moduleKey: null, steps };
+  });
+}
+
 export function mergeProjectModuleReports(results) {
   const findings = [], suggestions = [], flows = [];
   for (const { moduleKey, report } of results) {

@@ -72,7 +72,7 @@ export interface ProjectAnalysisReport extends ProjectAnalysisJob {
   fullName: string; goal: string; requirementBaseline: string; staleReasons: string[];
   requirements: { id: string; text: string }[];
   modules: { moduleKey: string; indexedCount: number; readCount: number; selectedCount: number; truncatedCount: number; excludedCount: number; failedCount: number; unscannedCount: number; summary: string | null }[];
-  flows: { id: string; moduleKey: string; title: string; steps: { description: string; evidence: { type: 'code' | 'test'; path: string; line: number; excerpt: string; gitSha: string } }[] }[];
+  flows: { id: string; moduleKey: string | null; title: string; steps: { description: string; evidence: { type: 'code' | 'test'; path: string; line: number; excerpt: string; gitSha: string } }[] }[];
   technologies: { name: string; packageName: string; evidence: { path: string; line: number; excerpt: string; gitSha: string } }[];
   linkedTasks: { id: string; requirementId: string | null; title: string; status: string; progress: number | null; ownerId: string | null; taskVersion: number | null; capturedAt: string; currentlyAvailable: boolean }[];
   findings: { id: string; requirementId: string | null; moduleKey: string | null; title: string; status: 'implemented' | 'partial' | 'not_found' | 'unverified'; detail: string; evidence: null | { type: 'code' | 'test' | 'document'; path: string; line: number; excerpt: string; gitSha: string }; feedback: { id: string; correctedStatus: 'implemented' | 'partial' | 'not_found' | 'unverified'; reason: string; author: string; createdAt: string }[] }[];
