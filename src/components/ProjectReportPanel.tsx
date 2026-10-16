@@ -14,7 +14,7 @@ const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队�
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
 const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' };
 const taskStates: Record<string, string> = { todo: '待办', in_progress: '进行中', done: '已完成', blocked: '阻塞' };
-const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用' };
+const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用', ANALYSIS_BUDGET_EXCEEDED: '本次分析预算已不足以发起剩余模型调用' };
 
 export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void }) {
   const canEditTasks = isAdministrator(getStoredUser<AuthUser>());
@@ -23,6 +23,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [scanId, setScanId] = useState('');
   const [modelId, setModelId] = useState('');
+  const [tokenBudget, setTokenBudget] = useState<number | null>(null);
+  const [costBudgetUsd, setCostBudgetUsd] = useState<number | null>(null);
   const [report, setReport] = useState<ProjectAnalysisReport | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -102,7 +104,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     if (!selectedScan || !selectedModel) return;
     setStarting(true);
     try {
-      const job = await startProjectAnalysis(repository.id, selectedScan, selectedModel);
+      const job = await startProjectAnalysis(repository.id, selectedScan, selectedModel, { tokenBudget, costBudgetUsd });
       setItems(current => [job, ...current.filter(item => item.id !== job.id)]);
       message.success('分析任务已提交');
     } catch (cause) { setError(cause instanceof Error ? cause.message : '分析提交失败'); }
@@ -215,8 +217,11 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     <Space wrap style={{ marginBottom: 16 }}>
       <Select aria-label="扫描记录" placeholder="选择扫描记录" value={scanId || undefined} onChange={setScanId} style={{ minWidth: 230 }} options={scans.filter(scan => ['completed', 'partial'].includes(scan.status)).map(scan => ({ value: scan.id, label: `${scan.commitSha.slice(0, 10)} · ${scan.status === 'partial' ? '部分覆盖' : '完整覆盖'}` }))} />
       <Select aria-label="分析模型" placeholder="选择分析模型" value={modelId || undefined} onChange={setModelId} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
+      <Select aria-label="分析 token 上限" value={tokenBudget} onChange={setTokenBudget} style={{ minWidth: 170 }} options={[{ value: null, label: 'token：仅系统配额' }, ...[30000,60000,120000].map(value => ({ value, label: `${value.toLocaleString()} token` }))]} />
+      <Select aria-label="单次分析费用上限" value={costBudgetUsd} onChange={setCostBudgetUsd} style={{ minWidth: 170 }} options={[{ value: null, label: '费用：仅每日预算' }, ...[0.1,0.5,1,5].map(value => ({ value, label: `最多 $${value.toFixed(2)}` }))]} />
       <Button type="primary" disabled={!scanId || !modelId || items.some(item => item.scanId === scanId && item.modelId === modelId && ['queued', 'analyzing'].includes(item.status))} loading={starting} onClick={() => void start()}>生成报告</Button>
     </Space>
+    <Typography.Paragraph type="secondary">可选上限会固定到分析任务，重试累计计算已用量。提交前按输入字符保守预留 token 和费用；每次继续调用前重新核对，已发出的单次模型调用仍可能产生超出预估的用量。</Typography.Paragraph>
     {!models.length && <Alert type="info" showIcon message="暂无可用的文本模型；请先在模型中心配置模型、连接和预算" style={{ marginBottom: 16 }} />}
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
     <Table rowKey="id" size="small" dataSource={items} pagination={{ pageSize: 5 }} scroll={{ x: 720 }} columns={[
@@ -227,6 +232,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       { title: '模型', dataIndex: 'model' },
       { title: '状态', render: (_, item: ProjectAnalysisJob) => <Space><Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'canceled' ? 'default' : 'processing'}>{states[item.status]}</Tag><Typography.Text type="secondary">{item.attempts}/{item.maxAttempts} 次</Typography.Text></Space> },
       { title: '覆盖', render: (_, item: ProjectAnalysisJob) => item.status === 'completed' ? `${item.selectedFileCount}/${item.availableFileCount} 文件` : '—' },
+      { title: '本次上限', render: (_, item: ProjectAnalysisJob) => `${item.tokenBudget === null ? '系统 token 配额' : `${item.tokenBudget.toLocaleString()} token`} / ${item.costBudgetUsd === null ? '每日费用预算' : `$${item.costBudgetUsd.toFixed(2)}`}` },
       { title: '说明', render: (_, item: ProjectAnalysisJob) => item.errorCode ? errors[item.errorCode] || item.errorCode : '—' },
       { title: '操作', render: (_, item: ProjectAnalysisJob) => <Space size="small">
         {item.status === 'completed' && <Button type="link" onClick={() => void show(item.id)}>查看报告</Button>}

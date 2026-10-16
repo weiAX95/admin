@@ -67,6 +67,7 @@ export interface ProjectAnalysisJob {
   attempts: number; maxAttempts: number; canceledAt: string | null;
   errorCode: string | null; summary: string | null; selectedFileCount: number;
   availableFileCount: number; analysisCoverageComplete: boolean;
+  tokenBudget: number | null; costBudgetUsd: number | null;
   promptTokens: number | null; completionTokens: number | null; costUsd: number | null;
   createdAt: string; startedAt: string | null; finishedAt: string | null;
 }
@@ -88,7 +89,7 @@ export interface ProjectReportComparison {
   suggestions: { added: { topic: string; practice: string }[]; removed: { topic: string; practice: string }[] };
 }
 export const compareProjectAnalyses = (repositoryId: string, olderId: string, newerId: string) => http.get<ProjectReportComparison>(`/project-repositories/${repositoryId}/analyses/compare/${olderId}/${newerId}`);
-export const startProjectAnalysis = (repositoryId: string, scanId: string, modelId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses`, { scanId, modelId });
+export const startProjectAnalysis = (repositoryId: string, scanId: string, modelId: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses`, { scanId, modelId, ...budget });
 export const getProjectAnalysis = (repositoryId: string, analysisId: string) => http.get<ProjectAnalysisReport>(`/project-repositories/${repositoryId}/analyses/${analysisId}`);
 export const cancelProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/cancel`, {});
 export const retryProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/retry`, {});
