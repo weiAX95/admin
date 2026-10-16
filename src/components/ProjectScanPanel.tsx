@@ -61,12 +61,13 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
       { title: 'commit', dataIndex: 'commitSha', render: (value: string) => <code title={value}>{value.slice(0, 10)}</code> },
       { title: '状态', render: (_, item: ProjectScan) => <Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'partial' ? 'warning' : 'processing'}>{statusLabels[item.status]}</Tag> },
       { title: '覆盖', render: (_, item: ProjectScan) => `${item.readCount} 读取 / ${item.excludedCount} 排除 / ${item.failedCount} 失败 / ${item.unscannedCount} 未扫描` },
+      { title: '复用', render: (_, item: ProjectScan) => item.reusedCount ? `${item.reusedCount} 个 blob` : '—' },
       { title: '预算', render: (_, item: ProjectScan) => `${item.budgetFileLimit} 文件 / ${item.budgetByteLimit / 1024 / 1024} MiB` },
       { title: '未扫描目录', dataIndex: 'unscannedSubtrees' },
       { title: '操作', render: (_, item: ProjectScan) => <Button type="link" onClick={() => void show(item.id)}>查看文件</Button> },
     ]} />
     {detail && <Card size="small" title={`文件索引 · ${detail.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setDetail(null)}>关闭</Button>}>
-      <Typography.Paragraph type="secondary">扫描预算：最多 {detail.budgetFileLimit} 个文件、读取 {detail.budgetByteLimit / 1024 / 1024} MiB；实际尝试 {detail.attemptedCount} 个文件、读取 {(detail.totalBytes / 1024 / 1024).toFixed(2)} MiB。单文件上限固定为 256 KiB。</Typography.Paragraph>
+      <Typography.Paragraph type="secondary">扫描预算：最多 {detail.budgetFileLimit} 个文件、读取 {detail.budgetByteLimit / 1024 / 1024} MiB；实际纳入预算 {detail.attemptedCount} 个文件、{(detail.totalBytes / 1024 / 1024).toFixed(2)} MiB。单文件上限固定为 256 KiB。{detail.reusedCount > 0 && <>其中 {detail.reusedCount} 个文件复用此前扫描的相同 Git blob（来源 commit {detail.cacheSourceCommitSha?.slice(0, 10)}）；本次文件路径和覆盖结论仍按当前 commit 计算。</>}</Typography.Paragraph>
       {!detail.coverageComplete && <Alert type="warning" showIcon message="本次为部分覆盖，不能视作完整分析" description={detail.errorCode || (detail.unscannedSubtrees ? `${detail.unscannedSubtrees} 个目录未展开` : undefined)} style={{ marginBottom: 12 }} />}
       <Table rowKey="path" size="small" dataSource={detail.files} pagination={{ pageSize: 10 }} scroll={{ x: 680 }} columns={[
         { title: '路径', dataIndex: 'path' },

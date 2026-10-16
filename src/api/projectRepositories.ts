@@ -44,6 +44,8 @@ export interface ProjectScan {
   budgetByteLimit: number;
   readCount: number;
   attemptedCount: number;
+  reusedCount: number;
+  cacheSourceCommitSha: string | null;
   excludedCount: number;
   failedCount: number;
   unscannedCount: number;
