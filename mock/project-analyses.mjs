@@ -14,6 +14,7 @@ import { compareProjectReports } from './project-report-comparison.mjs';
 import { cachedProjectCallValid, findReusableProjectCalls, projectCallFingerprint } from './project-analysis-cache.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
+import { tryModelSlot, releaseModelSlot } from './model-concurrency.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -147,9 +148,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     locked = (await lockClient.query('SELECT pg_try_advisory_lock(748206,hashtext($1)) AS locked', [id])).rows[0].locked;
     if (!locked) return;
     const configured = Number((await lockClient.query('SELECT concurrency_limit FROM experiment_settings WHERE id=1')).rows[0]?.concurrency_limit || 0);
-    for (let candidate = 0; candidate < Math.min(20,configured); candidate++) {
-      if ((await lockClient.query('SELECT pg_try_advisory_lock(748207,$1) AS locked',[candidate])).rows[0].locked) { slot = candidate; break; }
-    }
+    slot = await tryModelSlot(lockClient,configured);
     if (slot < 0) return;
   const started = await db.query("UPDATE project_analyses SET status='analyzing',attempts=attempts+CASE WHEN status='queued' THEN 1 ELSE 0 END,started_at=now(),finished_at=NULL,error_code=NULL WHERE id=$1 AND status IN ('queued','analyzing') RETURNING *", [id]);
   if (!started.rowCount) return;
@@ -219,7 +218,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
   } finally { if (running.get(id) === controller) running.delete(id); }
   } finally {
     if (locked) await lockClient.query('SELECT pg_advisory_unlock(748206,hashtext($1))', [id]).catch(() => {});
-    if (slot >= 0) await lockClient.query('SELECT pg_advisory_unlock(748207,$1)',[slot]).catch(() => {});
+    await releaseModelSlot(lockClient,slot).catch(() => {});
     if (pooled) lockClient.release();
   }
 }

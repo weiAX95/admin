@@ -10,6 +10,7 @@ import { normalizeToolCalls, scoreBuiltIn, TOKENIZER_VERSION } from './evaluatio
 import crypto from 'node:crypto';
 import { runBertScore, runPythonMetric } from './evaluation-python-worker.mjs';
 import { degradedRunMetrics } from './evaluation-regression.mjs';
+import { acquireModelSlot } from './model-concurrency.mjs';
 
 async function evaluationScores(row, output, calls, latencyMs, completionTokens) {
   const input = { output, expectedOutput: row.reference_answer, actualTools: normalizeToolCalls(calls), expectedTools: row.expected_tools };
@@ -76,25 +77,40 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
   for (const row of stranded) await finalizeExperimentBatch(pool,row.id);
   const settings = (await pool.query('SELECT concurrency_limit FROM experiment_settings WHERE id=1')).rows[0];
   if (!settings?.concurrency_limit) return 0;
+  if (!(await pool.query("SELECT 1 FROM experiment_runs WHERE status='queued' LIMIT 1")).rowCount) return 0;
   const running = Number((await pool.query("SELECT count(*) AS n FROM experiment_runs WHERE status='running'")).rows[0].n);
   const slots = Math.max(0, settings.concurrency_limit - running);
   const claimed = [];
   const enabledProviders=['legacy','openai','qwen','gemini'].filter(providerConfigured);
-  for (let index = 0; index < slots; index++) {
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      const result = await client.query("SELECT r.id FROM experiment_runs r JOIN experiment_models m ON m.id=r.model_id LEFT JOIN experiment_models j ON j.id=r.judge_model_id WHERE r.status='queued' AND r.provider=ANY($1) AND (r.judge_api_model IS NULL OR r.judge_provider=ANY($1)) AND m.status<>'retired' AND (j.id IS NULL OR j.status<>'retired') ORDER BY r.created_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT 1",[enabledProviders]);
-      if (!result.rowCount) { await client.query('COMMIT'); break; }
-      const id = result.rows[0].id;
-      await client.query("UPDATE experiment_runs SET status='running',started_at=now(),attempts=attempts+1 WHERE id=$1", [id]);
-      await client.query("UPDATE experiment_batches SET status='running' WHERE id=(SELECT batch_id FROM experiment_runs WHERE id=$1) AND status='queued'", [id]);
-      await client.query('COMMIT');
-      claimed.push(id);
-    } catch (error) { await client.query('ROLLBACK'); throw error; }
-    finally { client.release(); }
+  try {
+    for (let index = 0; index < slots; index++) {
+      const lease = await acquireModelSlot(pool,settings.concurrency_limit);
+      if (!lease) break;
+      let retained = false;
+      let client;
+      try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const result = await client.query("SELECT r.id FROM experiment_runs r JOIN experiment_models m ON m.id=r.model_id LEFT JOIN experiment_models j ON j.id=r.judge_model_id WHERE r.status='queued' AND r.provider=ANY($1) AND (r.judge_api_model IS NULL OR r.judge_provider=ANY($1)) AND m.status<>'retired' AND (j.id IS NULL OR j.status<>'retired') ORDER BY r.created_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT 1",[enabledProviders]);
+        if (!result.rowCount) { await client.query('COMMIT'); break; }
+        const id = result.rows[0].id;
+        await client.query("UPDATE experiment_runs SET status='running',started_at=now(),attempts=attempts+1 WHERE id=$1", [id]);
+        await client.query("UPDATE experiment_batches SET status='running' WHERE id=(SELECT batch_id FROM experiment_runs WHERE id=$1) AND status='queued'", [id]);
+        await client.query('COMMIT');
+        claimed.push({ id, lease });
+        retained = true;
+      } catch (error) { if (client) await client.query('ROLLBACK').catch(() => undefined); throw error; }
+      finally { client?.release(); if (!retained) await lease.release(); }
+    }
+  } catch (error) {
+    for (const { id, lease } of claimed) {
+      await pool.query("UPDATE experiment_runs SET status='queued',started_at=NULL,attempts=GREATEST(0,attempts-1) WHERE id=$1 AND status='running'",[id]).catch(() => undefined);
+      await lease.release().catch(() => undefined);
+    }
+    throw error;
   }
-  await Promise.all(claimed.map(async id => {
+  await Promise.all(claimed.map(async ({ id, lease }) => {
+    try {
     const row = (await pool.query('SELECT r.*,b.metric_version_id,b.owner_id AS call_owner_id,b.kind AS batch_kind,c.reference_answer,c.expected_tools,m.rule_type,m.judge_prompt,s.source AS custom_script_source FROM experiment_runs r JOIN experiment_batches b ON b.id=r.batch_id JOIN experiment_metric_versions m ON m.id=b.metric_version_id LEFT JOIN evaluation_metric_scripts s ON s.id=m.custom_script_id LEFT JOIN experiment_dataset_cases c ON c.id=r.case_id WHERE r.id=$1', [id])).rows[0];
     const started = performance.now();
     try {
@@ -146,6 +162,7 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
     }
     await finalizeExperimentBatch(pool,row.batch_id);
     onChanged();
+    } finally { await lease.release(); }
   }));
   return claimed.length;
 }
