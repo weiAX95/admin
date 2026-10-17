@@ -88,7 +88,8 @@ export async function scanPublicRepository({ fullName, commitSha, fetchGithub = 
     const file = { path: entry.path, gitSha: entry.sha, size: Number.isSafeInteger(entry.size) ? entry.size : null, category: classification(entry.path) };
     const reason = entry.skippedTree ? 'dependency_or_build' : excludedReason(entry.path, entry, maxFileBytes);
     if (reason) { files.push({ ...file, status: 'excluded', reason }); excludedCount++; continue; }
-    if (attemptedCount >= maxFiles || totalBytes + entry.size > maxTotalBytes) { files.push({ ...file, status: 'unscanned', reason: 'scan_budget' }); unscannedCount++; continue; }
+    if (attemptedCount >= maxFiles) { files.push({ ...file, status: 'unscanned', reason: 'file_budget' }); unscannedCount++; continue; }
+    if (totalBytes + entry.size > maxTotalBytes) { files.push({ ...file, status: 'unscanned', reason: 'byte_budget' }); unscannedCount++; continue; }
     const cached = cachedBlobs.get(entry.sha.toLowerCase());
     if (cached && typeof cached.content === 'string' && typeof cached.contentSha256 === 'string') {
       const bytes = Buffer.from(cached.content, 'utf8');

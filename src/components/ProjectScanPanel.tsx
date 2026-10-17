@@ -4,7 +4,7 @@ import { getProjectScan, getProjectScanFile, listProjectScans, startProjectScan,
 import ProjectReportPanel from './ProjectReportPanel';
 
 const statusLabels: Record<ProjectScan['status'], string> = { queued: '排队中', scanning: '扫描中', completed: '覆盖完成', partial: '部分覆盖', failed: '扫描失败' };
-const reasonLabels: Record<string, string> = { dependency_or_build: '依赖或构建产物', sensitive_path: '敏感路径', sensitive_content: '疑似密钥内容', non_regular_file: '非普通文件', binary_type: '二进制类型', file_size: '超出单文件限制', scan_budget: '扫描预算用尽', github_rate_limit: 'GitHub 限流', blob_unavailable_or_invalid: '内容不可读取或格式无效' };
+const reasonLabels: Record<string, string> = { dependency_or_build: '依赖或构建产物', sensitive_path: '敏感路径', sensitive_content: '疑似密钥内容', non_regular_file: '非普通文件', binary_type: '二进制类型', file_size: '超出单文件限制', scan_budget: '旧记录：扫描预算用尽', file_budget: '文件数预算用尽', byte_budget: '读取字节预算不足', github_rate_limit: 'GitHub 限流', blob_unavailable_or_invalid: '内容不可读取或格式无效' };
 const changeLabels: Record<ProjectScanChange['kind'], string> = { added: '新增', modified: '修改', deleted: '删除', renamed: '重命名' };
 
 export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { repository: ProjectRepository; onAnalysisCompleted: () => void }) {
@@ -49,6 +49,11 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
     catch (cause) { message.error(cause instanceof Error ? cause.message : '文件正文读取失败'); }
     finally { setSourceLoading(false); }
   };
+  const unreadFiles = detail?.files.filter(file => file.status === 'unscanned') || [];
+  const fileBudgetGaps = unreadFiles.filter(file => file.reason === 'file_budget').length;
+  const byteBudgetGaps = unreadFiles.filter(file => file.reason === 'byte_budget').length;
+  const legacyBudgetGaps = unreadFiles.filter(file => file.reason === 'scan_budget').length;
+  const unindexed = Math.max(0,(detail?.unscannedCount || 0) - unreadFiles.length);
 
   return <Card title={`${repository.fullName} · 扫描记录`}>
     <Typography.Paragraph type="secondary">每次扫描固定提交时的 commit SHA。目录和文件读取预算有限；“部分覆盖”表示仍有失败或未扫描范围，不能据此认定项目已完整分析。已读取的文本正文保存在服务端，仅仓库所属账号可按需查看。</Typography.Paragraph>
@@ -79,7 +84,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
         { title: '当前路径', dataIndex: 'path' },
         { title: '原路径', dataIndex: 'oldPath', render: (value: string | null) => value || '—' },
       ]} />}
-      {detail.status === 'partial' && <Alert type="warning" showIcon message="本次为部分覆盖，不能视作完整分析" description={detail.unscannedSubtrees ? `${detail.unscannedSubtrees} 个目录未展开` : undefined} style={{ marginBottom: 12 }} />}
+      {detail.status === 'partial' && <Alert type="warning" showIcon message="本次为部分覆盖，不能视作完整分析" description={<Space direction="vertical"><span>未读取：文件数预算 {fileBudgetGaps}、字节预算 {byteBudgetGaps}{legacyBudgetGaps ? `、旧版未区分预算 ${legacyBudgetGaps}` : ''}；索引外或无效目录项 {unindexed}；未展开目录 {detail.unscannedSubtrees}；读取失败 {detail.failedCount}。</span>{unreadFiles.length > 0 && <span>未读示例：{unreadFiles.slice(0, 5).map(file => file.path).join('、')}{unreadFiles.length > 5 ? ` 等 ${unreadFiles.length} 个` : ''}。可提高上方预算后重新扫描；原报告不随新扫描改变。</span>}</Space>} style={{ marginBottom: 12 }} />}
       {detail.status === 'failed' && <Alert type="error" showIcon message={detail.errorCode === 'GITHUB_RATE_LIMIT' ? 'GitHub 限流重试已达上限，请稍后新建扫描' : '扫描失败'} description={detail.errorCode || undefined} style={{ marginBottom: 12 }} />}
       {detail.nextAttemptAt && <Alert type="info" showIcon message={`GitHub 限流，预计 ${new Date(detail.nextAttemptAt).toLocaleString('zh-CN')} 后自动重试`} description={`已安排第 ${detail.retryCount}/3 次重试；刷新页面不会丢失等待状态。`} style={{ marginBottom: 12 }} />}
       <Table rowKey="path" size="small" dataSource={detail.files} pagination={{ pageSize: 10 }} scroll={{ x: 680 }} columns={[

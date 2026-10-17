@@ -82,7 +82,7 @@ export interface ProjectAnalysisJob {
 export interface ProjectAnalysisReport extends ProjectAnalysisJob {
   fullName: string; goal: string; requirementBaseline: string; staleReasons: string[];
   reusedCalls: { moduleKey: string; sourceCommitSha: string | null }[];
-  scanScope: { forceFull: boolean; baselineCommitSha: string | null; comparisonComplete: boolean; changes: Partial<Record<ProjectScanChange['kind'], number>> };
+  scanScope: { forceFull: boolean; baselineCommitSha: string | null; comparisonComplete: boolean; changes: Partial<Record<ProjectScanChange['kind'], number>>; gaps: { fileBudget: number; byteBudget: number; legacyBudget: number; unindexed: number; unscannedSubtrees: number; failed: number } };
   requirements: { id: string; text: string }[];
   modules: { moduleKey: string; indexedCount: number; readCount: number; selectedCount: number; truncatedCount: number; excludedCount: number; failedCount: number; unscannedCount: number; summary: string | null }[];
   flows: { id: string; moduleKey: string | null; title: string; steps: { description: string; evidence: { type: 'code' | 'test'; path: string; line: number; excerpt: string; gitSha: string } }[] }[];
