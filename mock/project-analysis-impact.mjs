@@ -51,36 +51,72 @@ function jsonWithComments(content) {
   return clean;
 }
 
-function javascriptAliasConfigs(files) {
-  return files.filter(file => file.status === 'read' && aliasConfigPath.test(file.path) && typeof file.content === 'string').flatMap(file => {
+function javascriptAliasConfigs(files, includeExtends = false) {
+  if (!includeExtends) return files.filter(file => file.status === 'read' && aliasConfigPath.test(file.path) && typeof file.content === 'string').flatMap(file => {
     try {
       const options = JSON.parse(jsonWithComments(file.content)).compilerOptions;
       if (!options || !options.paths || typeof options.paths !== 'object' || Array.isArray(options.paths)) return [];
       const directory = path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path);
       const base = path.posix.normalize(path.posix.join(directory,typeof options.baseUrl === 'string' ? options.baseUrl : '.'));
-      const paths = Object.entries(options.paths).filter(([key,values]) => typeof key === 'string' && key.split('*').length <= 2 && Array.isArray(values)).map(([key,values]) => ({ key, values: values.filter(value => typeof value === 'string' && value.split('*').length <= 2) }));
+      const paths = Object.entries(options.paths).filter(([key,values]) => key.split('*').length <= 2 && Array.isArray(values)).map(([key,values]) => ({ key, base, values: values.filter(value => typeof value === 'string' && value.split('*').length <= 2) }));
       return [{ directory, base, paths }];
     } catch { return []; }
   }).sort((a,b) => b.directory.length - a.directory.length);
+  const readable = new Map(files.filter(file => file.status === 'read' && typeof file.content === 'string').map(file => [file.path,file.content]));
+  const parsed = new Map();
+  const parse = (name, visiting = new Set()) => {
+    if (parsed.has(name)) return parsed.get(name);
+    if (!readable.has(name) || visiting.has(name) || visiting.size >= 12) return null;
+    visiting.add(name);
+    let result = null;
+    try {
+      const raw = JSON.parse(jsonWithComments(readable.get(name)));
+      const directory = path.posix.dirname(name) === '.' ? '' : path.posix.dirname(name);
+      const parents = Array.isArray(raw.extends) ? raw.extends : [raw.extends];
+      let inherited = null;
+      for (const reference of parents) {
+        if (typeof reference !== 'string' || !reference.startsWith('.')) continue;
+        const base = path.posix.normalize(path.posix.join(directory,reference));
+        if (base.startsWith('../') || base.startsWith('/')) continue;
+        const parent = [base,`${base}.json`,`${base}/tsconfig.json`].find(candidate => readable.has(candidate));
+        if (parent) {
+          const resolved = parse(parent,visiting);
+          if (resolved) inherited = { base: resolved.base || inherited?.base, paths: resolved.paths.length ? resolved.paths : inherited?.paths || [] };
+        }
+      }
+      const options = raw.compilerOptions || {};
+      const base = typeof options.baseUrl === 'string' ? path.posix.normalize(path.posix.join(directory,options.baseUrl)) : inherited?.base || directory || '.';
+      const ownPaths = options.paths;
+      const paths = ownPaths && typeof ownPaths === 'object' && !Array.isArray(ownPaths)
+        ? Object.entries(ownPaths).filter(([key,values]) => key.split('*').length <= 2 && Array.isArray(values)).map(([key,values]) => ({ key, base, values: values.filter(value => typeof value === 'string' && value.split('*').length <= 2) }))
+        : inherited?.paths || [];
+      result = { directory, base, paths };
+    } catch { /* Invalid or unavailable configs supply no alias evidence. */ }
+    visiting.delete(name);
+    parsed.set(name,result);
+    return result;
+  };
+  return [...readable.keys()].filter(name => aliasConfigPath.test(name)).map(name => parse(name)).filter(config => config?.paths.length).sort((a,b) => b.directory.length - a.directory.length);
 }
 
-function javascriptAliasedImports(file, indexed, aliasConfigs) {
+function javascriptAliasedImports(file, indexed, aliasConfigs, includeSameDepth = false) {
   if (!/\.(?:[cm]?[jt]sx?)$/.test(file.path)) return [];
-  const config = aliasConfigs.find(item => !item.directory || file.path.startsWith(`${item.directory}/`));
-  if (!config) return [];
+  const candidates = aliasConfigs.filter(item => !item.directory || file.path.startsWith(`${item.directory}/`));
+  if (!candidates.length) return [];
+  const configs = includeSameDepth ? candidates.filter(item => item.directory.length === candidates[0].directory.length) : candidates.slice(0,1);
   const found = new Set();
   for (const pattern of [namedImport,namedSideEffectImport]) {
     pattern.lastIndex = 0;
     let match, count = 0;
     while ((match = pattern.exec(file.content)) && count++ < 200) {
-      for (const mapping of config.paths) {
+      for (const mapping of configs.flatMap(item => item.paths)) {
         const star = mapping.key.indexOf('*');
         const prefix = star < 0 ? mapping.key : mapping.key.slice(0,star);
         const suffix = star < 0 ? '' : mapping.key.slice(star + 1);
         if (star < 0 ? match[1] !== mapping.key : !match[1].startsWith(prefix) || !match[1].endsWith(suffix)) continue;
         const captured = star < 0 ? '' : match[1].slice(prefix.length,match[1].length - suffix.length);
         for (const value of mapping.values) {
-          const targetBase = path.posix.normalize(path.posix.join(config.base,value.replace('*',captured)));
+          const targetBase = path.posix.normalize(path.posix.join(mapping.base,value.replace('*',captured)));
           if (targetBase.startsWith('../') || targetBase.startsWith('/')) continue;
           const emitted = targetBase.match(/^(.*)\.(js|jsx|mjs|cjs)$/);
           const sourceNames = emitted ? ({ js: ['ts','tsx'], jsx: ['tsx'], mjs: ['mts'], cjs: ['cts'] })[emitted[2]].map(extension => `${emitted[1]}.${extension}`) : [];
@@ -145,9 +181,9 @@ function goImports(file, indexed, goModules) {
   return [...found];
 }
 
-function importedPaths(file, indexed, goModules, aliasConfigs = []) {
+function importedPaths(file, indexed, goModules, aliasConfigs = [], includeSameDepth = false) {
   if (typeof file.content !== 'string') return [];
-  return [...new Set([...javascriptImports(file,indexed,true),...javascriptAliasedImports(file,indexed,aliasConfigs),...pythonImports(file,indexed),...goImports(file,indexed,goModules)])];
+  return [...new Set([...javascriptImports(file,indexed,true),...javascriptAliasedImports(file,indexed,aliasConfigs,includeSameDepth),...pythonImports(file,indexed),...goImports(file,indexed,goModules)])];
 }
 
 export function selectProjectImpactEvidenceV3(files, changes) {
@@ -183,7 +219,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -200,12 +236,12 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const indexed = new Set([...current.keys(),...changedPaths]);
   const goModules = files.filter(file => file.path.endsWith('go.mod') && file.status === 'read' && typeof file.content === 'string').map(file => ({ directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.content.match(/^module\s+([^\s]+)\s*$/m)?.[1] })).filter(item => item.name).sort((a,b) => b.directory.length - a.directory.length);
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
-  const aliasConfigs = includeAliases ? javascriptAliasConfigs(files) : [];
+  const aliasConfigs = includeAliases ? javascriptAliasConfigs(files,includeExtends) : [];
   const reverse = new Map();
   const importsByPath = new Map();
   for (const file of files) {
     if (file.status !== 'read') continue;
-    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs),...(apiEdges.get(file.path) || [])])];
+    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends),...(apiEdges.get(file.path) || [])])];
     importsByPath.set(file.path,imports);
     for (const target of imports) {
       if (!reverse.has(target)) reverse.set(target,new Set());
@@ -238,3 +274,4 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
 export const selectProjectImpactEvidence = (files, changes) => selectImpactEvidence(files,changes,false);
 export const selectProjectImpactEvidenceV5 = (files, changes) => selectImpactEvidence(files,changes,true);
 export const selectProjectImpactEvidenceV6 = (files, changes) => selectImpactEvidence(files,changes,true,true);
+export const selectProjectImpactEvidenceV7 = (files, changes) => selectImpactEvidence(files,changes,true,true,true);
