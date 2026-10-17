@@ -26,6 +26,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [tokenBudget, setTokenBudget] = useState<number | null>(null);
   const [costBudgetUsd, setCostBudgetUsd] = useState<number | null>(null);
   const [report, setReport] = useState<ProjectAnalysisReport | null>(null);
+  const [scopeJob, setScopeJob] = useState<ProjectAnalysisReport | null>(null);
+  const [scopeLoadingId, setScopeLoadingId] = useState('');
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [olderId, setOlderId] = useState('');
@@ -59,6 +61,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     setItems([]);
     setNextCursor(null);
     setReport(null);
+    setScopeJob(null);
     setComparison(null);
     setOlderId('');
     setNewerId('');
@@ -113,6 +116,12 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const show = async (id: string) => {
     try { setReport(await getProjectAnalysis(repository.id, id)); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '报告读取失败'); }
+  };
+  const showScope = async (id: string) => {
+    setScopeLoadingId(id);
+    try { setScopeJob(await getProjectAnalysis(repository.id, id)); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '分析范围读取失败'); }
+    finally { setScopeLoadingId(''); }
   };
   const loadMore = async () => {
     if (!nextCursor) return;
@@ -234,9 +243,11 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       { title: '覆盖', render: (_, item: ProjectAnalysisJob) => item.status === 'completed' ? `${item.selectedFileCount}/${item.availableFileCount} 文件` : '—' },
       { title: '复用', render: (_, item: ProjectAnalysisJob) => item.reusedCallCount ? `${item.reusedCallCount} 次调用` : '—' },
       { title: '本次上限', render: (_, item: ProjectAnalysisJob) => `${item.tokenBudget === null ? '系统 token 配额' : `${item.tokenBudget.toLocaleString()} token`} / ${item.costBudgetUsd === null ? '每日费用预算' : `$${item.costBudgetUsd.toFixed(2)}`}` },
+      { title: '实际用量', render: (_, item: ProjectAnalysisJob) => `${((item.promptTokens || 0) + (item.completionTokens || 0)).toLocaleString()} token / $${(item.costUsd || 0).toFixed(4)}` },
       { title: '说明', render: (_, item: ProjectAnalysisJob) => item.errorCode ? errors[item.errorCode] || item.errorCode : '—' },
       { title: '操作', render: (_, item: ProjectAnalysisJob) => <Space size="small">
         {item.status === 'completed' && <Button type="link" onClick={() => void show(item.id)}>查看报告</Button>}
+        {item.status === 'failed' && <Button type="link" loading={scopeLoadingId === item.id} onClick={() => void showScope(item.id)}>查看未覆盖范围</Button>}
         {['queued','analyzing'].includes(item.status) && <Popconfirm title="确定取消这次分析？" onConfirm={() => void act(item,'cancel')}><Button type="link" danger loading={actingId === item.id}>取消</Button></Popconfirm>}
         {item.status === 'failed' && item.attempts < item.maxAttempts && (item.errorCode === 'CALL_OUTCOME_UNKNOWN'
           ? <Popconfirm title="上次模型调用结果未知" description="再次执行可能产生额外模型费用，确定重试？" onConfirm={() => void act(item,'retry')}><Button type="link" loading={actingId === item.id}>重试</Button></Popconfirm>
@@ -250,6 +261,18 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       <Button disabled={!olderId || !newerId || olderId === newerId || new Date(items.find(item => item.id === olderId)?.finishedAt || 0).getTime() >= new Date(items.find(item => item.id === newerId)?.finishedAt || 0).getTime()} loading={comparing} onClick={() => void compareReports()}>对照两次报告</Button>
     </Space>
     {comparison && <ProjectReportComparison comparison={comparison} onOpenReport={id => void show(id)} onClose={() => setComparison(null)} />}
+    <Modal title="分析实际用量与未覆盖范围" open={Boolean(scopeJob)} onCancel={() => setScopeJob(null)} footer={<Button onClick={() => setScopeJob(null)}>关闭</Button>} width={720}>
+      {scopeJob && <>
+        <Alert type="warning" showIcon message={scopeJob.errorCode ? errors[scopeJob.errorCode] || scopeJob.errorCode : '本次分析未完成'} style={{ marginBottom: 12 }} />
+        <Typography.Paragraph>实际消耗：{((scopeJob.promptTokens || 0) + (scopeJob.completionTokens || 0)).toLocaleString()} token（输入 {(scopeJob.promptTokens || 0).toLocaleString()}，输出 {(scopeJob.completionTokens || 0).toLocaleString()}），费用 ${(scopeJob.costUsd || 0).toFixed(4)}。</Typography.Paragraph>
+        <Typography.Paragraph>本次上限：{scopeJob.tokenBudget === null ? '仅系统 token 配额' : `${scopeJob.tokenBudget.toLocaleString()} token`}；{scopeJob.costBudgetUsd === null ? '仅每日费用预算' : `$${scopeJob.costBudgetUsd.toFixed(2)}`}。实际消耗包含本任务先前尝试，重试会沿用原上限。</Typography.Paragraph>
+        {scopeJob.executionScope && <>
+          <Typography.Paragraph>当前计划从 {scopeJob.executionScope.selectedFileCount} 个可读文件生成 {scopeJob.executionScope.plannedCount} 次模块分析；最近一次尝试完成 {scopeJob.executionScope.completedCount} 次，仍有 {scopeJob.executionScope.remainingModules.length} 次未完成。</Typography.Paragraph>
+          {scopeJob.executionScope.remainingModules.length > 0 && <Space wrap style={{ marginBottom: 12 }}>{scopeJob.executionScope.remainingModules.map(moduleKey => <Tag key={moduleKey}>{moduleKey}</Tag>)}</Space>}
+        </>}
+        <Typography.Paragraph type="secondary">这里的模块计划不等于仓库全部内容。扫描未读和分析文件选择缺口需结合扫描详情查看；完成次数仅统计最近一次尝试，实际费用累计所有尝试。</Typography.Paragraph>
+      </>}
+    </Modal>
     {report && <Card size="small" title={`报告 · ${report.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setReport(null)}>关闭</Button>}>
       {report.staleReasons.length > 0 && <Alert type="warning" showIcon message="报告基线已变化，旧建议需重审" description={<Space direction="vertical"><span>{report.staleReasons.join('；')}</span>{reviewScan && reviewModelAvailable ? <Popconfirm title="按当前基线重新分析？" description="会重新调用模型，可能产生费用；旧报告和人工处理记录仍保留。" onConfirm={() => void start(reviewScan.id, report.modelId)}><Button size="small" loading={starting}>重新分析当前扫描</Button></Popconfirm> : <span>{reviewScan ? '原模型当前不可用，请选择其他模型生成报告。' : '请先扫描当前 commit，再生成新报告。'}</span>}</Space>} style={{ marginBottom: 12 }} />}
       {!report.analysisCoverageComplete && <Alert type="warning" showIcon message="本次报告只覆盖部分内容；未发现实现不代表整个仓库没有实现" description={`可读文件中有 ${Math.max(0,report.availableFileCount - report.selectedFileCount)} 个未进入模型，另有 ${report.modules.reduce((sum,module) => sum + module.truncatedCount,0)} 个输入文件被截断；扫描阶段还有文件数预算未读 ${report.scanScope.gaps.fileBudget}、字节预算未读 ${report.scanScope.gaps.byteBudget}、旧版未区分预算未读 ${report.scanScope.gaps.legacyBudget}、读取失败 ${report.scanScope.gaps.failed}、索引外或无效目录项 ${report.scanScope.gaps.unindexed}、未展开目录 ${report.scanScope.gaps.unscannedSubtrees}。`} style={{ marginBottom: 12 }} />}

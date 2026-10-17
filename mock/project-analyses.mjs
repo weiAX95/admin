@@ -305,7 +305,15 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     const gapRows = (await client.query("SELECT reason,count(*)::integer AS count FROM project_scan_files WHERE scan_id=$1 AND status='unscanned' GROUP BY reason",[job.scan_id])).rows;
     const gaps = Object.fromEntries(gapRows.map(row => [row.reason,row.count]));
     const indexedUnscanned = gapRows.reduce((sum,row) => sum + row.count,0);
-    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, requirements, staleReasons, findings, suggestions, modules, flows: [...flowsById.values()], technologies, linkedTasks, reusedCalls, scanScope: { forceFull: scanScope?.force_full || false, baselineCommitSha: scanScope?.baseline_commit_sha?.trim() || null, comparisonComplete: Boolean(scanScope?.coverage_complete && scanScope?.baseline_coverage_complete), changes: Object.fromEntries(changeCounts.map(row => [row.change_kind,row.count])), gaps: { fileBudget: gaps.file_budget || 0, byteBudget: gaps.byte_budget || 0, legacyBudget: gaps.scan_budget || 0, unindexed: Math.max(0,(scanScope?.unscanned_count || 0) - indexedUnscanned), unscannedSubtrees: scanScope?.unscanned_subtrees || 0, failed: scanScope?.failed_count || 0 } } } };
+    let executionScope = null;
+    if (job.status === 'failed') {
+      const scanFiles = (await client.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1',[job.scan_id])).rows;
+      const { selected } = await scanImpactEvidence(client,job.scan_id,scanFiles,job.analysis_plan_version);
+      const planned = modelPlan({ ...job, requirement_document: baselineDocument },selected);
+      const completed = new Set((await client.query("SELECT module_key FROM project_analysis_module_calls WHERE analysis_id=$1 AND attempt=$2 AND status='completed'",[job.id,job.attempts])).rows.map(row => row.module_key));
+      executionScope = { plannedCount: planned.length, completedCount: planned.filter(group => completed.has(group.moduleKey)).length, remainingModules: planned.filter(group => !completed.has(group.moduleKey)).map(group => group.moduleKey), selectedFileCount: selected.length };
+    }
+    return { status: 200, data: { ...view(job), fullName: job.full_name, goal: job.goal, requirementBaseline: job.requirement_baseline, requirements, staleReasons, findings, suggestions, modules, flows: [...flowsById.values()], technologies, linkedTasks, reusedCalls, executionScope, scanScope: { forceFull: scanScope?.force_full || false, baselineCommitSha: scanScope?.baseline_commit_sha?.trim() || null, comparisonComplete: Boolean(scanScope?.coverage_complete && scanScope?.baseline_coverage_complete), changes: Object.fromEntries(changeCounts.map(row => [row.change_kind,row.count])), gaps: { fileBudget: gaps.file_budget || 0, byteBudget: gaps.byte_budget || 0, legacyBudget: gaps.scan_budget || 0, unindexed: Math.max(0,(scanScope?.unscanned_count || 0) - indexedUnscanned), unscannedSubtrees: scanScope?.unscanned_subtrees || 0, failed: scanScope?.failed_count || 0 } } } };
   }
   if (method === 'POST' && analysisId && action === 'cancel') {
     const pooled = client instanceof pg.Pool;
