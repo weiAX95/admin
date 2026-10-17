@@ -191,11 +191,11 @@ export default function ProjectAnalysis() {
   };
 
   return <Space direction="vertical" size={20} style={{ width: '100%' }}>
-    <Alert type="info" showIcon message="GitHub 仓库与项目报告" description="公开仓库可扫描并分析固定 commit；私有仓库经授权可扫描，模型分析会在范围与数据去向确认流程接通后开放。" />
+    <Alert type="info" showIcon message="GitHub 仓库与项目报告" description="公开仓库可扫描并分析固定 commit；私有仓库需先连接 GitHub App，并在模型分析前确认本次发送的文件范围与数据去向。" />
     <Card title="GitHub App 账号连接">
       <Space direction="vertical">
         <Typography.Text>{githubConnection?.connected ? `已连接 ${githubConnection.githubLogin}` : githubConnection?.configured ? '尚未连接 GitHub 账号' : '服务端尚未配置 GitHub App'}</Typography.Text>
-        <Typography.Text type="secondary">连接仅建立账号授权；私有仓库尚未开放扫描。后续需选择具体仓库并确认模型数据范围。</Typography.Text>
+        <Typography.Text type="secondary">连接账号后，从已授权仓库中选择私有仓库并接入。扫描仅读取所选仓库；开始模型分析前会再次展示发送范围供你确认。</Typography.Text>
         {githubConnection?.connected ? <Button danger loading={githubBusy} onClick={() => Modal.confirm({ title: '断开 GitHub 账号？', content: '断开后服务端删除本账号保存的 GitHub 凭证。', okText: '断开连接', okButtonProps: { danger: true }, onOk: disconnectGithub })}>断开连接</Button> : <Button loading={githubBusy} disabled={!githubConnection?.configured} onClick={() => void connectGithub()}>连接 GitHub</Button>}
         {githubConnection?.connected && <>
           <Button loading={githubRepositoriesLoading} onClick={() => void loadGithubRepositories()}>查看已授权仓库</Button>
