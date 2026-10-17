@@ -51,7 +51,7 @@ export async function handleProjectGithubWebhook(req, pool, env = process.env) {
     if (!inserted.rowCount) { await client.query('COMMIT'); return { status: 200, data: { received: true, duplicate: true, scansQueued: 0 } }; }
     let scansQueued = 0;
     if (eventType === 'push' && commitSha) {
-      const repositories = (await client.query(`SELECT id,owner_id,full_name,branch,is_private,commit_sha FROM project_repositories
+      const repositories = (await client.query(`SELECT id,owner_id,full_name,branch,is_private,commit_sha,auto_analysis_enabled FROM project_repositories
         WHERE lower(full_name)=lower($1) AND branch=$2 AND webhook_scan_enabled=true ORDER BY id FOR UPDATE`,[fullName,branch])).rows;
       for (const repository of repositories) {
         await client.query('UPDATE project_repositories SET commit_sha=$2,last_checked_at=now(),updated_at=now() WHERE id=$1',[repository.id,commitSha]);
@@ -62,7 +62,7 @@ export async function handleProjectGithubWebhook(req, pool, env = process.env) {
         if (queuedScan) {
           await client.query('SAVEPOINT webhook_coalesce_scan');
           try {
-            const updated = await client.query("UPDATE project_scans SET commit_sha=$2 WHERE id=$1 AND status='queued' RETURNING id",[queuedScan.id,commitSha]);
+            const updated = await client.query("UPDATE project_scans SET commit_sha=$2,auto_analysis_state=$3,auto_analysis_error=NULL WHERE id=$1 AND status='queued' RETURNING id",[queuedScan.id,commitSha,repository.auto_analysis_enabled ? 'pending' : 'none']);
             await client.query('RELEASE SAVEPOINT webhook_coalesce_scan');
             if (updated.rowCount) { scansQueued++; continue; }
           } catch (error) {
@@ -73,8 +73,8 @@ export async function handleProjectGithubWebhook(req, pool, env = process.env) {
             if (duplicate.rowCount) continue;
           }
         }
-        const queued = await client.query(`INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,force_full,trigger_source,status)
-          VALUES($1,$2,$3,$4,$5,$6,'webhook','queued') ON CONFLICT DO NOTHING RETURNING id`,[crypto.randomUUID(),repository.id,repository.full_name,repository.branch,commitSha,repository.is_private]);
+        const queued = await client.query(`INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,force_full,trigger_source,auto_analysis_state,status)
+          VALUES($1,$2,$3,$4,$5,$6,'webhook',$7,'queued') ON CONFLICT DO NOTHING RETURNING id`,[crypto.randomUUID(),repository.id,repository.full_name,repository.branch,commitSha,repository.is_private,repository.auto_analysis_enabled ? 'pending' : 'none']);
         scansQueued += queued.rowCount;
       }
     }

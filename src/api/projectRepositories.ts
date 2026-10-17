@@ -6,6 +6,10 @@ export interface ProjectRepository {
   fullName: string;
   private: boolean;
   webhookScanEnabled: boolean;
+  autoAnalysisEnabled: boolean;
+  autoAnalysisModelId: string | null;
+  autoAnalysisTokenBudget: number | null;
+  autoAnalysisCostBudgetUsd: number | null;
   url: string;
   branch: string;
   goal: string;
@@ -32,6 +36,7 @@ export const updateProjectRepository = (item: ProjectRepository, body: { goal: s
 });
 export const refreshProjectRepository = (id: string) => http.post<ProjectRepository>(`/project-repositories/${id}/refresh`, {});
 export const updateProjectWebhookScan = (item: ProjectRepository, enabled: boolean) => http.patch<ProjectRepository>(`/project-repositories/${item.id}/webhook-scan`, { enabled, expectedEnabled: item.webhookScanEnabled });
+export const updateProjectAutoAnalysis = (item: ProjectRepository, config: { enabled: boolean; modelId?: string; tokenBudget?: number; costBudgetUsd?: number; confirmRecurringCost?: boolean }) => http.patch<ProjectRepository>(`/project-repositories/${item.id}/auto-analysis`, { ...config, expectedEnabled: item.autoAnalysisEnabled });
 export interface ProjectLinkedTask { id: string; title: string; status: string; progress: number | null; ownerId?: string; requirementId: string | null }
 export const listProjectLinkedTasks = (repositoryId: string) => http.get<{ items: ProjectLinkedTask[]; requirements: { id: string; text: string }[]; baselineVersionId: string | null }>(`/project-repositories/${repositoryId}/tasks`);
 export const linkProjectTask = (repositoryId: string, taskId: string, requirementId: string | null, expectedBaselineVersionId: string | null) => http.post<ProjectLinkedTask>(`/project-repositories/${repositoryId}/tasks`, { taskId, requirementId, expectedBaselineVersionId });
@@ -51,6 +56,9 @@ export interface ProjectScan {
   coverageComplete: boolean;
   forceFull: boolean;
   triggerSource: 'manual' | 'webhook';
+  autoAnalysisState: 'none' | 'pending' | 'processing' | 'queued' | 'skipped' | 'failed';
+  autoAnalysisError: string | null;
+  autoAnalysisId: string | null;
   baselineCommitSha: string | null;
   budgetFileLimit: number;
   budgetByteLimit: number;
@@ -79,6 +87,7 @@ export const getProjectScanFile = (repositoryId: string, scanId: string, path: s
 
 export interface ProjectAnalysisJob {
   id: string; repositoryId: string; scanId: string; commitSha: string; branch: string;
+  triggerSource: 'manual' | 'webhook';
   baselineVersionId: string | null;
   modelId: string; model: string; status: 'queued' | 'analyzing' | 'completed' | 'failed' | 'canceled';
   attempts: number; maxAttempts: number; canceledAt: string | null;

@@ -6,6 +6,8 @@ import { containsKnownSecret } from './project-scan.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
 import { assertGithubPrivateRepoAccess, githubUserFetch, GithubAuthorizationError } from './project-github-auth.mjs';
+import { modelUsable, supportedProvider } from './model-governance.mjs';
+import { modelConnectionAvailable } from './model-connections.mjs';
 
 export function parseGitHubRepository(value) {
   let url;
@@ -19,7 +21,7 @@ export function parseGitHubRepository(value) {
 
 const validBranch = value => typeof value === 'string' && value.length >= 1 && value.length <= 200 && /^[\w./-]+$/.test(value) && !value.startsWith('/') && !value.endsWith('/') && !value.includes('..') && !value.includes('//');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const publicRow = row => ({ id: row.id, ownerId: row.owner_id, fullName: row.full_name, url: `https://github.com/${row.full_name}`, private: row.is_private === true, webhookScanEnabled: row.webhook_scan_enabled === true, branch: row.branch, goal: row.goal, requirementBaseline: row.requirement_baseline, baselineVersionId: row.baseline_version_id || null, commitSha: row.commit_sha.trim(), lastCheckedAt: row.last_checked_at, lastAnalysisAt: row.last_analysis_at || null, lastAnalyzedCommitSha: row.last_analyzed_commit_sha?.trim() || null, createdAt: row.created_at, updatedAt: row.updated_at });
+const publicRow = row => ({ id: row.id, ownerId: row.owner_id, fullName: row.full_name, url: `https://github.com/${row.full_name}`, private: row.is_private === true, webhookScanEnabled: row.webhook_scan_enabled === true, autoAnalysisEnabled: row.auto_analysis_enabled === true, autoAnalysisModelId: row.auto_analysis_model_id || null, autoAnalysisTokenBudget: row.auto_analysis_token_budget, autoAnalysisCostBudgetUsd: row.auto_analysis_cost_budget_usd === null ? null : Number(row.auto_analysis_cost_budget_usd), branch: row.branch, goal: row.goal, requirementBaseline: row.requirement_baseline, baselineVersionId: row.baseline_version_id || null, commitSha: row.commit_sha.trim(), lastCheckedAt: row.last_checked_at, lastAnalysisAt: row.last_analysis_at || null, lastAnalyzedCommitSha: row.last_analyzed_commit_sha?.trim() || null, createdAt: row.created_at, updatedAt: row.updated_at });
 const repositoryQuery = `SELECT r.*, latest.finished_at AS last_analysis_at, latest.commit_sha AS last_analyzed_commit_sha
   FROM project_repositories r LEFT JOIN LATERAL (
     SELECT finished_at, commit_sha FROM project_analyses
@@ -100,7 +102,7 @@ async function resolveRepository(fetchGithub, parsed, requestedBranch, expectPri
 }
 
 export async function handleProjectRepositories({ pathname, method, client, me, readBody, req, fetchGithub = githubFetch }) {
-  if (pathname !== '/api/project-repositories' && !/^\/api\/project-repositories\/[0-9a-f-]{36}(?:\/refresh|\/webhook-scan|\/tasks(?:\/[^/]+)?)?$/i.test(pathname)) return null;
+  if (pathname !== '/api/project-repositories' && !/^\/api\/project-repositories\/[0-9a-f-]{36}(?:\/refresh|\/webhook-scan|\/auto-analysis|\/tasks(?:\/[^/]+)?)?$/i.test(pathname)) return null;
   if (pathname === '/api/project-repositories' && method === 'GET') {
     if (!canAccess(me,'project_repositories','read',{ownerId:me.id})) return fail(403,'无权查看项目仓库');
     const rows = (await client.query(`${repositoryQuery} WHERE r.owner_id=$1 ORDER BY r.updated_at DESC`, [me.id])).rows;
@@ -142,7 +144,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
   const row = (await client.query(`${repositoryQuery} WHERE r.id=$1 AND r.owner_id=$2`, [id,me.id])).rows[0];
   if (!row) return fail(404, '项目不存在');
   const taskRoute = pathname.includes('/tasks');
-  const operation = pathname.endsWith('/refresh') || pathname.endsWith('/webhook-scan') || (taskRoute && method !== 'GET')
+  const operation = pathname.endsWith('/refresh') || pathname.endsWith('/webhook-scan') || pathname.endsWith('/auto-analysis') || (taskRoute && method !== 'GET')
     ? 'manage' : method === 'PATCH' ? 'update' : 'read';
   if (!canAccess(me,'project_repositories',operation,{ownerId:row.owner_id})) return fail(403,'无权操作该项目仓库');
   if (pathname.endsWith('/webhook-scan')) {
@@ -155,8 +157,29 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
       catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
     }
     return auditedWrite(client,req,me,'update_webhook_scan',id,async connection => {
-      const updated = (await connection.query('UPDATE project_repositories SET webhook_scan_enabled=$3,updated_at=now() WHERE id=$1 AND owner_id=$2 AND webhook_scan_enabled=$4 RETURNING *',[id,me.id,body.enabled,body.expectedEnabled])).rows[0];
+      const updated = (await connection.query('UPDATE project_repositories SET webhook_scan_enabled=$3,auto_analysis_enabled=CASE WHEN $3 THEN auto_analysis_enabled ELSE false END,updated_at=now() WHERE id=$1 AND owner_id=$2 AND webhook_scan_enabled=$4 RETURNING *',[id,me.id,body.enabled,body.expectedEnabled])).rows[0];
       return updated ? { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) } : fail(409,'自动扫描设置已变化，请刷新后重试');
+    });
+  }
+  if (pathname.endsWith('/auto-analysis')) {
+    if (method !== 'PATCH') return fail(405,'不支持该操作');
+    const body = await readBody();
+    if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.enabled !== 'boolean' || typeof body.expectedEnabled !== 'boolean' || Object.keys(body).some(key => !['enabled','expectedEnabled','modelId','tokenBudget','costBudgetUsd','confirmRecurringCost'].includes(key))) return fail(400,'自动分析设置无效');
+    if (body.enabled) {
+      if (row.is_private) return fail(409,'私有仓库仍需每次确认代码发送范围，暂不支持自动模型分析');
+      if (!row.webhook_scan_enabled) return fail(409,'请先开启提交后扫描');
+      if (body.confirmRecurringCost !== true || typeof body.modelId !== 'string' || ![30000,60000,120000].includes(body.tokenBudget) || ![0.1,0.5,1,5].includes(body.costBudgetUsd)) return fail(400,'请选择模型和单次费用／token 上限，并确认持续调用');
+      const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1',[body.modelId])).rows[0];
+      if (!modelUsable(model,me) || !supportedProvider.has(model.provider) || !model.capabilities?.output?.includes('text') || !await modelConnectionAvailable(client,model)) return fail(409,'模型不可用或没有访问权限');
+    }
+    return auditedWrite(client,req,me,'update_auto_analysis',id,async connection => {
+      const updated = (await connection.query(`UPDATE project_repositories SET auto_analysis_enabled=$3,
+        auto_analysis_model_id=CASE WHEN $3 THEN $4 ELSE auto_analysis_model_id END,
+        auto_analysis_token_budget=CASE WHEN $3 THEN $5 ELSE auto_analysis_token_budget END,
+        auto_analysis_cost_budget_usd=CASE WHEN $3 THEN $6 ELSE auto_analysis_cost_budget_usd END,
+        updated_at=now() WHERE id=$1 AND owner_id=$2 AND auto_analysis_enabled=$7 AND ($3=false OR webhook_scan_enabled=true)
+        RETURNING *`,[id,me.id,body.enabled,body.modelId || null,body.tokenBudget || null,body.costBudgetUsd || null,body.expectedEnabled])).rows[0];
+      return updated ? { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) } : fail(409,'自动分析设置已变化，请刷新后重试');
     });
   }
   if (pathname.endsWith('/tasks') && method === 'GET') {

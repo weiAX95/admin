@@ -7,7 +7,7 @@ const statusLabels: Record<ProjectScan['status'], string> = { queued: '排队中
 const reasonLabels: Record<string, string> = { dependency_or_build: '依赖或构建产物', sensitive_path: '敏感路径', sensitive_content: '疑似密钥内容', non_regular_file: '非普通文件', binary_type: '二进制类型', file_size: '超出单文件限制', scan_budget: '旧记录：扫描预算用尽', file_budget: '文件数预算用尽', byte_budget: '读取字节预算不足', github_rate_limit: 'GitHub 限流', blob_unavailable_or_invalid: '内容不可读取或格式无效' };
 const changeLabels: Record<ProjectScanChange['kind'], string> = { added: '新增', modified: '修改', deleted: '删除', renamed: '重命名' };
 
-export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { repository: ProjectRepository; onAnalysisCompleted: () => void }) {
+export default function ProjectScanPanel({ repository, onAnalysisCompleted, onRepositoryChanged }: { repository: ProjectRepository; onAnalysisCompleted: () => void; onRepositoryChanged: () => void }) {
   const { message } = App.useApp();
   const [items, setItems] = useState<ProjectScan[]>([]);
   const [detail, setDetail] = useState<(ProjectScan & { files: ProjectScanFile[]; changes: ProjectScanChange[] }) | null>(null);
@@ -69,6 +69,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
       { title: 'commit', dataIndex: 'commitSha', render: (value: string) => <code title={value}>{value.slice(0, 10)}</code> },
       { title: '状态', render: (_, item: ProjectScan) => <Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'partial' ? 'warning' : 'processing'}>{statusLabels[item.status]}</Tag> },
       { title: '来源', render: (_, item: ProjectScan) => item.triggerSource === 'webhook' ? <Tag color="blue">提交事件</Tag> : '手动' },
+      { title: '自动分析', render: (_, item: ProjectScan) => item.autoAnalysisState === 'none' ? '—' : <Typography.Text title={item.autoAnalysisError || undefined} type={item.autoAnalysisState === 'failed' ? 'danger' : item.autoAnalysisState === 'skipped' ? 'secondary' : undefined}>{({ pending: '等待扫描', processing: '提交中', queued: '已提交', skipped: '已跳过', failed: '提交失败' } as Record<string,string>)[item.autoAnalysisState]}{item.autoAnalysisError ? `：${item.autoAnalysisError}` : ''}</Typography.Text> },
       { title: '限流重试', render: (_, item: ProjectScan) => item.nextAttemptAt ? `第 ${item.retryCount}/3 次 · ${new Date(item.nextAttemptAt).toLocaleString('zh-CN')}` : item.status === 'failed' && item.errorCode === 'GITHUB_RATE_LIMIT' ? '限流重试已达上限' : '—' },
       { title: '覆盖', render: (_, item: ProjectScan) => `${item.readCount} 读取 / ${item.excludedCount} 排除 / ${item.failedCount} 失败 / ${item.unscannedCount} 未扫描` },
       { title: '复用', render: (_, item: ProjectScan) => item.reusedCount ? `${item.reusedCount} 个 blob` : '—' },
@@ -100,6 +101,6 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
     <Modal title={source?.path || '文件正文'} open={Boolean(source)} onCancel={() => setSource(null)} footer={null} width={900} destroyOnClose>
       <pre style={{ maxHeight: '65vh', overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{source?.content}</pre>
     </Modal>
-    <ProjectReportPanel repository={repository} scans={items} onAnalysisCompleted={onAnalysisCompleted} />
+    <ProjectReportPanel repository={repository} scans={items} onAnalysisCompleted={onAnalysisCompleted} onRepositoryChanged={onRepositoryChanged} />
   </Card>;
 }

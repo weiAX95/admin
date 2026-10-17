@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
 import { listTasks } from '../api/tasks';
-import { addProjectFindingFeedback, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, previewPrivateProjectAnalysis, previewProjectSuggestionTask, retryProjectAnalysis, startProjectAnalysis, type PrivateProjectDisclosure, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan, type ProjectSuggestionTaskPreview } from '../api/projectRepositories';
+import { addProjectFindingFeedback, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, previewPrivateProjectAnalysis, previewProjectSuggestionTask, retryProjectAnalysis, startProjectAnalysis, updateProjectAutoAnalysis, type PrivateProjectDisclosure, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan, type ProjectSuggestionTaskPreview } from '../api/projectRepositories';
 import ProjectReportComparison from './ProjectReportComparison';
 import { getStoredUser } from '../api/client';
 import { isAdministrator } from '../utils/roles';
@@ -16,7 +16,7 @@ const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' 
 const taskStates: Record<string, string> = { todo: '待办', in_progress: '进行中', done: '已完成', blocked: '阻塞' };
 const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用', ANALYSIS_BUDGET_EXCEEDED: '本次分析预算已不足以发起剩余模型调用', MODEL_CONNECTION_CHANGED: '模型连接配置已变化，请新建分析', PRIVATE_CONSENT_REQUIRED: '缺少私有代码发送授权', GITHUB_AUTH_REQUIRED: 'GitHub 私有仓库授权已失效', GITHUB_ACCESS_CHECK_FAILED: '暂时无法核验 GitHub 私有仓库权限', MODEL_DESTINATION_CHANGED: '模型目的地已变化，请重新预览并创建分析' };
 
-export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void }) {
+export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted, onRepositoryChanged }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void; onRepositoryChanged: () => void }) {
   const canEditTasks = isAdministrator(getStoredUser<AuthUser>());
   const { message } = App.useApp();
   const [items, setItems] = useState<ProjectAnalysisJob[]>([]);
@@ -25,6 +25,10 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [modelId, setModelId] = useState('');
   const [tokenBudget, setTokenBudget] = useState<number | null>(null);
   const [costBudgetUsd, setCostBudgetUsd] = useState<number | null>(null);
+  const [autoModelId, setAutoModelId] = useState(repository.autoAnalysisModelId || '');
+  const [autoTokenBudget, setAutoTokenBudget] = useState(repository.autoAnalysisTokenBudget || 30000);
+  const [autoCostBudgetUsd, setAutoCostBudgetUsd] = useState(repository.autoAnalysisCostBudgetUsd || 0.1);
+  const [autoSaving, setAutoSaving] = useState(false);
   const [report, setReport] = useState<ProjectAnalysisReport | null>(null);
   const [scopeJob, setScopeJob] = useState<ProjectAnalysisReport | null>(null);
   const [scopeLoadingId, setScopeLoadingId] = useState('');
@@ -113,6 +117,20 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       message.success('分析任务已提交');
     } catch (cause) { setError(cause instanceof Error ? cause.message : '分析提交失败'); }
     finally { setStarting(false); }
+  };
+  const setAutoAnalysis = async (enabled: boolean) => {
+    if (enabled && !autoModelId) return;
+    const save = async () => {
+      setAutoSaving(true);
+      try {
+        await updateProjectAutoAnalysis(repository, { enabled, modelId: autoModelId, tokenBudget: autoTokenBudget, costBudgetUsd: autoCostBudgetUsd, confirmRecurringCost: enabled });
+        onRepositoryChanged();
+        message.success(enabled ? '提交后自动分析已开启' : '提交后自动分析已关闭');
+      } catch (cause) { setError(cause instanceof Error ? cause.message : '自动分析设置失败'); }
+      finally { setAutoSaving(false); }
+    };
+    if (!enabled) return void save();
+    Modal.confirm({ title: '确认开启持续模型分析？', content: `公开仓库每次收到对应分支的提交后，将在扫描完成时自动向所选模型发送代码摘录、项目目标和需求文档。每次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}；仍受账号每日预算和限流约束，重复提交可能持续产生费用。`, okText: '确认开启', onOk: save });
   };
   const start = async (selectedScan = scanId, selectedModel = modelId) => {
     if (!selectedScan || !selectedModel) return;
@@ -233,6 +251,16 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const renderSnapshotTask = (task: ProjectAnalysisReport['linkedTasks'][number]) => <Space key={task.id} size="small" wrap><Tag>{taskStates[task.status] || task.status} · {task.progress === null ? '进度未知' : `${Math.round(task.progress)}%`}</Tag>{task.currentlyAvailable ? <Link to={`/tasks/${task.id}`}>{task.title}</Link> : <Typography.Text type="secondary">{task.title}（当前不可访问）</Typography.Text>}</Space>;
 
   return <Card title="项目分析报告">
+    {!repository.private && <Card size="small" title="提交后自动分析" style={{ marginBottom: 16 }}>
+      <Space wrap>
+        <Select aria-label="自动分析模型" placeholder="选择模型" value={autoModelId || undefined} onChange={setAutoModelId} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
+        <Select aria-label="自动分析 token 上限" value={autoTokenBudget} onChange={setAutoTokenBudget} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 170 }} options={[30000,60000,120000].map(value => ({ value, label: `${value.toLocaleString()} token` }))} />
+        <Select aria-label="自动分析单次费用上限" value={autoCostBudgetUsd} onChange={setAutoCostBudgetUsd} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 170 }} options={[0.1,0.5,1,5].map(value => ({ value, label: `最多 $${value.toFixed(2)}` }))} />
+        <Switch aria-label="提交后自动模型分析" checked={repository.autoAnalysisEnabled} loading={autoSaving} disabled={!repository.autoAnalysisEnabled && (!repository.webhookScanEnabled || !autoModelId)} onChange={value => void setAutoAnalysis(value)} />
+        <Typography.Text>{repository.autoAnalysisEnabled ? '已开启' : '未开启'}</Typography.Text>
+      </Space>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>仅公开仓库可用。先开启“提交后扫描”，再单独确认持续模型调用。已开启时如需更换模型或费用上限，请先关闭后重新配置。</Typography.Paragraph>
+    </Card>}
     <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
     <Space wrap style={{ marginBottom: 16 }}>
       <Select aria-label="扫描记录" placeholder="选择扫描记录" value={scanId || undefined} onChange={setScanId} style={{ minWidth: 230 }} options={scans.filter(scan => ['completed', 'partial'].includes(scan.status)).map(scan => ({ value: scan.id, label: `${scan.commitSha.slice(0, 10)} · ${scan.status === 'partial' ? '部分覆盖' : '完整覆盖'}${scan.forceFull ? ' · 全量重扫' : ''}` }))} />
@@ -261,6 +289,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       { title: '分支', dataIndex: 'branch' },
       { title: 'commit', dataIndex: 'commitSha', render: (value: string) => <code>{value.slice(0, 10)}</code> },
       { title: '模型', dataIndex: 'model' },
+      { title: '来源', render: (_, item: ProjectAnalysisJob) => item.triggerSource === 'webhook' ? <Tag color="blue">提交事件</Tag> : '手动' },
       { title: '状态', render: (_, item: ProjectAnalysisJob) => <Space><Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'canceled' ? 'default' : 'processing'}>{states[item.status]}</Tag><Typography.Text type="secondary">{item.attempts}/{item.maxAttempts} 次</Typography.Text></Space> },
       { title: '覆盖', render: (_, item: ProjectAnalysisJob) => item.status === 'completed' ? `${item.selectedFileCount}/${item.availableFileCount} 文件` : '—' },
       { title: '复用', render: (_, item: ProjectAnalysisJob) => item.reusedCallCount ? `${item.reusedCallCount} 次调用` : '—' },

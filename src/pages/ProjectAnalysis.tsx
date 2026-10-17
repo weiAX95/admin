@@ -236,7 +236,7 @@ export default function ProjectAnalysis() {
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
         { title: '最近完成分析', render: (_, item: ProjectRepository) => item.lastAnalysisAt && item.lastAnalyzedCommitSha ? <Space direction="vertical" size={0}><span>{new Date(item.lastAnalysisAt).toLocaleString('zh-CN')}</span><a href={`${item.url}/commit/${item.lastAnalyzedCommitSha}`} target="_blank" rel="noopener noreferrer" title={item.lastAnalyzedCommitSha}><code>{item.lastAnalyzedCommitSha.slice(0, 10)}</code></a>{item.commitSha !== item.lastAnalyzedCommitSha && <Tag color="warning">有新提交待分析</Tag>}</Space> : '尚无完成的分析' },
-        { title: '提交后扫描', render: (_, item: ProjectRepository) => <Tooltip title="收到已验证的 GitHub 分支提交事件后自动创建扫描；模型分析仍需手动启动"><Switch aria-label={`${item.fullName} 提交后自动扫描`} checked={item.webhookScanEnabled} loading={webhookSaving === item.id} onChange={enabled => void changeWebhookScan(item,enabled)} /></Tooltip> },
+        { title: '提交后扫描', render: (_, item: ProjectRepository) => <Tooltip title="收到已验证的 GitHub 分支提交事件后自动创建扫描；公开仓库可另行开启自动模型分析"><Switch aria-label={`${item.fullName} 提交后自动扫描`} checked={item.webhookScanEnabled} loading={webhookSaving === item.id} onChange={enabled => void changeWebhookScan(item,enabled)} /></Tooltip> },
         { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />
     </Card>
@@ -249,7 +249,7 @@ export default function ProjectAnalysis() {
         {editing?.baselineVersionId && <Typography.Paragraph type="secondary">已有版本化需求文档。请使用“需求文档”入口保存新版本。</Typography.Paragraph>}
       </Form>
     </Modal>
-    {items.find(item => item.id === selectedRepositoryId) && <ProjectScanPanel key={selectedRepositoryId} repository={items.find(item => item.id === selectedRepositoryId)!} onAnalysisCompleted={() => void load()} />}
+    {items.find(item => item.id === selectedRepositoryId) && <ProjectScanPanel key={selectedRepositoryId} repository={items.find(item => item.id === selectedRepositoryId)!} onAnalysisCompleted={() => void load()} onRepositoryChanged={() => void load()} />}
     <Modal title="关联已有学习任务" open={Boolean(taskRepositoryId)} footer={null} onCancel={() => setTaskRepositoryId('')}>
       {taskError && <Alert type="error" showIcon message={taskError} style={{ marginBottom: 12 }} />}
       <Space wrap style={{ marginBottom: 16 }}>
