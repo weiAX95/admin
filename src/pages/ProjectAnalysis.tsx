@@ -4,7 +4,7 @@ import { Alert, App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag
 import { Link } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
-import { createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, type ProjectGithubConnection, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
+import { createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
@@ -41,6 +41,9 @@ export default function ProjectAnalysis() {
   const [taskError, setTaskError] = useState('');
   const [githubConnection, setGithubConnection] = useState<ProjectGithubConnection | null>(null);
   const [githubBusy, setGithubBusy] = useState(false);
+  const [githubRepositories, setGithubRepositories] = useState<GithubAvailableRepository[]>([]);
+  const [githubRepositoriesLoading, setGithubRepositoriesLoading] = useState(false);
+  const [githubRepositoriesTruncated, setGithubRepositoriesTruncated] = useState(false);
 
   const loadGithubConnection = async () => {
     try { setGithubConnection(await getProjectGithubConnection()); }
@@ -60,9 +63,18 @@ export default function ProjectAnalysis() {
   };
   const disconnectGithub = async () => {
     setGithubBusy(true);
-    try { await disconnectProjectGithub(); await loadGithubConnection(); message.success('GitHub 账号已断开'); }
+    try { await disconnectProjectGithub(); setGithubRepositories([]); await loadGithubConnection(); message.success('GitHub 账号已断开'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '断开 GitHub 授权失败'); }
     finally { setGithubBusy(false); }
+  };
+  const loadGithubRepositories = async () => {
+    setGithubRepositoriesLoading(true);
+    try {
+      const result = await listGithubAvailableRepositories();
+      setGithubRepositories(result.items);
+      setGithubRepositoriesTruncated(result.truncated);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'GitHub 已授权仓库读取失败'); }
+    finally { setGithubRepositoriesLoading(false); }
   };
 
   const load = async () => {
@@ -184,6 +196,11 @@ export default function ProjectAnalysis() {
         <Typography.Text>{githubConnection?.connected ? `已连接 ${githubConnection.githubLogin}` : githubConnection?.configured ? '尚未连接 GitHub 账号' : '服务端尚未配置 GitHub App'}</Typography.Text>
         <Typography.Text type="secondary">连接仅建立账号授权；私有仓库尚未开放扫描。后续需选择具体仓库并确认模型数据范围。</Typography.Text>
         {githubConnection?.connected ? <Button danger loading={githubBusy} onClick={() => Modal.confirm({ title: '断开 GitHub 账号？', content: '断开后服务端删除本账号保存的 GitHub 凭证。', okText: '断开连接', okButtonProps: { danger: true }, onOk: disconnectGithub })}>断开连接</Button> : <Button loading={githubBusy} disabled={!githubConnection?.configured} onClick={() => void connectGithub()}>连接 GitHub</Button>}
+        {githubConnection?.connected && <>
+          <Button loading={githubRepositoriesLoading} onClick={() => void loadGithubRepositories()}>查看已授权仓库</Button>
+          {githubRepositories.length > 0 && <Space wrap>{githubRepositories.map(repo => <Tag key={repo.fullName} color={repo.private ? 'purple' : undefined}>{repo.fullName}{repo.private ? ' · 私有' : ' · 公开'}</Tag>)}</Space>}
+          {githubRepositoriesTruncated && <Typography.Text type="warning">授权仓库较多，当前仅展示前 500 个；后续提供分页选择。</Typography.Text>}
+        </>}
       </Space>
     </Card>
     <Card title="接入公开 GitHub 仓库">

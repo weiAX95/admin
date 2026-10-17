@@ -2362,7 +2362,7 @@ const server = http.createServer((req, res) => {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
-      const response = await handleProjectGithubAuth({ pathname, method, client: pool, me, req });
+      const response = await handleProjectGithubAuth({ pathname, method, client: activeClient, me, req });
       sendImmediate(res, response?.status || 404, response?.data || { error: 'GitHub 授权接口不存在' });
     })().catch(() => {
       console.error('[project-github] request failed');
