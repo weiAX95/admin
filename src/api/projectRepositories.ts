@@ -18,6 +18,10 @@ export interface ProjectRepository {
 }
 
 export const listProjectRepositories = () => http.get<{ items: ProjectRepository[] }>('/project-repositories');
+export interface ProjectGithubConnection { configured: boolean; connected: boolean; githubLogin: string | null; accessExpiresAt: string | null; refreshExpiresAt: string | null }
+export const getProjectGithubConnection = () => http.get<ProjectGithubConnection>('/project-github');
+export const startProjectGithubConnection = () => http.post<{ url: string }>('/project-github/start', {});
+export const disconnectProjectGithub = () => http.del<{ connected: false }>('/project-github');
 export const createProjectRepository = (body: { url: string; branch?: string; goal: string; requirementBaseline?: string }) => http.post<ProjectRepository>('/project-repositories', body);
 export const updateProjectRepository = (item: ProjectRepository, body: { goal: string; requirementBaseline: string }) => http.patch<ProjectRepository>(`/project-repositories/${item.id}`, {
   ...body, expectedGoal: item.goal, expectedRequirementBaseline: item.requirementBaseline, expectedBaselineVersionId: item.baselineVersionId,

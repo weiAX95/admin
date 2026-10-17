@@ -4,7 +4,7 @@ import { Alert, App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag
 import { Link } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
-import { createProjectRepository, createProjectRequirementBaseline, getProjectRequirementBaseline, linkProjectTask, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
+import { createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, type ProjectGithubConnection, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
@@ -39,6 +39,31 @@ export default function ProjectAnalysis() {
   const [taskLoading, setTaskLoading] = useState(false);
   const [taskSaving, setTaskSaving] = useState(false);
   const [taskError, setTaskError] = useState('');
+  const [githubConnection, setGithubConnection] = useState<ProjectGithubConnection | null>(null);
+  const [githubBusy, setGithubBusy] = useState(false);
+
+  const loadGithubConnection = async () => {
+    try { setGithubConnection(await getProjectGithubConnection()); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'GitHub 授权状态读取失败'); }
+  };
+  useEffect(() => {
+    void loadGithubConnection();
+    const result = new URLSearchParams(window.location.search).get('github');
+    if (result === 'failed') setError('GitHub 授权未完成或已过期，请重新连接');
+    if (result === 'connected') message.success('GitHub 账号已连接');
+    if (result) window.history.replaceState(null, '', window.location.pathname);
+  }, []);
+  const connectGithub = async () => {
+    setGithubBusy(true);
+    try { window.location.assign((await startProjectGithubConnection()).url); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '无法启动 GitHub 授权'); setGithubBusy(false); }
+  };
+  const disconnectGithub = async () => {
+    setGithubBusy(true);
+    try { await disconnectProjectGithub(); await loadGithubConnection(); message.success('GitHub 账号已断开'); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '断开 GitHub 授权失败'); }
+    finally { setGithubBusy(false); }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -154,6 +179,13 @@ export default function ProjectAnalysis() {
 
   return <Space direction="vertical" size={20} style={{ width: '100%' }}>
     <Alert type="info" showIcon message="公开仓库只读扫描与项目报告" description="先扫描固定 commit，再选择模型生成有文件行证据的报告；结论仍需人工核验，未扫描区域不代表未实现。" />
+    <Card title="GitHub App 账号连接">
+      <Space direction="vertical">
+        <Typography.Text>{githubConnection?.connected ? `已连接 ${githubConnection.githubLogin}` : githubConnection?.configured ? '尚未连接 GitHub 账号' : '服务端尚未配置 GitHub App'}</Typography.Text>
+        <Typography.Text type="secondary">连接仅建立账号授权；私有仓库尚未开放扫描。后续需选择具体仓库并确认模型数据范围。</Typography.Text>
+        {githubConnection?.connected ? <Button danger loading={githubBusy} onClick={() => Modal.confirm({ title: '断开 GitHub 账号？', content: '断开后服务端删除本账号保存的 GitHub 凭证。', okText: '断开连接', okButtonProps: { danger: true }, onOk: disconnectGithub })}>断开连接</Button> : <Button loading={githubBusy} disabled={!githubConnection?.configured} onClick={() => void connectGithub()}>连接 GitHub</Button>}
+      </Space>
+    </Card>
     <Card title="接入公开 GitHub 仓库">
       <Form form={form} layout="vertical" onFinish={values => void create(values)}>
         <Form.Item name="url" label="仓库地址" rules={[{ required: true, message: '请输入 https://github.com/所有者/仓库' }]}><Input placeholder="https://github.com/owner/repo" /></Form.Item>

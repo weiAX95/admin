@@ -76,6 +76,7 @@ import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
+import { completeProjectGithubAuthorization, handleProjectGithubAuth } from './project-github-auth.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
 import { handleProjectSuggestionAction } from './project-suggestion-actions.mjs';
@@ -602,6 +603,15 @@ async function handleRequest(req, res) {
   const method = req.method || "GET";
 
   if (method === "OPTIONS") return send(res, 204, {});
+
+  if (pathname === '/api/project-github/callback' && method === 'GET') {
+    let connected = false;
+    try { connected = await completeProjectGithubAuthorization(activeClient, url.searchParams); }
+    catch { console.error('[project-github] authorization callback failed'); }
+    res.writeHead(302, { Location: `/project-analysis?github=${connected ? 'connected' : 'failed'}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    res.end();
+    return;
+  }
 
   try {
     const publicShare = await handlePublicExperimentShare({ pathname, method, client: activeClient });
@@ -2344,6 +2354,19 @@ const server = http.createServer((req, res) => {
     })().catch(error => {
       if (!error.status) console.error('[projects] request failed:', error.message);
       if (!res.headersSent) sendImmediate(res, error.status || 500, { error: error.status ? error.message : '项目服务不可用' });
+    });
+    return;
+  }
+  if (pathname.startsWith('/api/project-github')) {
+    void (async () => {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      const me = await lookupSession(token);
+      if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      const response = await handleProjectGithubAuth({ pathname, method, client: pool, me, req });
+      sendImmediate(res, response?.status || 404, response?.data || { error: 'GitHub 授权接口不存在' });
+    })().catch(() => {
+      console.error('[project-github] request failed');
+      if (!res.headersSent) sendImmediate(res, 500, { error: 'GitHub 授权服务不可用' });
     });
     return;
   }
