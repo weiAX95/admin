@@ -280,6 +280,8 @@ flowchart LR
 
 [116_project_impact_plan.sql](../db/migrations/116_project_impact_plan.sql) 允许分析计划版本 3。版本 3 保留跨模块综合调用，并优先选择扫描差异及 JS／TS 一跳相对导入文件；受影响模块不复用跨报告输出。版本 1／2 作业恢复时仍使用原文件选择规则，详见[增量分析影响范围](project-analysis-impact.md)。
 
+[118_project_multilanguage_impact_plan.sql](../db/migrations/118_project_multilanguage_impact_plan.sql) 允许分析计划版本 4。版本 4 增加 Python、Go 的本地导入线索和多跳反向引用追踪；版本 3 的选择规则保持不变，供已有分析任务恢复和重试。
+
 ## 页面如何读写数据
 
 ```mermaid
