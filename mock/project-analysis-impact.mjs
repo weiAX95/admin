@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { projectModuleKey, selectProjectEvidence } from './project-analysis-core.mjs';
+import { projectApiDependencyEdges } from './project-analysis-api-impact.mjs';
 
 const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
 const relativeImport = /\b(?:from\s*|import\s*\(|require\s*\()\s*['"](\.{1,2}\/[^'"\n]+)['"]/g;
@@ -114,7 +115,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-export function selectProjectImpactEvidence(files, changes) {
+function selectImpactEvidence(files, changes, includeApiRoutes) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -130,11 +131,12 @@ export function selectProjectImpactEvidence(files, changes) {
   }
   const indexed = new Set([...current.keys(),...changedPaths]);
   const goModules = files.filter(file => file.path.endsWith('go.mod') && file.status === 'read' && typeof file.content === 'string').map(file => ({ directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.content.match(/^module\s+([^\s]+)\s*$/m)?.[1] })).filter(item => item.name).sort((a,b) => b.directory.length - a.directory.length);
+  const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
   const reverse = new Map();
   const importsByPath = new Map();
   for (const file of files) {
     if (file.status !== 'read') continue;
-    const imports = importedPaths(file,indexed,goModules);
+    const imports = [...new Set([...importedPaths(file,indexed,goModules),...(apiEdges.get(file.path) || [])])];
     importsByPath.set(file.path,imports);
     for (const target of imports) {
       if (!reverse.has(target)) reverse.set(target,new Set());
@@ -163,3 +165,6 @@ export function selectProjectImpactEvidence(files, changes) {
   const priorityPaths = [...currentChanged].sort().concat(...layers,[...dependencies].sort());
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
+
+export const selectProjectImpactEvidence = (files, changes) => selectImpactEvidence(files,changes,false);
+export const selectProjectImpactEvidenceV5 = (files, changes) => selectImpactEvidence(files,changes,true);

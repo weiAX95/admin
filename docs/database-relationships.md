@@ -282,6 +282,8 @@ flowchart LR
 
 [118_project_multilanguage_impact_plan.sql](../db/migrations/118_project_multilanguage_impact_plan.sql) 允许分析计划版本 4。版本 4 增加 Python、Go 的本地导入线索和多跳反向引用追踪；版本 3 的选择规则保持不变，供已有分析任务恢复和重试。
 
+[119_project_api_impact_plan.sql](../db/migrations/119_project_api_impact_plan.sql) 允许分析计划版本 5。版本 5 只根据明确的 API 路径字面量，为客户端请求和服务端路由建立应用层影响边；旧版本规则继续保留。
+
 ## 页面如何读写数据
 
 ```mermaid
