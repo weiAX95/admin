@@ -3,7 +3,7 @@ import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Spac
 import { Link } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
 import { listTasks } from '../api/tasks';
-import { addProjectFindingFeedback, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, previewProjectSuggestionTask, retryProjectAnalysis, startProjectAnalysis, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan, type ProjectSuggestionTaskPreview } from '../api/projectRepositories';
+import { addProjectFindingFeedback, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, previewPrivateProjectAnalysis, previewProjectSuggestionTask, retryProjectAnalysis, startProjectAnalysis, type PrivateProjectDisclosure, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan, type ProjectSuggestionTaskPreview } from '../api/projectRepositories';
 import ProjectReportComparison from './ProjectReportComparison';
 import { getStoredUser } from '../api/client';
 import { isAdministrator } from '../utils/roles';
@@ -14,7 +14,7 @@ const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队�
 const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
 const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' };
 const taskStates: Record<string, string> = { todo: '待办', in_progress: '进行中', done: '已完成', blocked: '阻塞' };
-const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用', ANALYSIS_BUDGET_EXCEEDED: '本次分析预算已不足以发起剩余模型调用', MODEL_CONNECTION_CHANGED: '模型连接配置已变化，请新建分析' };
+const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用', ANALYSIS_BUDGET_EXCEEDED: '本次分析预算已不足以发起剩余模型调用', MODEL_CONNECTION_CHANGED: '模型连接配置已变化，请新建分析', PRIVATE_CONSENT_REQUIRED: '缺少私有代码发送授权', GITHUB_AUTH_REQUIRED: 'GitHub 私有仓库授权已失效', GITHUB_ACCESS_CHECK_FAILED: '暂时无法核验 GitHub 私有仓库权限', MODEL_DESTINATION_CHANGED: '模型目的地已变化，请重新预览并创建分析' };
 
 export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void }) {
   const canEditTasks = isAdministrator(getStoredUser<AuthUser>());
@@ -35,6 +35,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [comparing, setComparing] = useState(false);
   const [starting, setStarting] = useState(false);
+  const [privatePreview, setPrivatePreview] = useState<{ disclosure: PrivateProjectDisclosure; scanId: string; modelId: string; tokenBudget: number | null; costBudgetUsd: number | null } | null>(null);
   const [actingId, setActingId] = useState('');
   const [actingSuggestionId, setActingSuggestionId] = useState('');
   const [attachSuggestionId, setAttachSuggestionId] = useState('');
@@ -103,14 +104,24 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     return () => { cancelled = true; };
   }, [repository.id, repository.goal, repository.requirementBaseline, repository.baselineVersionId, repository.commitSha]);
 
-  const start = async (selectedScan = scanId, selectedModel = modelId) => {
-    if (!selectedScan || !selectedModel) return;
+  const submit = async (selectedScan: string, selectedModel: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }, disclosure?: PrivateProjectDisclosure) => {
     setStarting(true);
     try {
-      const job = await startProjectAnalysis(repository.id, selectedScan, selectedModel, { tokenBudget, costBudgetUsd });
+      const job = await startProjectAnalysis(repository.id, selectedScan, selectedModel, budget, disclosure ? { disclosureDigest: disclosure.digest } : undefined);
       setItems(current => [job, ...current.filter(item => item.id !== job.id)]);
+      setPrivatePreview(null);
       message.success('分析任务已提交');
     } catch (cause) { setError(cause instanceof Error ? cause.message : '分析提交失败'); }
+    finally { setStarting(false); }
+  };
+  const start = async (selectedScan = scanId, selectedModel = modelId) => {
+    if (!selectedScan || !selectedModel) return;
+    if (!repository.private) return submit(selectedScan,selectedModel,{ tokenBudget,costBudgetUsd });
+    setStarting(true);
+    try {
+      const disclosure = await previewPrivateProjectAnalysis(repository.id,selectedScan,selectedModel);
+      setPrivatePreview({ disclosure, scanId: selectedScan, modelId: selectedModel, tokenBudget, costBudgetUsd });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '私有代码范围预览失败'); }
     finally { setStarting(false); }
   };
   const show = async (id: string) => {
@@ -231,6 +242,17 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       <Button type="primary" disabled={!scanId || !modelId || items.some(item => item.scanId === scanId && item.modelId === modelId && ['queued', 'analyzing'].includes(item.status))} loading={starting} onClick={() => void start()}>生成报告</Button>
     </Space>
     <Typography.Paragraph type="secondary">可选上限会固定到分析任务，重试累计计算已用量。提交前按输入字符保守预留 token 和费用；每次继续调用前重新核对，已发出的单次模型调用仍可能产生超出预估的用量。</Typography.Paragraph>
+    <Modal title="确认私有代码分析范围" open={Boolean(privatePreview)} onCancel={() => { if (!starting) setPrivatePreview(null); }} footer={<Space><Button disabled={starting} onClick={() => setPrivatePreview(null)}>取消</Button><Button type="primary" loading={starting} onClick={() => { if (privatePreview) void submit(privatePreview.scanId,privatePreview.modelId,{ tokenBudget:privatePreview.tokenBudget,costBudgetUsd:privatePreview.costBudgetUsd },privatePreview.disclosure); }}>确认发送并生成报告</Button></Space>} width={700}>
+      {privatePreview && <Space direction="vertical" style={{ width:'100%' }}>
+        <Alert type="warning" showIcon message="以下内容将发送给模型提供方" description="本次扫描中选出的代码／文档摘录、项目目标和需求文档会作为模型输入。仓库正文与注释只作为待分析材料，不会执行仓库脚本。" />
+        <Typography.Text>提供方：{privatePreview.disclosure.provider} · 模型：{privatePreview.disclosure.model}</Typography.Text>
+        <Typography.Text>数据目的地：<code>{privatePreview.disclosure.destination}</code></Typography.Text>
+        <Typography.Text>固定 commit：{scans.find(item => item.id === privatePreview.scanId)?.commitSha.slice(0,10)}</Typography.Text>
+        <Typography.Text>扫描预算：{privatePreview.disclosure.scanFileLimit} 个文件、{Math.round(privatePreview.disclosure.scanByteLimit / 1024 / 1024)} MiB；本次选中 {privatePreview.disclosure.fileCount} 个文件摘录，{privatePreview.disclosure.truncatedCount} 个摘录已截短。</Typography.Text>
+        {!privatePreview.disclosure.scanCoverageComplete && <Alert type="warning" showIcon message="本次扫描为部分覆盖，未读文件不会送入模型" />}
+        <div style={{ maxHeight:180,overflow:'auto',background:'rgba(127,127,127,0.06)',borderRadius:6,padding:8 }}>{privatePreview.disclosure.paths.map(path => <div key={path}><code>{path}</code></div>)}</div>
+      </Space>}
+    </Modal>
     {!models.length && <Alert type="info" showIcon message="暂无可用的文本模型；请先在模型中心配置模型、连接和预算" style={{ marginBottom: 16 }} />}
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
     <Table rowKey="id" size="small" dataSource={items} pagination={{ pageSize: 5 }} scroll={{ x: 720 }} columns={[

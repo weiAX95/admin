@@ -107,7 +107,9 @@ export interface ProjectReportComparison {
   suggestions: { added: { topic: string; practice: string }[]; removed: { topic: string; practice: string }[] };
 }
 export const compareProjectAnalyses = (repositoryId: string, olderId: string, newerId: string) => http.get<ProjectReportComparison>(`/project-repositories/${repositoryId}/analyses/compare/${olderId}/${newerId}`);
-export const startProjectAnalysis = (repositoryId: string, scanId: string, modelId: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses`, { scanId, modelId, ...budget });
+export interface PrivateProjectDisclosure { digest: string; provider: string; model: string; destination: string; fileCount: number; paths: string[]; truncatedCount: number; scanFileLimit: number; scanByteLimit: number; scanCoverageComplete: boolean }
+export const previewPrivateProjectAnalysis = (repositoryId: string, scanId: string, modelId: string) => http.post<PrivateProjectDisclosure>(`/project-repositories/${repositoryId}/analyses/disclosure`, { scanId, modelId });
+export const startProjectAnalysis = (repositoryId: string, scanId: string, modelId: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }, privateConsent?: { disclosureDigest: string }) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses`, { scanId, modelId, ...budget, ...(privateConsent ? { privateConsent: true, disclosureDigest: privateConsent.disclosureDigest } : {}) });
 export const getProjectAnalysis = (repositoryId: string, analysisId: string) => http.get<ProjectAnalysisReport>(`/project-repositories/${repositoryId}/analyses/${analysisId}`);
 export const cancelProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/cancel`, {});
 export const retryProjectAnalysis = (repositoryId: string, analysisId: string) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses/${analysisId}/retry`, {});

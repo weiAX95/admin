@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import pg from 'pg';
 import { isAdministrator } from './roles.mjs';
 import { completeWithProvider } from './provider-adapters.mjs';
-import { modelConnectionAvailable } from './model-connections.mjs';
+import { modelConnectionAvailable, resolveModelConnection } from './model-connections.mjs';
 import { modelUsable, supportedProvider } from './model-governance.mjs';
 import { checkTokenReservations, reserveRunTokens } from './model-quotas.mjs';
 import { checkModelRate, recordModelRateRejection, reserveModelRate } from './model-rate-limits.mjs';
@@ -15,6 +15,7 @@ import { cachedProjectCallValid, findReusableProjectCalls, projectCallFingerprin
 import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
 import { tryModelSlot, releaseModelSlot } from './model-concurrency.mjs';
+import { assertGithubPrivateRepoAccess, GithubAuthorizationError } from './project-github-auth.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -29,6 +30,60 @@ const pending = new Map();
 const running = new Map();
 const defaultRunModel = (client, job, messages, signal) => completeWithProvider(client, { provider: job.provider, connectionId: job.connection_id, model: job.api_model, messages, signal, parameters: { temperature: 0, max_tokens: MAX_OUTPUT_TOKENS }, timeoutMs: 90000, audit: { runId: job.id, attempt: job.attempts, userId: job.owner_id, module: 'project_analysis', phase: 'main', modelId: job.model_id, redactPrompt: true } });
 const hasSensitiveMetadata = job => [job.full_name, job.branch, job.goal, job.requirement_baseline, job.requirement_document].some(value => value && containsKnownSecret(value));
+
+function modelDestination(baseUrl) {
+  try {
+    const url = new URL(baseUrl);
+    if (url.username || url.password || url.search || url.hash || url.protocol !== 'https:' && !(url.protocol === 'http:' && process.env.ALLOW_LOCAL_MODEL_ENDPOINTS === '1' && ['localhost','127.0.0.1','[::1]'].includes(url.hostname))) throw new Error();
+    return `${url.origin}${url.pathname.replace(/\/$/,'')}`;
+  } catch { throw new Error('私有分析模型目的地配置无效'); }
+}
+
+async function privateDisclosure(client, repository, scan, model, selected) {
+  const connection = await resolveModelConnection(client,model.provider,model.connection_id);
+  const destination = modelDestination(connection.baseUrl);
+  const scope = {
+    repositoryId: repository.id, fullName: repository.full_name, scanId: scan.id,
+    commitSha: scan.commit_sha.trim(), goal: repository.goal,
+    requirementBaseline: repository.requirement_baseline,
+    baselineVersionId: repository.baseline_version_id || null,
+    requirementDocumentSha256: crypto.createHash('sha256').update(repository.requirement_document || '').digest('hex'),
+    modelId: model.id, model: model.api_model, provider: model.provider, destination,
+    files: selected.map(file => ({ path: file.path, gitSha: file.gitSha, excerptSha256: crypto.createHash('sha256').update(file.numberedContent).digest('hex') })),
+  };
+  return {
+    digest: crypto.createHash('sha256').update(JSON.stringify(scope)).digest('hex'),
+    provider: model.provider, model: model.api_model, destination,
+    fileCount: selected.length, paths: selected.map(file => file.path),
+    truncatedCount: selected.filter(file => file.truncated).length,
+    scanFileLimit: scan.budget_file_limit, scanByteLimit: scan.budget_byte_limit,
+    scanCoverageComplete: scan.coverage_complete,
+  };
+}
+
+async function verifyPrivateAnalysisAccess(client, job) {
+  if (!job.private_disclosure) throw Object.assign(new Error('缺少私有代码模型授权'), { code: 'PRIVATE_CONSENT_REQUIRED' });
+  try { await assertGithubPrivateRepoAccess(client,job.owner_id,job.full_name); }
+  catch (error) { throw Object.assign(new Error('GitHub 私有仓库授权不可用'), { code: error instanceof GithubAuthorizationError ? 'GITHUB_AUTH_REQUIRED' : 'GITHUB_ACCESS_CHECK_FAILED' }); }
+  let destination;
+  try { destination = modelDestination((await resolveModelConnection(client,job.provider,job.connection_id)).baseUrl); }
+  catch { throw Object.assign(new Error('模型数据目的地不可用'), { code: 'MODEL_DESTINATION_CHANGED' }); }
+  if (destination !== job.private_disclosure.destination) throw Object.assign(new Error('模型数据目的地已变化'), { code: 'MODEL_DESTINATION_CHANGED' });
+}
+
+async function runPrivateModelCall(client, job, messages, signal, runModel) {
+  await verifyPrivateAnalysisAccess(client,job);
+  const pooled = client instanceof pg.Pool;
+  const lock = pooled ? await client.connect() : client;
+  try {
+    await lock.query('BEGIN');
+    if (!(await lock.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 FOR SHARE',[job.owner_id])).rowCount) throw Object.assign(new Error('GitHub 授权已断开'), { code: 'GITHUB_AUTH_REQUIRED' });
+    const result = await runModel(client,job,messages,signal);
+    await lock.query('COMMIT');
+    return result;
+  } catch (error) { await lock.query('ROLLBACK').catch(() => undefined); throw error; }
+  finally { if (pooled) lock.release(); }
+}
 function enqueue(db, id, runModel) {
   if (pending.has(id)) return pending.get(id);
   const current = runTail.then(() => runProjectAnalysis(db, id, runModel));
@@ -158,6 +213,9 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
   try {
     await db.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,$2,$3,'analyzing') ON CONFLICT(analysis_id,attempt) DO UPDATE SET status='analyzing',started_at=CASE WHEN project_analysis_attempts.status='queued' THEN now() ELSE project_analysis_attempts.started_at END WHERE project_analysis_attempts.status IN ('queued','analyzing')", [id,job.attempts,job.estimated_max_cost_usd]);
     if ((await db.query('SELECT status FROM project_analyses WHERE id=$1', [id])).rows[0]?.status !== 'analyzing') return;
+    const repositoryAccess = (await db.query('SELECT is_private FROM project_repositories WHERE id=$1 AND owner_id=$2',[job.repository_id,job.owner_id])).rows[0];
+    if (!repositoryAccess) throw Object.assign(new Error('仓库不存在'), { code: 'GITHUB_AUTH_REQUIRED' });
+    if (repositoryAccess.is_private) await verifyPrivateAnalysisAccess(db,job);
     const scan = (await db.query('SELECT coverage_complete FROM project_scans WHERE id=$1', [job.scan_id])).rows[0];
     if (!scan) throw Object.assign(new Error('扫描记录不存在'), { code: 'SCAN_MISSING' });
     const files = (await db.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1', [job.scan_id])).rows;
@@ -191,7 +249,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
         const fingerprint = job.connection_version === null ? null : projectCallFingerprint(job,group);
         const marker = await db.query("INSERT INTO project_analysis_module_calls(analysis_id,attempt,module_key,status,input_fingerprint) SELECT $1,$2,$3,'started',$4 WHERE EXISTS(SELECT 1 FROM project_analyses WHERE id=$1 AND status='analyzing' AND attempts=$2) ON CONFLICT DO NOTHING RETURNING analysis_id", [job.id,job.attempts,group.moduleKey,fingerprint]);
         if (!marker.rowCount) return;
-        response = await runModel(db, job, group.messages, controller.signal);
+        response = repositoryAccess.is_private ? await runPrivateModelCall(db,job,group.messages,controller.signal,runModel) : await runModel(db, job, group.messages, controller.signal);
         const costUsd = (response.promptTokens * Number(job.input_price) + response.completionTokens * Number(job.output_price)) / 1_000_000;
         if (!Number.isInteger(response.promptTokens) || !Number.isInteger(response.completionTokens) || response.promptTokens < 0 || response.completionTokens < 0 || !Number.isFinite(costUsd)) throw Object.assign(new Error('模型用量无效'), { code: 'INVALID_USAGE' });
         try { await recordModelUsage(db,job,group.moduleKey,response,costUsd); }
@@ -210,9 +268,10 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     }
     const report = mergeProjectModuleReports(results);
     report.flows.push(...crossFlows);
+    if (repositoryAccess.is_private) await verifyPrivateAnalysisAccess(db,job);
     await saveReport(db, job, report, { selectedCount: selected.length, availableCount, coverageComplete, modules, technologies, results });
   } catch (error) {
-    const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE','CALL_OUTCOME_UNKNOWN','SENSITIVE_INPUT','ANALYSIS_BUDGET_EXCEEDED','MODEL_CONNECTION_CHANGED'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
+    const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE','CALL_OUTCOME_UNKNOWN','SENSITIVE_INPUT','ANALYSIS_BUDGET_EXCEEDED','MODEL_CONNECTION_CHANGED','PRIVATE_CONSENT_REQUIRED','GITHUB_AUTH_REQUIRED','GITHUB_ACCESS_CHECK_FAILED','MODEL_DESTINATION_CHANGED'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
     await db.query("UPDATE project_analyses SET status='failed',error_code=$2,summary=NULL,finished_at=now() WHERE id=$1 AND status='analyzing'", [id,errorCode]);
     await db.query("UPDATE project_analysis_attempts SET status=(SELECT status FROM project_analyses WHERE id=$1) WHERE analysis_id=$1 AND attempt=$2", [id,job.attempts]);
   } finally { if (running.get(id) === controller) running.delete(id); }
@@ -230,6 +289,28 @@ export async function resumeProjectAnalyses(db, runModel = defaultRunModel) {
 }
 
 export async function handleProjectAnalyses({ pathname, method, client, me, readBody, url, connectionAvailable = modelConnectionAvailable, runModel = defaultRunModel, req }) {
+  const disclosureRoute = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/disclosure$/);
+  if (disclosureRoute) {
+    const repositoryId = disclosureRoute[1];
+    if (method !== 'POST' || !UUID.test(repositoryId)) return fail(400,'私有分析预览参数无效');
+    const repository = (await client.query('SELECT * FROM project_repositories WHERE id=$1 AND owner_id=$2 AND is_private=true',[repositoryId,me.id])).rows[0];
+    if (!repository) return fail(404,'私有项目不存在');
+    if (!canAccess(me,'project_analyses','create',{ownerId:repository.owner_id})) return fail(403,'无权预览私有分析');
+    const body = await readBody();
+    if (!UUID.test(body?.scanId || '') || typeof body?.modelId !== 'string') return fail(400,'请选择扫描记录和模型');
+    const scan = (await client.query("SELECT * FROM project_scans WHERE id=$1 AND repository_id=$2 AND status IN ('completed','partial')",[body.scanId,repositoryId])).rows[0];
+    const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1',[body.modelId])).rows[0];
+    if (!scan || !modelUsable(model,me) || !supportedProvider.has(model.provider) || !model.capabilities?.output?.includes('text') || !await connectionAvailable(client,model)) return fail(409,'扫描记录或模型不可用');
+    try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name); }
+    catch (error) { return fail(error instanceof GithubAuthorizationError ? 403 : 502,error instanceof GithubAuthorizationError ? error.message : '暂时无法核验私有仓库授权'); }
+    if (repository.baseline_version_id) repository.requirement_document = (await client.query('SELECT content FROM project_requirement_baselines WHERE id=$1',[repository.baseline_version_id])).rows[0]?.content || null;
+    if (hasSensitiveMetadata({ ...repository, full_name: scan.full_name, branch: scan.branch })) return fail(422,'分析输入包含凭据');
+    const files = (await client.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1',[scan.id])).rows;
+    const { selected } = await scanImpactEvidence(client,scan.id,files,5);
+    if (!selected.length) return fail(422,'扫描没有可分析的文本');
+    try { return { status: 200, data: await privateDisclosure(client,repository,scan,model,selected) }; }
+    catch { return fail(409,'模型数据目的地暂不可用'); }
+  }
   const compare = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/compare\/([^/]+)\/([^/]+)$/);
   if (compare) {
     const [, repositoryId, olderId, newerId] = compare;
@@ -419,9 +500,17 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (hasSensitiveMetadata({ ...repository, full_name: scan.full_name, branch: scan.branch })) return fail(422,'分析输入包含凭据，请移除后重试');
   const { selected, impactedModules } = await scanImpactEvidence(client,scan.id,files,5);
   if (!selected.length) return fail(422,'扫描没有可分析的文本，请重新扫描');
+  let disclosure = null;
+  if (repository.is_private) {
+    try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name); }
+    catch (error) { return fail(error instanceof GithubAuthorizationError ? 403 : 502,error instanceof GithubAuthorizationError ? error.message : '暂时无法核验私有仓库授权'); }
+    try { disclosure = await privateDisclosure(client,repository,scan,model,selected); }
+    catch { return fail(409,'模型数据目的地暂不可用'); }
+    if (body.privateConsent !== true || body.disclosureDigest !== disclosure.digest) return fail(409,'私有代码范围或模型目的地已变化，请重新预览并确认');
+  }
   const jobInput = { repository_id: repositoryId, full_name: scan.full_name, branch: scan.branch, commit_sha: scan.commit_sha, goal: repository.goal, requirement_baseline: repository.requirement_baseline, requirement_document: repository.requirement_document, baseline_version_id: repository.baseline_version_id, analysis_plan_version: 5, model_id: model.id, provider: model.provider, api_model: model.api_model, connection_id: modelConnection?.id || null, connection_version: modelConnection?.version || null };
   const plan = modelPlan(jobInput,selected);
-  const reusable = modelConnection && !scan.force_full ? await findReusableProjectCalls(client,jobInput,plan,impactedModules) : new Map();
+  const reusable = !repository.is_private && modelConnection && !scan.force_full ? await findReusableProjectCalls(client,jobInput,plan,impactedModules) : new Map();
   const pendingPlan = plan.filter(group => !reusable.has(group.moduleKey));
   const budget = modelBudget(pendingPlan,model);
   if (model.context_window && budget.maxCallTokens > model.context_window) return fail(409,'模型上下文窗口小于本次分析预算');
@@ -437,6 +526,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     await connection.query('SELECT pg_advisory_xact_lock(748204)');
     const currentRepository = (await connection.query('SELECT goal,requirement_baseline,baseline_version_id,commit_sha FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR SHARE',[repositoryId,me.id])).rows[0];
     if (!currentRepository || currentRepository.goal !== repository.goal || currentRepository.requirement_baseline !== repository.requirement_baseline || currentRepository.baseline_version_id !== repository.baseline_version_id || currentRepository.commit_sha.trim() !== repository.commit_sha.trim()) { await connection.query('ROLLBACK'); return fail(409,'项目目标、需求版本或 commit 已变化，请重新提交分析'); }
+    if (repository.is_private && !(await connection.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 FOR SHARE',[me.id])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'GitHub 授权已断开，请重新连接'); }
     if (modelConnection && !(await connection.query('SELECT 1 FROM model_connections WHERE id=$1 AND version=$2 AND active=true',[modelConnection.id,modelConnection.version])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'模型连接配置已变化，请重新提交分析'); }
     const active = (await connection.query("SELECT * FROM project_analyses WHERE scan_id=$1 AND model_id=$2 AND status IN ('queued','analyzing') LIMIT 1", [scan.id,model.id])).rows[0];
     if (active) { await connection.query('COMMIT'); return { status: 202, data: view(active) }; }
@@ -452,7 +542,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     if (quota && quota.status !== 200) { await connection.query('ROLLBACK'); return quota; }
     const rate = budget.calls ? await checkModelRate(connection,[{ modelId: model.id, calls: budget.calls, tokens: budget.reservedTokens }]) : null;
     if (rate && rate.status !== 200) { await connection.query('ROLLBACK'); await recordModelRateRejection(connection,rate,'projects',me.id); return rate; }
-    created = (await connection.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,baseline_version_id,model_id,provider,api_model,connection_id,connection_version,input_price,output_price,estimated_max_cost_usd,analysis_plan_version,token_budget,cost_budget_usd,reused_call_count,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,5,$19,$20,$21,'queued') RETURNING *", [id,repositoryId,scan.id,me.id,scan.full_name,scan.branch,scan.commit_sha,repository.goal,repository.requirement_baseline,repository.baseline_version_id,model.id,model.provider,model.api_model,modelConnection?.id || null,modelConnection?.version || null,model.input_usd_per_million,model.output_usd_per_million,estimatedCost,tokenBudget,costBudgetUsd,reusable.size])).rows[0];
+    created = (await connection.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,baseline_version_id,model_id,provider,api_model,connection_id,connection_version,input_price,output_price,estimated_max_cost_usd,analysis_plan_version,token_budget,cost_budget_usd,reused_call_count,private_disclosure,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,5,$19,$20,$21,$22::jsonb,'queued') RETURNING *", [id,repositoryId,scan.id,me.id,scan.full_name,scan.branch,scan.commit_sha,repository.goal,repository.requirement_baseline,repository.baseline_version_id,model.id,model.provider,model.api_model,modelConnection?.id || null,modelConnection?.version || null,model.input_usd_per_million,model.output_usd_per_million,estimatedCost,tokenBudget,costBudgetUsd,reusable.size,disclosure ? JSON.stringify({ ...disclosure, confirmedAt: new Date().toISOString() }) : null])).rows[0];
     await connection.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,1,$2,'queued')", [id,estimatedCost]);
     for (const [moduleKey,cache] of reusable) await connection.query("INSERT INTO project_analysis_module_calls(analysis_id,attempt,module_key,status,response_output,prompt_tokens,completion_tokens,cost_usd,input_fingerprint,reused,reused_source_analysis_id,reused_source_commit_sha,completed_at) VALUES($1,1,$2,'completed',$3,0,0,0,$4,true,$5,$6,now())",[id,moduleKey,cache.output,cache.fingerprint,cache.sourceAnalysisId,cache.sourceCommitSha]);
     if (budget.calls) {

@@ -58,7 +58,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/evaluation/metrics": { title: "评测指标", description: "管理固定评分规则、隔离 Python 指标及可用运行环境。", section: "评测中心" },
   "/evaluation/alerts": { title: "退化告警", description: "查看可比用例的逐指标下降并导出退化列表。", section: "评测中心" },
   "/prompts": { title: "提示词库", description: "管理版本、变量与提示词结构。", section: "学习工作台" },
-  "/project-analysis": { title: "项目分析", description: "接入公开仓库，逐步建立可追溯的项目进度与学习建议。", section: "学习工作台" },
+  "/project-analysis": { title: "项目分析", description: "接入 GitHub 仓库，建立可追溯的项目进度与学习建议。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
   "/account-audit": { title: "操作审计", description: "核对登录、退出和资源操作记录。", section: "系统管理" },
   "/permissions": { title: "权限矩阵", description: "查看当前后端角色权限及归属范围。", section: "系统管理" },
