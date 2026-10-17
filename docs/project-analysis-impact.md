@@ -6,7 +6,7 @@
 
 计划版本 6 读取扫描中可用的 `tsconfig*.json`／`jsconfig*.json`，解析 `compilerOptions.paths` 与 `baseUrl`，将字面量 JS／TS 导入别名映射到已索引的源文件，再沿同一静态影响图传播。支持精确映射及单个 `*` 通配符，并兼容配置中的注释和尾逗号；优先使用距离源文件最近的配置。配置缺失、未被扫描、`extends` 继承、Vite／Webpack 自定义别名或复杂路径映射不会推断成已知依赖。
 
-计划版本 7 在可读配置内递归解析本地相对路径 `extends`（含本地配置数组），沿用定义 `paths` 的配置位置解析相对目标，并在同一目录有多个配置时保守合并可索引的目标。循环引用、超出仓库、仅位于 `node_modules` 或未扫描的父配置不推断；这仍不是完整的 TypeScript 模块解析器。相对配置路径的归属依据 [TypeScript TSConfig 文档](https://www.typescriptlang.org/tsconfig/#extends)；`paths` 的相对基准依据 [TypeScript 模块解析文档](https://www.typescriptlang.org/docs/handbook/modules/reference.html#relationship-to-baseurl)。计划版本 6 的旧作业继续按其原有的直接配置规则恢复。
+计划版本 7 在可读配置内递归解析本地相对路径 `extends`（含本地配置数组），沿用定义 `paths` 的配置位置解析相对目标，并在同一目录有多个配置时保守合并可索引的目标。循环引用、超出仓库、仅位于 `node_modules` 或未扫描的父配置不推断；这仍不是完整的 TypeScript 模块解析器。相对配置路径的归属依据 [TypeScript TSConfig 文档](https://www.typescriptlang.org/tsconfig/#extends)；`paths` 的相对基准依据 [TypeScript 模块解析文档](https://www.typescriptlang.org/docs/handbook/modules/reference.html#relationship-to-baseurl)。私有代码发送预览、提交时的预算与影响范围、后台执行都使用当前计划版本，避免选入正文不一致。计划版本 6 的旧作业继续按其原有的直接配置规则恢复。
 
 目录模块若包含变化文件，或在上述静态图中与变化文件相关，就不会跨报告复用旧模型输出。其他模块仍须满足相同模型、连接版本、需求基线、目标、入选正文及逐行证据校验才可复用。跨模块综合调用始终重新执行。创建、恢复和重试都读取同一个扫描差异快照；旧计划版本 1／2 继续使用创建时的普通文件选择规则，版本 3 保留 JS／TS 一跳规则，版本 4 保留多语言导入规则，版本 5 保留 API 路径边规则，版本 6 保留直接配置别名规则，避免旧作业恢复时改变模型输入。
 

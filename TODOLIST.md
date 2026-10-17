@@ -31,7 +31,7 @@
 ### 0. 基础能力与数据契约（M0）
 
 - [ ] **0.1 持久化数据与迁移**
-  - [x] 为现有管理端的账号、任务、笔记、实验、会话、活动、历史、公开仓库连接、扫描索引与分析报告等数据建立 PostgreSQL 表；当前共 123 张表，包含已实现的外键、唯一约束和删除行为
+  - [x] 为现有管理端的账号、任务、笔记、实验、会话、活动、历史、公开仓库连接、扫描索引与分析报告等数据建立 PostgreSQL 表；当前共 144 张表，包含已实现的外键、唯一约束和删除行为
   - [x] 将当前关系表、外键、应用层逻辑关联及页面取数路径整理到 [数据库关系图](docs/database-relationships.md)；图中补全 `change_logs`／`activity` 的逻辑关联，并注明 `time_entries` 外键来源与 `annotation_tags` CHECK 约束
   - [x] 将现有 `mock/db.json` 的管理端数据迁移到 PostgreSQL；导入前备份、导入时核对数量和关联，失败则事务回滚
   - [x] 本地 API 运行时只读写 PostgreSQL；验证登录、任务和会话接口，重启后令牌与评分保留，重复导入被拒绝；现有管理端相关测试通过
@@ -227,7 +227,7 @@
   - [x] 已评分消息显示平均分、评分人数及标签人数
   - [x] AC：评分后即时更新；同一管理端账号对同一消息重复评分覆盖旧值
 
-本轮同时完成本地 API 的 PostgreSQL 迁移、一次性旧 JSON 导入、数据库令牌和会话消息增量上报。启动与备份步骤见 [README](README.md)，当前 123 张表与界面取数关系见 [数据库关系图](docs/database-relationships.md)，领域术语见 [CONTEXT](CONTEXT.md)，迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
+本轮同时完成本地 API 的 PostgreSQL 迁移、一次性旧 JSON 导入、数据库令牌和会话消息增量上报。启动与备份步骤见 [README](README.md)，当前 144 张表与界面取数关系见 [数据库关系图](docs/database-relationships.md)，领域术语见 [CONTEXT](CONTEXT.md)，迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
 
 - [ ] **3.3 自动质量检测**
   - [ ] 后端定时扫描（每 10 分钟或事件驱动）：
@@ -1068,7 +1068,7 @@
   - [x] 静态导入图补充 Python 绝对／相对导入和 Go 本模块包关系；反向追踪多跳引用方，变化文件的直接依赖作为上下文优先候选，删除文件仍可作为引用目标，见[增量分析影响范围](docs/project-analysis-impact.md)
   - [x] 明确的客户端 API 请求与服务端路由路径建立应用层影响边，优先重审受影响的跨前后端模块；新分析使用计划版本 5，旧版本继续按原规则恢复，见[增量分析影响范围](docs/project-analysis-impact.md)
   - [x] 从已扫描的 `tsconfig`／`jsconfig` 解析 `paths` 与 `baseUrl`，将 JS／TS 字面量别名导入纳入多跳影响图；新分析使用计划版本 6，旧作业仍按原版本恢复，见[增量分析影响范围](docs/project-analysis-impact.md)
-  - [x] 已扫描的本地相对路径 `extends` 参与 JS／TS 别名影响识别；同目录多配置保守合并，计划版本 7 保留旧作业的版本化规则，见[增量分析影响范围](docs/project-analysis-impact.md)
+  - [x] 已扫描的本地相对路径 `extends` 参与 JS／TS 别名影响识别；同目录多配置保守合并，预览／创建／执行使用同一计划版本 7，旧作业仍按原版本恢复，见[增量分析影响范围](docs/project-analysis-impact.md)
   - [ ] 按仓库、commit、文件哈希与分析配置缓存结果，分析变更文件并补读相关模块
   - [ ] 尚需仓库外配置／构建器别名、Python 运行时路径、Go 外部模块、动态 HTTP 路由与数据库等跨层依赖识别；静态多跳仍受索引覆盖与文件／模块预算约束
   - [ ] 尚需固定样例验证配置／基线失效、重命名伴随修改以及部分索引范围的差异准确性
