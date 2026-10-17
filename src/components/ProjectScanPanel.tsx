@@ -68,6 +68,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
       { title: '提交时间', dataIndex: 'createdAt', render: value => new Date(value).toLocaleString('zh-CN') },
       { title: 'commit', dataIndex: 'commitSha', render: (value: string) => <code title={value}>{value.slice(0, 10)}</code> },
       { title: '状态', render: (_, item: ProjectScan) => <Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'partial' ? 'warning' : 'processing'}>{statusLabels[item.status]}</Tag> },
+      { title: '来源', render: (_, item: ProjectScan) => item.triggerSource === 'webhook' ? <Tag color="blue">提交事件</Tag> : '手动' },
       { title: '限流重试', render: (_, item: ProjectScan) => item.nextAttemptAt ? `第 ${item.retryCount}/3 次 · ${new Date(item.nextAttemptAt).toLocaleString('zh-CN')}` : item.status === 'failed' && item.errorCode === 'GITHUB_RATE_LIMIT' ? '限流重试已达上限' : '—' },
       { title: '覆盖', render: (_, item: ProjectScan) => `${item.readCount} 读取 / ${item.excludedCount} 排除 / ${item.failedCount} 失败 / ${item.unscannedCount} 未扫描` },
       { title: '复用', render: (_, item: ProjectScan) => item.reusedCount ? `${item.reusedCount} 个 blob` : '—' },

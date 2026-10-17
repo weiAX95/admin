@@ -14,6 +14,6 @@
 
 ## 提交事件自动扫描（14.11 的第一段）
 
-GitHub App 的 Webhook URL 设为公网同源 `/api/project-github/webhook`，订阅 `push`，服务端单独配置 `GITHUB_APP_WEBHOOK_SECRET`。接收端先对**原始请求字节**计算 HMAC-SHA256，再使用恒定时间比较核验 `X-Hub-Signature-256`；缺少密钥或签名时拒绝处理。`X-GitHub-Delivery` 保存为唯一交付 ID，重复投递返回已接收而不重复建扫描；交付记录按审计保留天数清理，清理后极晚的重放仍会受签名及已有扫描检查约束。只有用户在项目列表为特定仓库和分支开启“提交后扫描”后，签名正确的分支 push 才会更新该行 commit 并排队扫描；标签推送、删除分支和未开启的分支不会排队。扫描仍受原有预算与私有仓库权限核验约束，重启后由现有扫描队列补做。关闭开关不删除历史扫描；主动断开 GitHub 账号时，私有仓库的自动扫描开关一并关闭。
+GitHub App 的 Webhook URL 设为公网同源 `/api/project-github/webhook`，订阅 `push`，服务端单独配置 `GITHUB_APP_WEBHOOK_SECRET`。接收端先对**原始请求字节**计算 HMAC-SHA256，再使用恒定时间比较核验 `X-Hub-Signature-256`；缺少密钥或签名时拒绝处理。`X-GitHub-Delivery` 保存为唯一交付 ID，重复投递返回已接收而不重复建扫描；交付记录按审计保留天数清理，清理后极晚的重放仍会受签名及已有扫描检查约束。只有用户在项目列表为特定仓库和分支开启“提交后扫描”后，签名正确的分支 push 才会更新该行 commit 并排队扫描；标签推送、删除分支和未开启的分支不会排队。两分钟内的后续提交只会改写仍处于排队状态、由 Webhook 创建的扫描目标 commit；手动扫描以及已经开始的扫描始终固定原 commit。若首个扫描已开始，后续提交另建扫描。扫描仍受原有预算与私有仓库权限核验约束，重启后由现有扫描队列补做。关闭开关不删除历史扫描；主动断开 GitHub 账号时，私有仓库的自动扫描开关一并关闭。
 
 当前开关仅自动创建扫描，**不会自动调用模型或生成报告**；自动分析、短时间提交合并及只在重要变化时通知仍在 14.11 待办中。接入正式 GitHub App 后须使用真实交付验证签名、分支匹配及重复交付。该入站接收端与 12.5 的对外发送 Webhook 独立。[GitHub 官方验签说明](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)和[交付最佳实践](https://docs.github.com/en/webhooks/using-webhooks/best-practices-for-using-webhooks)是这里的协议依据。

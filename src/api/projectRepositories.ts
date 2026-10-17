@@ -50,6 +50,7 @@ export interface ProjectScan {
   status: 'queued' | 'scanning' | 'completed' | 'partial' | 'failed';
   coverageComplete: boolean;
   forceFull: boolean;
+  triggerSource: 'manual' | 'webhook';
   baselineCommitSha: string | null;
   budgetFileLimit: number;
   budgetByteLimit: number;
