@@ -606,9 +606,12 @@ async function handleRequest(req, res) {
 
   if (pathname === '/api/project-github/callback' && method === 'GET') {
     let connected = false;
-    try { connected = await completeProjectGithubAuthorization(activeClient, url.searchParams); }
+    const nonceCookies = String(req.headers.cookie || '').split(';').map(item => item.trim()).filter(item => item.startsWith('project_github_oauth_nonce='));
+    const browserNonce = nonceCookies.length === 1 ? nonceCookies[0].slice('project_github_oauth_nonce='.length) : null;
+    try { connected = await completeProjectGithubAuthorization(activeClient, url.searchParams, browserNonce); }
     catch { console.error('[project-github] authorization callback failed'); }
-    res.writeHead(302, { Location: `/project-analysis?github=${connected ? 'connected' : 'failed'}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer' });
+    const secureCookie = process.env.GITHUB_APP_CALLBACK_URL?.startsWith('https:') ? '; Secure' : '';
+    res.writeHead(302, { Location: `/project-analysis?github=${connected ? 'connected' : 'failed'}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Set-Cookie': `project_github_oauth_nonce=; Max-Age=0; HttpOnly; SameSite=Lax; Path=/api/project-github/callback${secureCookie}` });
     res.end();
     return;
   }
@@ -2371,6 +2374,7 @@ const server = http.createServer((req, res) => {
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       const response = await handleProjectGithubAuth({ pathname, method, client: activeClient, me, req });
+      if (response?.browserNonce) res.setHeader('Set-Cookie', `project_github_oauth_nonce=${response.browserNonce}; Max-Age=600; HttpOnly; SameSite=Lax; Path=/api/project-github/callback${response.secureCookie ? '; Secure' : ''}`);
       sendImmediate(res, response?.status || 404, response?.data || { error: 'GitHub 授权接口不存在' });
     })().catch(() => {
       console.error('[project-github] request failed');

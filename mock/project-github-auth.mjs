@@ -175,11 +175,11 @@ async function exchangeCode(code) {
   return data;
 }
 
-export async function completeProjectGithubAuthorization(client, params) {
+export async function completeProjectGithubAuthorization(client, params, browserNonce) {
   const state = params.get('state');
   const code = params.get('code');
-  if (!state || !/^[a-f\d]{64}$/i.test(state) || !code || code.length > 500 || !configured()) return false;
-  const claim = (await client.query('SELECT owner_id FROM project_github_oauth_states WHERE state_hash=$1 AND expires_at>now()', [hash(state)])).rows[0];
+  if (!state || !/^[a-f\d]{64}$/i.test(state) || !/^[a-f\d]{64}$/i.test(browserNonce || '') || !code || code.length > 500 || !configured()) return false;
+  const claim = (await client.query('SELECT owner_id FROM project_github_oauth_states WHERE state_hash=$1 AND browser_nonce_hash=$2 AND expires_at>now()', [hash(state),hash(browserNonce)])).rows[0];
   if (!claim) return false;
   const tokens = await exchangeCode(code);
   const identityResponse = await fetch('https://api.github.com/user', {
@@ -196,7 +196,7 @@ export async function completeProjectGithubAuthorization(client, params) {
   const connection = pooled ? await client.connect() : client;
   try {
     await connection.query('BEGIN');
-    const consumed = await connection.query('DELETE FROM project_github_oauth_states WHERE state_hash=$1 AND owner_id=$2 AND expires_at>now() RETURNING owner_id', [hash(state),claim.owner_id]);
+    const consumed = await connection.query('DELETE FROM project_github_oauth_states WHERE state_hash=$1 AND browser_nonce_hash=$2 AND owner_id=$3 AND expires_at>now() RETURNING owner_id', [hash(state),hash(browserNonce),claim.owner_id]);
     if (!consumed.rowCount) { await connection.query('ROLLBACK'); return false; }
     await connection.query(`INSERT INTO project_github_connections(owner_id,github_user_id,github_login,access_cipher,access_nonce,access_tag,refresh_cipher,refresh_nonce,refresh_tag,access_expires_at,refresh_expires_at,key_version)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,now()+($10 * interval '1 second'),now()+($11 * interval '1 second'),$12)
@@ -226,14 +226,15 @@ export async function handleProjectGithubAuth({ pathname, method, client, me, re
     let callback;
     try { callback = new URL(process.env.GITHUB_APP_CALLBACK_URL); }
     catch { return fail(503, 'GitHub App 回调地址无效'); }
-    if (callback.protocol !== 'https:' && !(callback.protocol === 'http:' && ['localhost','127.0.0.1'].includes(callback.hostname))) return fail(503, 'GitHub App 回调地址必须使用 HTTPS');
+    if (callback.pathname !== '/api/project-github/callback' || callback.search || callback.hash || callback.username || callback.password || callback.protocol !== 'https:' && !(callback.protocol === 'http:' && ['localhost','127.0.0.1'].includes(callback.hostname))) return fail(503, 'GitHub App 回调地址必须指向安全的授权接口');
     const state = crypto.randomBytes(32).toString('hex');
+    const browserNonce = crypto.randomBytes(32).toString('hex');
     await client.query('DELETE FROM project_github_oauth_states WHERE expires_at<=now()');
-    await client.query('INSERT INTO project_github_oauth_states(state_hash,owner_id,expires_at) VALUES($1,$2,now()+interval \'10 minutes\')', [hash(state),me.id]);
+    await client.query('INSERT INTO project_github_oauth_states(state_hash,browser_nonce_hash,owner_id,expires_at) VALUES($1,$2,$3,now()+interval \'10 minutes\')', [hash(state),hash(browserNonce),me.id]);
     const url = new URL('https://github.com/login/oauth/authorize');
     url.search = new URLSearchParams({ client_id: process.env.GITHUB_APP_CLIENT_ID, redirect_uri: callback.toString(), state }).toString();
     if (req) await appendSecurityAudit(client,req,me,'github_authorization.started','project_github_connections',me.id);
-    return { status: 200, data: { url: url.toString() } };
+    return { status: 200, data: { url: url.toString() }, browserNonce, secureCookie: callback.protocol === 'https:' };
   }
   if (pathname === '/api/project-github' && method === 'DELETE') {
     const pooled = client instanceof pg.Pool;
