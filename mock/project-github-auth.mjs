@@ -243,6 +243,7 @@ export async function handleProjectGithubAuth({ pathname, method, client, me, re
       await connection.query('BEGIN');
       await connection.query('DELETE FROM project_github_oauth_states WHERE owner_id=$1', [me.id]);
       await connection.query('DELETE FROM project_github_connections WHERE owner_id=$1', [me.id]);
+      await connection.query('UPDATE project_repositories SET webhook_scan_enabled=false,updated_at=now() WHERE owner_id=$1 AND is_private=true AND webhook_scan_enabled=true', [me.id]);
       if (req) await appendSecurityAudit(connection,req,me,'github_authorization.disconnected','project_github_connections',me.id);
       await connection.query('COMMIT');
     } catch (error) { await connection.query('ROLLBACK'); throw error; }

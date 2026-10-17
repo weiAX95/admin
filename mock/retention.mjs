@@ -49,6 +49,7 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
     const modelSecurity = await client.query('DELETE FROM model_security_events WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
     const clientErrors = await client.query('DELETE FROM client_error_reports WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
     const loginHistory = await client.query('DELETE FROM account_login_history WHERE created_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
+    const githubDeliveries = await client.query('DELETE FROM project_github_webhook_deliveries WHERE received_at < $1::timestamptz - ($2 * interval \'1 day\')', [now.toISOString(), settings.audit_days]);
     const webhookEvents = await client.query(`DELETE FROM outbound_webhook_events e
       WHERE e.created_at < $1::timestamptz - ($2 * interval '1 day') AND e.fanned_out
       AND NOT EXISTS (SELECT 1 FROM outbound_webhook_deliveries d WHERE d.event_id=e.id AND d.status IN ('pending','sending'))`, [now.toISOString(), settings.audit_days]);
@@ -81,9 +82,10 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
         }
       }
     }
-    await client.query('UPDATE retention_cleanup_runs SET completed_at=now(),audit_deleted=$2,sessions_deleted=$3,candidates_deleted=$4,tasks_deleted=$5,notes_deleted=$6,experiments_deleted=$7,prompts_deleted=$8,purge_failures=$9,webhook_events_deleted=$10,users_deleted=$11 WHERE local_date=$1', [clock.date,auditDeleted+modelAudit.rowCount+rateRejections.rowCount+modelSecurity.rowCount+clientErrors.rowCount+loginHistory.rowCount,sessions,candidates,purged.tasks,purged.notes,purged.experiments,purged.prompt_library,JSON.stringify(failures),webhookEvents.rowCount,purged.users]);
+    const totalAuditDeleted = auditDeleted+modelAudit.rowCount+rateRejections.rowCount+modelSecurity.rowCount+clientErrors.rowCount+loginHistory.rowCount+githubDeliveries.rowCount;
+    await client.query('UPDATE retention_cleanup_runs SET completed_at=now(),audit_deleted=$2,sessions_deleted=$3,candidates_deleted=$4,tasks_deleted=$5,notes_deleted=$6,experiments_deleted=$7,prompts_deleted=$8,purge_failures=$9,webhook_events_deleted=$10,users_deleted=$11 WHERE local_date=$1', [clock.date,totalAuditDeleted,sessions,candidates,purged.tasks,purged.notes,purged.experiments,purged.prompt_library,JSON.stringify(failures),webhookEvents.rowCount,purged.users]);
     await client.query('COMMIT');
-    return { localDate: clock.date, auditDeleted: auditDeleted+modelAudit.rowCount+rateRejections.rowCount+modelSecurity.rowCount+clientErrors.rowCount+loginHistory.rowCount, webhookEventsDeleted: webhookEvents.rowCount, sessionsDeleted: sessions, candidatesDeleted: candidates, purged, failures };
+    return { localDate: clock.date, auditDeleted: totalAuditDeleted, webhookEventsDeleted: webhookEvents.rowCount, sessionsDeleted: sessions, candidatesDeleted: candidates, purged, failures };
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }

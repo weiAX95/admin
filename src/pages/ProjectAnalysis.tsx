@@ -1,10 +1,10 @@
 import { isAdministrator } from '../utils/roles';
 import { useEffect, useState } from 'react';
-import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
-import { createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
+import { createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, updateProjectWebhookScan, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
@@ -22,6 +22,7 @@ export default function ProjectAnalysis() {
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
   const [refreshing, setRefreshing] = useState('');
+  const [webhookSaving, setWebhookSaving] = useState('');
   const [selectedRepositoryId, setSelectedRepositoryId] = useState('');
   const [baselineRepositoryId, setBaselineRepositoryId] = useState('');
   const [baselineVersions, setBaselineVersions] = useState<ProjectRequirementBaseline[]>([]);
@@ -96,6 +97,18 @@ export default function ProjectAnalysis() {
     try { await refreshProjectRepository(id); await load(); message.success('分支 commit 已更新'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '读取分支失败'); }
     finally { setRefreshing(''); }
+  };
+  const changeWebhookScan = async (item: ProjectRepository, enabled: boolean) => {
+    setWebhookSaving(item.id);
+    try {
+      const updated = await updateProjectWebhookScan(item,enabled);
+      setItems(current => current.map(repository => repository.id === item.id ? updated : repository));
+      setError('');
+      message.success(enabled ? '提交后自动扫描已开启' : '提交后自动扫描已关闭');
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) await load();
+      setError(cause instanceof Error ? cause.message : '自动扫描设置失败');
+    } finally { setWebhookSaving(''); }
   };
   const openEdit = (item: ProjectRepository) => {
     setEditing(item);
@@ -223,6 +236,7 @@ export default function ProjectAnalysis() {
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
         { title: '最近完成分析', render: (_, item: ProjectRepository) => item.lastAnalysisAt && item.lastAnalyzedCommitSha ? <Space direction="vertical" size={0}><span>{new Date(item.lastAnalysisAt).toLocaleString('zh-CN')}</span><a href={`${item.url}/commit/${item.lastAnalyzedCommitSha}`} target="_blank" rel="noopener noreferrer" title={item.lastAnalyzedCommitSha}><code>{item.lastAnalyzedCommitSha.slice(0, 10)}</code></a>{item.commitSha !== item.lastAnalyzedCommitSha && <Tag color="warning">有新提交待分析</Tag>}</Space> : '尚无完成的分析' },
+        { title: '提交后扫描', render: (_, item: ProjectRepository) => <Tooltip title="收到已验证的 GitHub 分支提交事件后自动创建扫描；模型分析仍需手动启动"><Switch aria-label={`${item.fullName} 提交后自动扫描`} checked={item.webhookScanEnabled} loading={webhookSaving === item.id} onChange={enabled => void changeWebhookScan(item,enabled)} /></Tooltip> },
         { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />
     </Card>

@@ -5,6 +5,7 @@ export interface ProjectRepository {
   ownerId: string;
   fullName: string;
   private: boolean;
+  webhookScanEnabled: boolean;
   url: string;
   branch: string;
   goal: string;
@@ -30,6 +31,7 @@ export const updateProjectRepository = (item: ProjectRepository, body: { goal: s
   ...body, expectedGoal: item.goal, expectedRequirementBaseline: item.requirementBaseline, expectedBaselineVersionId: item.baselineVersionId,
 });
 export const refreshProjectRepository = (id: string) => http.post<ProjectRepository>(`/project-repositories/${id}/refresh`, {});
+export const updateProjectWebhookScan = (item: ProjectRepository, enabled: boolean) => http.patch<ProjectRepository>(`/project-repositories/${item.id}/webhook-scan`, { enabled, expectedEnabled: item.webhookScanEnabled });
 export interface ProjectLinkedTask { id: string; title: string; status: string; progress: number | null; ownerId?: string; requirementId: string | null }
 export const listProjectLinkedTasks = (repositoryId: string) => http.get<{ items: ProjectLinkedTask[]; requirements: { id: string; text: string }[]; baselineVersionId: string | null }>(`/project-repositories/${repositoryId}/tasks`);
 export const linkProjectTask = (repositoryId: string, taskId: string, requirementId: string | null, expectedBaselineVersionId: string | null) => http.post<ProjectLinkedTask>(`/project-repositories/${repositoryId}/tasks`, { taskId, requirementId, expectedBaselineVersionId });

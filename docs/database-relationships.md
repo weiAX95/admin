@@ -8,7 +8,7 @@
 
 > 权限矩阵由服务端 `mock/permissions.mjs` 当前参与接口鉴权的资源规则生成，经 `/api/permissions/matrix` 提供给 `/permissions` 页面；它不新增数据库表。矩阵单元格包含范围值，记录级可见性仍由任务归属、笔记创建者和 SuperAdmin 保护条件进一步限制。未接入统一策略的模块不会凭空出现在矩阵中。
 
-> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量、成本、上报归属与质量标记见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)、[063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)、[064_session_ingest_ownership.sql](../db/migrations/064_session_ingest_ownership.sql) 、[065_session_quality_flags.sql](../db/migrations/065_session_quality_flags.sql) 、[066_session_clusters.sql](../db/migrations/066_session_clusters.sql) 和 [067_session_cluster_counters.sql](../db/migrations/067_session_cluster_counters.sql)；分析调用恢复见 [068_project_analysis_call_recovery.sql](../db/migrations/068_project_analysis_call_recovery.sql)。截至 [123_project_github_browser_binding.sql](../db/migrations/123_project_github_browser_binding.sql)，本机迁移后的数据库表共 144 张。
+> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量、成本、上报归属与质量标记见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)、[063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)、[064_session_ingest_ownership.sql](../db/migrations/064_session_ingest_ownership.sql) 、[065_session_quality_flags.sql](../db/migrations/065_session_quality_flags.sql) 、[066_session_clusters.sql](../db/migrations/066_session_clusters.sql) 和 [067_session_cluster_counters.sql](../db/migrations/067_session_cluster_counters.sql)；分析调用恢复见 [068_project_analysis_call_recovery.sql](../db/migrations/068_project_analysis_call_recovery.sql)。截至 [124_project_github_webhooks.sql](../db/migrations/124_project_github_webhooks.sql)，本机迁移后的数据库表共 145 张。
 
 > [069_project_ownership_integrity.sql](../db/migrations/069_project_ownership_integrity.sql) 为项目分析增加复合外键，防止仓库、扫描、分析、建议决定在数据库层交叉归属；表数量不变。迁移遇到历史关联不一致时会报错，需先核对来源，不会自动改写旧记录。
 
@@ -202,7 +202,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [123_project_github_browser_binding.sql](../db/migrations/123_project_github_browser_binding.sql)。本机当前共 **144 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [124_project_github_webhooks.sql](../db/migrations/124_project_github_webhooks.sql)。本机当前共 **145 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -211,12 +211,14 @@ flowchart LR
   Users[(users)] -->|"FK owner_id · ON DELETE CASCADE"| Repositories[(project_repositories)]
   Users -->|"FK owner_id · ON DELETE CASCADE"| GithubStates[(project_github_oauth_states)]
   Users -->|"FK owner_id · ON DELETE CASCADE"| GithubConnections[(project_github_connections)]
-  GithubConnections -. "后续按用户令牌校验安装与仓库权限；当前未接私有扫描" .-> Repositories
+  GithubConnections -. "私有仓库访问时按用户令牌在线校验" .-> Repositories
   Repositories -->|"FK repository_id · ON DELETE CASCADE"| Baselines[(project_requirement_baselines)]
   Baselines -->|"FK baseline_version_id + repository_id · ON DELETE SET NULL baseline_version_id"| Repositories
   Page["/project-analysis"] --> API["/api/project-repositories"] --> Repositories
   API --> GitHub["GitHub 公开仓库 API／App 用户令牌私有仓库 API"]
-  Repositories -->|"FK repository_id · ON DELETE CASCADE"| Scans[(project_scans)]
+  GithubDeliveries[(project_github_webhook_deliveries)] -. "交付中的仓库名／分支，无 FK" .-> Repositories
+  GithubDeliveries -. "验签后按用户开关排队，无 FK" .-> Scans[(project_scans)]
+  Repositories -->|"FK repository_id · ON DELETE CASCADE"| Scans
   Repositories -->|"FK repository_id · ON DELETE CASCADE"| RepositoryTasks[(project_repository_tasks)]
   Tasks[(tasks)] -->|"FK task_id · ON DELETE CASCADE"| RepositoryTasks
   RepositoryTasks -. "requirement_id 为需求正文解析出的 ID" .-> Baselines
@@ -253,7 +255,9 @@ flowchart LR
   Tasks -->|"FK task_id · ON DELETE SET NULL"| Decisions
 ```
 
-`project_repositories` 保存公开或已授权私有仓库的规范名称、`is_private` 标记、分支、项目目标、需求基线文字、最近读取的 commit SHA 和读取时间；`owner_id` 是管理端账号外键，删除账号时级联清除连接。唯一索引限制同一账号重复接入同一仓库分支。列表与详情都按当前账号过滤，猜测 UUID 不会读到其他账号的连接。`last_checked_at` 表示读取分支的时间，不代表完成分析的时间。最近分析时间及对应 commit 从该仓库最近一条已完成的 `project_analyses` 查询得出，仓库本体不另存可过期副本；[060 索引迁移](../db/migrations/060_project_latest_analysis_idx.sql)用于按完成时间检索。
+`project_repositories` 保存公开或已授权私有仓库的规范名称、`is_private` 和 `webhook_scan_enabled` 标记、分支、项目目标、需求基线文字、最近读取的 commit SHA 和读取时间；`owner_id` 是管理端账号外键，删除账号时级联清除连接。唯一索引限制同一账号重复接入同一仓库分支。列表与详情都按当前账号过滤，猜测 UUID 不会读到其他账号的连接。`last_checked_at` 表示读取分支的时间，不代表完成分析的时间。最近分析时间及对应 commit 从该仓库最近一条已完成的 `project_analyses` 查询得出，仓库本体不另存可过期副本；[060 索引迁移](../db/migrations/060_project_latest_analysis_idx.sql)用于按完成时间检索。
+
+`project_github_webhook_deliveries` 以 GitHub 交付 UUID 为主键，记录经原始请求体 HMAC 验签后的事件、仓库名、分支、commit 与本次排队扫描数。一个交付可匹配多个账号的仓库记录，因此不以仓库 ID 建外键；未开启的仓库、标签事件和删除分支不会创建扫描。`project_repositories.webhook_scan_enabled` 默认关闭；Webhook 仅排队扫描，自动模型分析仍待接入。
 
 `project_github_oauth_states` 保存一次性随机授权状态与发起浏览器标记的哈希、发起授权的管理端账号及过期时间；`project_github_connections` 保存该账号对应的 GitHub 用户 ID、登录名、加密访问／刷新令牌和到期时间。两表的 `owner_id` 均指向 `users`，删除账号时级联清理。它们不与 `project_repositories` 建立 SQL 外键：连接可断开而历史仓库行保留。公开仓库仍走不携带凭证的读取路径；私有仓库登记、详情、扫描和模型分析按当前账号在线核验 GitHub App 用户权限；私有分析的确认范围与目的地快照保存在 `project_analyses.private_disclosure`，详见[GitHub App 授权边界](project-github-app.md)。
 

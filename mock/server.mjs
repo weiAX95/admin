@@ -77,6 +77,7 @@ import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
 import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, handleProjectGithubAuth } from './project-github-auth.mjs';
+import { handleProjectGithubWebhook } from './project-github-webhooks.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
 import { handleProjectSuggestionAction } from './project-suggestion-actions.mjs';
@@ -2348,8 +2349,9 @@ const server = http.createServer((req, res) => {
       const projectId = pathname.match(/^\/api\/project-repositories\/([0-9a-f-]{36})(?:\/|$)/i)?.[1];
       if (projectId) {
         const privateRepository = (await pool.query('SELECT full_name FROM project_repositories WHERE id=$1 AND owner_id=$2 AND is_private=true', [projectId,me.id])).rows[0];
-        const cancelOnly = req.method === 'POST' && /^\/api\/project-repositories\/[0-9a-f-]{36}\/analyses\/[0-9a-f-]{36}\/cancel$/i.test(pathname);
-        if (privateRepository && !cancelOnly) {
+        const authCleanup = req.method === 'POST' && /^\/api\/project-repositories\/[0-9a-f-]{36}\/analyses\/[0-9a-f-]{36}\/cancel$/i.test(pathname)
+          || req.method === 'PATCH' && /^\/api\/project-repositories\/[0-9a-f-]{36}\/webhook-scan$/i.test(pathname);
+        if (privateRepository && !authCleanup) {
           try { await assertGithubPrivateRepoAccess(pool,me.id,privateRepository.full_name); }
           catch (error) { return sendImmediate(res,error instanceof GithubAuthorizationError ? 403 : 502,{ error: error instanceof GithubAuthorizationError ? error.message : '暂时无法核验 GitHub 私有仓库权限' }); }
         }
@@ -2366,6 +2368,13 @@ const server = http.createServer((req, res) => {
     })().catch(error => {
       if (!error.status) console.error('[projects] request failed:', error.message);
       if (!res.headersSent) sendImmediate(res, error.status || 500, { error: error.status ? error.message : '项目服务不可用' });
+    });
+    return;
+  }
+  if (new URL(req.url, 'http://localhost').pathname === '/api/project-github/webhook') {
+    void handleProjectGithubWebhook(req,pool).then(result => sendImmediate(res,result.status,result.data)).catch(() => {
+      console.error('[project-github] webhook processing failed');
+      if (!res.headersSent) sendImmediate(res,500,{ error: 'GitHub Webhook 暂不可用' });
     });
     return;
   }
