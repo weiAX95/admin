@@ -7,7 +7,7 @@ import { modelUsable, supportedProvider } from './model-governance.mjs';
 import { checkTokenReservations, reserveRunTokens } from './model-quotas.mjs';
 import { checkModelRate, recordModelRateRejection, reserveModelRate } from './model-rate-limits.mjs';
 import { buildProjectModuleCoverage, detectProjectTechnologies, groupProjectEvidence, mergeProjectModuleReports, parseProjectRequirements, selectCrossModuleEvidence, selectProjectEvidence, validateCrossModuleFlows, validateProjectReport } from './project-analysis-core.mjs';
-import { selectProjectImpactEvidence, selectProjectImpactEvidenceV3, selectProjectImpactEvidenceV5 } from './project-analysis-impact.mjs';
+import { selectProjectImpactEvidence, selectProjectImpactEvidenceV3, selectProjectImpactEvidenceV5, selectProjectImpactEvidenceV6 } from './project-analysis-impact.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
 import { relatedAcceptedSuggestions } from './project-suggestion-similarity.mjs';
 import { compareProjectReports } from './project-report-comparison.mjs';
@@ -114,7 +114,7 @@ function modelPlan(job, selected) {
 async function scanImpactEvidence(client, scanId, files, planVersion) {
   if (planVersion < 3) return { selected: selectProjectEvidence(files), impactedModules: new Set() };
   const changes = (await client.query('SELECT change_kind,path,old_path FROM project_scan_changes WHERE scan_id=$1 ORDER BY position',[scanId])).rows.map(row => ({ kind: row.change_kind, path: row.path, oldPath: row.old_path }));
-  return planVersion === 3 ? selectProjectImpactEvidenceV3(files,changes) : planVersion === 4 ? selectProjectImpactEvidence(files,changes) : selectProjectImpactEvidenceV5(files,changes);
+  return planVersion === 3 ? selectProjectImpactEvidenceV3(files,changes) : planVersion === 4 ? selectProjectImpactEvidence(files,changes) : planVersion === 5 ? selectProjectImpactEvidenceV5(files,changes) : selectProjectImpactEvidenceV6(files,changes);
 }
 
 function modelBudget(plan, model) {
@@ -519,7 +519,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     catch { return fail(409,'模型数据目的地暂不可用'); }
     if (body.privateConsent !== true || body.disclosureDigest !== disclosure.digest) return fail(409,'私有代码范围或模型目的地已变化，请重新预览并确认');
   }
-  const jobInput = { repository_id: repositoryId, full_name: scan.full_name, branch: scan.branch, commit_sha: scan.commit_sha, goal: repository.goal, requirement_baseline: repository.requirement_baseline, requirement_document: repository.requirement_document, baseline_version_id: repository.baseline_version_id, analysis_plan_version: 5, model_id: model.id, provider: model.provider, api_model: model.api_model, connection_id: modelConnection?.id || null, connection_version: modelConnection?.version || null };
+  const jobInput = { repository_id: repositoryId, full_name: scan.full_name, branch: scan.branch, commit_sha: scan.commit_sha, goal: repository.goal, requirement_baseline: repository.requirement_baseline, requirement_document: repository.requirement_document, baseline_version_id: repository.baseline_version_id, analysis_plan_version: 6, model_id: model.id, provider: model.provider, api_model: model.api_model, connection_id: modelConnection?.id || null, connection_version: modelConnection?.version || null };
   const plan = modelPlan(jobInput,selected);
   const reusable = !repository.is_private && modelConnection && !scan.force_full ? await findReusableProjectCalls(client,jobInput,plan,impactedModules) : new Map();
   const pendingPlan = plan.filter(group => !reusable.has(group.moduleKey));
@@ -553,7 +553,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     if (quota && quota.status !== 200) { await connection.query('ROLLBACK'); return quota; }
     const rate = budget.calls ? await checkModelRate(connection,[{ modelId: model.id, calls: budget.calls, tokens: budget.reservedTokens }]) : null;
     if (rate && rate.status !== 200) { await connection.query('ROLLBACK'); await recordModelRateRejection(connection,rate,'projects',me.id); return rate; }
-    created = (await connection.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,baseline_version_id,model_id,provider,api_model,connection_id,connection_version,input_price,output_price,estimated_max_cost_usd,analysis_plan_version,token_budget,cost_budget_usd,reused_call_count,private_disclosure,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,5,$19,$20,$21,$22::jsonb,'queued') RETURNING *", [id,repositoryId,scan.id,me.id,scan.full_name,scan.branch,scan.commit_sha,repository.goal,repository.requirement_baseline,repository.baseline_version_id,model.id,model.provider,model.api_model,modelConnection?.id || null,modelConnection?.version || null,model.input_usd_per_million,model.output_usd_per_million,estimatedCost,tokenBudget,costBudgetUsd,reusable.size,disclosure ? JSON.stringify({ ...disclosure, confirmedAt: new Date().toISOString() }) : null])).rows[0];
+    created = (await connection.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,baseline_version_id,model_id,provider,api_model,connection_id,connection_version,input_price,output_price,estimated_max_cost_usd,analysis_plan_version,token_budget,cost_budget_usd,reused_call_count,private_disclosure,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,6,$19,$20,$21,$22::jsonb,'queued') RETURNING *", [id,repositoryId,scan.id,me.id,scan.full_name,scan.branch,scan.commit_sha,repository.goal,repository.requirement_baseline,repository.baseline_version_id,model.id,model.provider,model.api_model,modelConnection?.id || null,modelConnection?.version || null,model.input_usd_per_million,model.output_usd_per_million,estimatedCost,tokenBudget,costBudgetUsd,reusable.size,disclosure ? JSON.stringify({ ...disclosure, confirmedAt: new Date().toISOString() }) : null])).rows[0];
     await connection.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,1,$2,'queued')", [id,estimatedCost]);
     for (const [moduleKey,cache] of reusable) await connection.query("INSERT INTO project_analysis_module_calls(analysis_id,attempt,module_key,status,response_output,prompt_tokens,completion_tokens,cost_usd,input_fingerprint,reused,reused_source_analysis_id,reused_source_commit_sha,completed_at) VALUES($1,1,$2,'completed',$3,0,0,0,$4,true,$5,$6,now())",[id,moduleKey,cache.output,cache.fingerprint,cache.sourceAnalysisId,cache.sourceCommitSha]);
     if (budget.calls) {

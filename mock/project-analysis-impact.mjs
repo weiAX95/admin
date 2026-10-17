@@ -5,7 +5,10 @@ import { projectApiDependencyEdges } from './project-analysis-api-impact.mjs';
 const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
 const relativeImport = /\b(?:from\s*|import\s*\(|require\s*\()\s*['"](\.{1,2}\/[^'"\n]+)['"]/g;
 const sideEffectImport = /\bimport\s*['"](\.{1,2}\/[^'"\n]+)['"]/g;
+const namedImport = /\b(?:from\s*|import\s*\(|require\s*\()\s*['"]([^.'"\n/][^'"\n]*)['"]/g;
+const namedSideEffectImport = /\bimport\s*['"]([^.'"\n/][^'"\n]*)['"]/g;
 const rootConfig = /^(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|tsconfig(?:\.[^/]*)?\.json|vite\.config\.[^/]+|pyproject\.toml|requirements\.txt|go\.mod|Cargo\.toml)$/;
+const aliasConfigPath = /(?:^|\/)(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json$/;
 
 function javascriptImports(file, indexed, resolveEmittedNames = false) {
   if (!/\.(?:[cm]?[jt]sx?)$/.test(file.path)) return [];
@@ -20,6 +23,71 @@ function javascriptImports(file, indexed, resolveEmittedNames = false) {
       const sourceNames = emitted ? ({ js: ['ts','tsx'], jsx: ['tsx'], mjs: ['mts'], cjs: ['cts'] })[emitted[2]].map(extension => `${emitted[1]}.${extension}`) : [];
       const target = [...extensions.map(extension => `${base}${extension}`),...sourceNames].find(candidate => indexed.has(candidate));
       if (target) found.add(target);
+    }
+  }
+  return [...found];
+}
+
+function jsonWithComments(content) {
+  let result = '', quoted = false, escaped = false, line = false, block = false;
+  for (let i = 0; i < content.length; i++) {
+    const char = content[i], next = content[i + 1];
+    if (line) { if (char === '\n') { line = false; result += char; } continue; }
+    if (block) { if (char === '*' && next === '/') { block = false; i++; } else if (char === '\n') result += char; continue; }
+    if (quoted) { result += char; if (escaped) escaped = false; else if (char === '\\') escaped = true; else if (char === '"') quoted = false; continue; }
+    if (char === '"') { quoted = true; result += char; }
+    else if (char === '/' && next === '/') { line = true; i++; }
+    else if (char === '/' && next === '*') { block = true; i++; }
+    else result += char;
+  }
+  let clean = '', inString = false, slash = false;
+  for (let i = 0; i < result.length; i++) {
+    const char = result[i];
+    if (inString) { clean += char; if (slash) slash = false; else if (char === '\\') slash = true; else if (char === '"') inString = false; continue; }
+    if (char === '"') { inString = true; clean += char; continue; }
+    if (char === ',' && /[}\]]/.test(result.slice(i + 1).match(/^\s*(.)/)?.[1] || '')) continue;
+    clean += char;
+  }
+  return clean;
+}
+
+function javascriptAliasConfigs(files) {
+  return files.filter(file => file.status === 'read' && aliasConfigPath.test(file.path) && typeof file.content === 'string').flatMap(file => {
+    try {
+      const options = JSON.parse(jsonWithComments(file.content)).compilerOptions;
+      if (!options || !options.paths || typeof options.paths !== 'object' || Array.isArray(options.paths)) return [];
+      const directory = path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path);
+      const base = path.posix.normalize(path.posix.join(directory,typeof options.baseUrl === 'string' ? options.baseUrl : '.'));
+      const paths = Object.entries(options.paths).filter(([key,values]) => typeof key === 'string' && key.split('*').length <= 2 && Array.isArray(values)).map(([key,values]) => ({ key, values: values.filter(value => typeof value === 'string' && value.split('*').length <= 2) }));
+      return [{ directory, base, paths }];
+    } catch { return []; }
+  }).sort((a,b) => b.directory.length - a.directory.length);
+}
+
+function javascriptAliasedImports(file, indexed, aliasConfigs) {
+  if (!/\.(?:[cm]?[jt]sx?)$/.test(file.path)) return [];
+  const config = aliasConfigs.find(item => !item.directory || file.path.startsWith(`${item.directory}/`));
+  if (!config) return [];
+  const found = new Set();
+  for (const pattern of [namedImport,namedSideEffectImport]) {
+    pattern.lastIndex = 0;
+    let match, count = 0;
+    while ((match = pattern.exec(file.content)) && count++ < 200) {
+      for (const mapping of config.paths) {
+        const star = mapping.key.indexOf('*');
+        const prefix = star < 0 ? mapping.key : mapping.key.slice(0,star);
+        const suffix = star < 0 ? '' : mapping.key.slice(star + 1);
+        if (star < 0 ? match[1] !== mapping.key : !match[1].startsWith(prefix) || !match[1].endsWith(suffix)) continue;
+        const captured = star < 0 ? '' : match[1].slice(prefix.length,match[1].length - suffix.length);
+        for (const value of mapping.values) {
+          const targetBase = path.posix.normalize(path.posix.join(config.base,value.replace('*',captured)));
+          if (targetBase.startsWith('../') || targetBase.startsWith('/')) continue;
+          const emitted = targetBase.match(/^(.*)\.(js|jsx|mjs|cjs)$/);
+          const sourceNames = emitted ? ({ js: ['ts','tsx'], jsx: ['tsx'], mjs: ['mts'], cjs: ['cts'] })[emitted[2]].map(extension => `${emitted[1]}.${extension}`) : [];
+          const target = [...extensions.map(extension => `${targetBase}${extension}`),...sourceNames].find(candidate => indexed.has(candidate));
+          if (target) found.add(target);
+        }
+      }
     }
   }
   return [...found];
@@ -77,9 +145,9 @@ function goImports(file, indexed, goModules) {
   return [...found];
 }
 
-function importedPaths(file, indexed, goModules) {
+function importedPaths(file, indexed, goModules, aliasConfigs = []) {
   if (typeof file.content !== 'string') return [];
-  return [...new Set([...javascriptImports(file,indexed,true),...pythonImports(file,indexed),...goImports(file,indexed,goModules)])];
+  return [...new Set([...javascriptImports(file,indexed,true),...javascriptAliasedImports(file,indexed,aliasConfigs),...pythonImports(file,indexed),...goImports(file,indexed,goModules)])];
 }
 
 export function selectProjectImpactEvidenceV3(files, changes) {
@@ -115,7 +183,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -132,11 +200,12 @@ function selectImpactEvidence(files, changes, includeApiRoutes) {
   const indexed = new Set([...current.keys(),...changedPaths]);
   const goModules = files.filter(file => file.path.endsWith('go.mod') && file.status === 'read' && typeof file.content === 'string').map(file => ({ directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.content.match(/^module\s+([^\s]+)\s*$/m)?.[1] })).filter(item => item.name).sort((a,b) => b.directory.length - a.directory.length);
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
+  const aliasConfigs = includeAliases ? javascriptAliasConfigs(files) : [];
   const reverse = new Map();
   const importsByPath = new Map();
   for (const file of files) {
     if (file.status !== 'read') continue;
-    const imports = [...new Set([...importedPaths(file,indexed,goModules),...(apiEdges.get(file.path) || [])])];
+    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs),...(apiEdges.get(file.path) || [])])];
     importsByPath.set(file.path,imports);
     for (const target of imports) {
       if (!reverse.has(target)) reverse.set(target,new Set());
@@ -161,10 +230,11 @@ function selectImpactEvidence(files, changes, includeApiRoutes) {
     dependencies.add(target);
     impactedModules.add(projectModuleKey(target));
   }
-  if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
+  if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath) || includeAliases && (aliasConfigPath.test(change.path) || change.oldPath && aliasConfigPath.test(change.oldPath)))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   const priorityPaths = [...currentChanged].sort().concat(...layers,[...dependencies].sort());
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
 export const selectProjectImpactEvidence = (files, changes) => selectImpactEvidence(files,changes,false);
 export const selectProjectImpactEvidenceV5 = (files, changes) => selectImpactEvidence(files,changes,true);
+export const selectProjectImpactEvidenceV6 = (files, changes) => selectImpactEvidence(files,changes,true,true);
