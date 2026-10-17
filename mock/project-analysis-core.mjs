@@ -126,7 +126,7 @@ export function buildProjectModuleCoverage(files, selectedFiles) {
   return [...modules.values()].sort((a,b) => a.moduleKey.localeCompare(b.moduleKey));
 }
 
-export function selectProjectEvidence(files, { maxFiles = 30, maxChars = 30000, maxCharsPerFile = 3000, maxModules = 8 } = {}) {
+export function selectProjectEvidence(files, { maxFiles = 30, maxChars = 30000, maxCharsPerFile = 3000, maxModules = 8, priorityPaths = [] } = {}) {
   const eligible = files.filter(file => file.status === 'read' && typeof file.content === 'string' && !isSensitiveProjectPath(file.path) && !containsKnownSecret(file.content))
     .sort((a, b) => (categoryOrder[a.category] ?? 4) - (categoryOrder[b.category] ?? 4) || a.path.localeCompare(b.path));
   const groups = new Map();
@@ -141,6 +141,12 @@ export function selectProjectEvidence(files, { maxFiles = 30, maxChars = 30000, 
     for (const group of groups.values()) if (group[index]) { spread.push(group[index]); found = true; }
     if (!found) break;
   }
+  const priority = new Map(priorityPaths.map((value,index) => [value,index]));
+  spread.sort((a,b) => {
+    const left = priority.get(a.path) ?? Infinity;
+    const right = priority.get(b.path) ?? Infinity;
+    return left === right ? 0 : left - right;
+  });
   const selected = [];
   const selectedModules = new Set();
   let remaining = maxChars;

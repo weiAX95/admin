@@ -29,10 +29,10 @@ export function cachedProjectCallValid(job, group, output) {
   } catch { return false; }
 }
 
-export async function findReusableProjectCalls(client, job, plan) {
+export async function findReusableProjectCalls(client, job, plan, impactedModules = new Set()) {
   const reusable = new Map();
   for (const group of plan) {
-    if (group.kind === 'cross') continue;
+    if (group.kind === 'cross' || impactedModules.has(group.moduleKey)) continue;
     const fingerprint = projectCallFingerprint(job,group);
     const rows = (await client.query(`SELECT c.response_output,a.id AS source_analysis_id,a.commit_sha AS source_commit_sha
       FROM project_analysis_module_calls c JOIN project_analyses a ON a.id=c.analysis_id
