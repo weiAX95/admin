@@ -2467,6 +2467,7 @@ try {
   server.listen(PORT, "127.0.0.1", () => {
     console.log(`[mock] PostgreSQL API listening on http://127.0.0.1:${PORT}`);
     setInterval(() => { void resumeProjectScans(pool, undefined, false).catch(error => console.error('[project-scans] resume failed:',error)); }, 5000).unref();
+    setInterval(() => { void resumeProjectAnalyses(pool).catch(error => console.error('[project-analyses] resume failed:',error)); }, 5000).unref();
     scheduleRecurrences(0);
     void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error));
     setInterval(() => { void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error)); }, 3600_000).unref();
