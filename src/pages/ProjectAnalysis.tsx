@@ -23,7 +23,7 @@ export default function ProjectAnalysis() {
   const [editError, setEditError] = useState('');
   const [refreshing, setRefreshing] = useState('');
   const [webhookSaving, setWebhookSaving] = useState('');
-  const [selectedRepositoryId, setSelectedRepositoryId] = useState('');
+  const [selectedRepositoryId, setSelectedRepositoryId] = useState(() => new URLSearchParams(window.location.search).get('repositoryId') || '');
   const [baselineRepositoryId, setBaselineRepositoryId] = useState('');
   const [baselineVersions, setBaselineVersions] = useState<ProjectRequirementBaseline[]>([]);
   const [baselineContent, setBaselineContent] = useState('');

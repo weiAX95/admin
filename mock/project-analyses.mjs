@@ -167,7 +167,7 @@ async function saveReport(db, job, report, metadata) {
   const client = pooled ? await db.connect() : db;
   try {
     await client.query('BEGIN');
-    const updated = await client.query("UPDATE project_analyses SET status='completed',summary=$2,selected_file_count=$3,available_file_count=$4,analysis_coverage_complete=$5,error_code=NULL,finished_at=now() WHERE id=$1 AND attempts=$6 AND status='analyzing' RETURNING id", [job.id, report.summary, metadata.selectedCount, metadata.availableCount, metadata.coverageComplete, job.attempts]);
+    const updated = await client.query("UPDATE project_analyses SET status='completed',summary=$2,selected_file_count=$3,available_file_count=$4,analysis_coverage_complete=$5,error_code=NULL,finished_at=now(),change_notification_state=CASE WHEN trigger_source='webhook' THEN 'pending' ELSE 'none' END WHERE id=$1 AND attempts=$6 AND status='analyzing' RETURNING id", [job.id, report.summary, metadata.selectedCount, metadata.availableCount, metadata.coverageComplete, job.attempts]);
     if (!updated.rowCount) throw new Error('分析作业已失效');
     const moduleSummaries = new Map(metadata.results.map(result => [result.moduleKey,result.report.summary]));
     for (const module of metadata.modules) await client.query('INSERT INTO project_analysis_modules(analysis_id,module_key,indexed_count,read_count,selected_count,truncated_count,excluded_count,failed_count,unscanned_count,summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [job.id,module.moduleKey,module.indexedCount,module.readCount,module.selectedCount,module.truncatedCount,module.excludedCount,module.failedCount,module.unscannedCount,moduleSummaries.get(module.moduleKey) || null]);

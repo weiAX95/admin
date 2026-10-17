@@ -81,6 +81,7 @@ import { handleProjectGithubWebhook } from './project-github-webhooks.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
 import { processProjectAutoAnalyses } from './project-auto-analyses.mjs';
+import { processProjectAnalysisNotifications } from './project-analysis-notifications.mjs';
 import { handleProjectSuggestionAction } from './project-suggestion-actions.mjs';
 import { handleProjectFindingFeedback } from './project-finding-feedback.mjs';
 import { handleProjectRequirementBaselines } from './project-requirement-baselines.mjs';
@@ -2503,6 +2504,7 @@ try {
   await recoverBackupJobs(pool);
   await resumeProjectScans(pool);
   await resumeProjectAnalyses(pool);
+  await processProjectAnalysisNotifications(pool);
   if (process.env.EXPERIMENT_WORKER_MODE !== 'external') await recoverExperimentJobs(pool);
   const users = await pool.query("SELECT 1 FROM users LIMIT 1");
   if (!users.rowCount) throw new Error("数据库尚无账号；请先运行 npm run db:import");
@@ -2515,6 +2517,7 @@ try {
     setInterval(() => { void resumeProjectScans(pool, undefined, false).catch(error => console.error('[project-scans] resume failed:',error)); }, 5000).unref();
     setInterval(() => { void resumeProjectAnalyses(pool).catch(error => console.error('[project-analyses] resume failed:',error)); }, 5000).unref();
     setInterval(() => { void processProjectAutoAnalyses(pool).catch(error => console.error('[project-auto-analyses] processing failed:',error)); }, 5000).unref();
+    setInterval(() => { void processProjectAnalysisNotifications(pool).catch(error => console.error('[project-analysis-notifications] processing failed:',error)); }, 5000).unref();
     scheduleRecurrences(0);
     void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error));
     setInterval(() => { void cleanupAssets(pool).catch(error => console.error("[assets] cleanup failed:", error)); }, 3600_000).unref();

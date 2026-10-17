@@ -63,6 +63,15 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     setScanId(current => scans.some(scan => scan.id === current && ['completed', 'partial'].includes(scan.status)) ? current : scans.find(scan => ['completed', 'partial'].includes(scan.status))?.id || '');
   }, [scans]);
   useEffect(() => {
+    const analysisId = new URLSearchParams(window.location.search).get('analysisId');
+    if (!analysisId) return;
+    let cancelled = false;
+    void getProjectAnalysis(repository.id,analysisId).then(result => { if (!cancelled) setReport(result); }).catch(cause => {
+      if (!cancelled) setError(cause instanceof Error ? cause.message : '通知中的报告无法读取');
+    });
+    return () => { cancelled = true; };
+  }, [repository.id]);
+  useEffect(() => {
     setItems([]);
     setNextCursor(null);
     setReport(null);
