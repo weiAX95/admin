@@ -4,6 +4,7 @@ import { scanPublicRepository } from './project-scan.mjs';
 import { compareProjectScanFiles } from './project-scan-changes.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
+import { assertGithubPrivateRepoAccess, githubUserFetch, GithubAuthorizationError } from './project-github-auth.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status,error) => ({ status, data: { error } });
@@ -19,11 +20,12 @@ function enqueue(db, id, scanRepository) {
   return current;
 }
 
-async function saveResult(db, id, result, source, changes) {
+async function saveResult(db, id, result, source, changes, privateOwnerId = null) {
   const pooled = db instanceof pg.Pool;
   const client = pooled ? await db.connect() : db;
   try {
     await client.query('BEGIN');
+    if (privateOwnerId && !(await client.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 FOR SHARE', [privateOwnerId])).rowCount) throw new GithubAuthorizationError('GitHub App 授权已断开');
     await client.query('DELETE FROM project_scan_files WHERE scan_id=$1', [id]);
     for (const file of result.files) {
       await client.query('INSERT INTO project_scan_files(scan_id,path,git_sha,byte_size,category,status,reason,content_sha256,content) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [id,file.path,file.gitSha,file.size,file.category,file.status,file.reason || null,file.contentSha256 || null,file.content ?? null]);
@@ -47,24 +49,33 @@ export async function runProjectScan(db, id, scanRepository = scanPublicReposito
     if (!claimed.rowCount) return;
     const job = claimed.rows[0];
     try {
+    const repository = (await db.query('SELECT owner_id,full_name,is_private FROM project_repositories WHERE id=$1', [job.repository_id])).rows[0];
+    if (!repository) throw new Error('REPOSITORY_MISSING');
+    if (repository.is_private) await assertGithubPrivateRepoAccess(db,repository.owner_id,repository.full_name);
     const source = (await db.query("SELECT id,commit_sha FROM project_scans WHERE repository_id=$1 AND id<>$2 AND created_at<$3 AND status IN ('completed','partial') ORDER BY created_at DESC,id DESC LIMIT 1", [job.repository_id,id,job.created_at])).rows[0];
     const cachedBlobs = new Map();
-    if (source && !job.force_full) {
+    if (source && !job.force_full && !repository.is_private) {
       const rows = (await db.query("SELECT git_sha,content_sha256,content FROM project_scan_files WHERE scan_id=$1 AND status='read' AND content IS NOT NULL AND content_sha256 IS NOT NULL LIMIT 5000", [source.id])).rows;
       for (const row of rows) cachedBlobs.set(row.git_sha.trim().toLowerCase(),{ content: row.content, contentSha256: row.content_sha256.trim() });
     }
-    const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim(), cachedBlobs, maxFiles: job.budget_file_limit, maxTotalBytes: job.budget_byte_limit });
+    const fetchGithub = repository.is_private ? async url => {
+      const response = await githubUserFetch(db,repository.owner_id,url);
+      if (response.status === 404 || response.status === 403 && response.headers?.get?.('x-ratelimit-remaining') !== '0' && !response.headers?.get?.('retry-after')) throw new GithubAuthorizationError('GitHub App 已失去仓库读取权限');
+      return response;
+    } : undefined;
+    const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim(), fetchGithub, cachedBlobs, maxFiles: job.budget_file_limit, maxTotalBytes: job.budget_byte_limit });
     if (result.commitSha !== job.commit_sha.trim()) throw new Error('COMMIT_MISMATCH');
+    if (repository.is_private) await assertGithubPrivateRepoAccess(db,repository.owner_id,repository.full_name);
     result.cacheSourceCommitSha = source?.commit_sha?.trim() || null;
     const sourceFiles = source ? (await db.query('SELECT path,git_sha FROM project_scan_files WHERE scan_id=$1 ORDER BY path LIMIT 5000',[source.id])).rows.map(row => ({ path: row.path, gitSha: row.git_sha.trim() })) : null;
     const changes = compareProjectScanFiles(sourceFiles,result.files);
-    await saveResult(db,id,result,source,changes);
+    await saveResult(db,id,result,source,changes,repository.is_private ? repository.owner_id : null);
     } catch (error) {
       if (error.rateLimited && job.retry_count < 3) {
         const delay = Math.min(86_400_000,Math.max(60_000,error.retryAfterMs || 60_000) * 2 ** job.retry_count);
         await db.query("UPDATE project_scans SET status='queued',coverage_complete=false,error_code='GITHUB_RATE_LIMIT',retry_count=retry_count+1,next_attempt_at=$2,finished_at=NULL WHERE id=$1 AND status='scanning'", [id,new Date(Date.now() + delay)]);
       } else {
-        const errorCode = error.rateLimited ? 'GITHUB_RATE_LIMIT' : error.message === 'COMMIT_MISMATCH' ? 'COMMIT_MISMATCH' : 'SCAN_FAILED';
+        const errorCode = error.rateLimited ? 'GITHUB_RATE_LIMIT' : error instanceof GithubAuthorizationError ? 'GITHUB_AUTH_REQUIRED' : error.message === 'COMMIT_MISMATCH' ? 'COMMIT_MISMATCH' : 'SCAN_FAILED';
         await db.query("UPDATE project_scans SET status='failed',coverage_complete=false,error_code=$2,next_attempt_at=NULL,finished_at=now() WHERE id=$1 AND status='scanning'", [id,errorCode]);
       }
     }
@@ -111,8 +122,9 @@ export async function handleProjectScans({ pathname, method, client, me, url, re
     const body = readBody ? await readBody() : {};
     const budgetFileLimit = body?.budgetFileLimit ?? 200;
     const budgetByteLimit = body?.budgetByteLimit ?? 5242880;
-    const forceFull = body?.forceFull ?? false;
-    if (!body || typeof body !== 'object' || Array.isArray(body) || ![50,100,200,500].includes(budgetFileLimit) || ![1048576,5242880,10485760].includes(budgetByteLimit) || typeof forceFull !== 'boolean') return fail(400,'扫描预算或模式无效');
+    const requestedForceFull = body?.forceFull ?? false;
+    if (!body || typeof body !== 'object' || Array.isArray(body) || ![50,100,200,500].includes(budgetFileLimit) || ![1048576,5242880,10485760].includes(budgetByteLimit) || typeof requestedForceFull !== 'boolean') return fail(400,'扫描预算或模式无效');
+    const forceFull = repository.is_private || requestedForceFull;
     const id = crypto.randomUUID();
     const pooled = client instanceof pg.Pool;
     const connection = pooled ? await client.connect() : client;

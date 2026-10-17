@@ -191,7 +191,7 @@ export default function ProjectAnalysis() {
   };
 
   return <Space direction="vertical" size={20} style={{ width: '100%' }}>
-    <Alert type="info" showIcon message="GitHub 仓库与项目报告" description="公开仓库可扫描固定 commit 并生成有文件行证据的报告；私有仓库目前可授权登记，扫描与分析将在权限和数据确认流程接通后开放。" />
+    <Alert type="info" showIcon message="GitHub 仓库与项目报告" description="公开仓库可扫描并分析固定 commit；私有仓库经授权可扫描，模型分析会在范围与数据去向确认流程接通后开放。" />
     <Card title="GitHub App 账号连接">
       <Space direction="vertical">
         <Typography.Text>{githubConnection?.connected ? `已连接 ${githubConnection.githubLogin}` : githubConnection?.configured ? '尚未连接 GitHub 账号' : '服务端尚未配置 GitHub App'}</Typography.Text>
@@ -223,7 +223,7 @@ export default function ProjectAnalysis() {
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
         { title: '最近完成分析', render: (_, item: ProjectRepository) => item.lastAnalysisAt && item.lastAnalyzedCommitSha ? <Space direction="vertical" size={0}><span>{new Date(item.lastAnalysisAt).toLocaleString('zh-CN')}</span><a href={`${item.url}/commit/${item.lastAnalyzedCommitSha}`} target="_blank" rel="noopener noreferrer" title={item.lastAnalyzedCommitSha}><code>{item.lastAnalyzedCommitSha.slice(0, 10)}</code></a>{item.commitSha !== item.lastAnalyzedCommitSha && <Tag color="warning">有新提交待分析</Tag>}</Space> : '尚无完成的分析' },
-        { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" disabled={item.private} title={item.private ? '私有扫描的权限与数据确认流程尚未开放' : undefined} onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
+        { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />
     </Card>
     <Modal title={editing ? `编辑项目 · ${editing.fullName}` : '编辑项目'} open={Boolean(editing)} forceRender onCancel={() => { if (!editSaving) setEditing(null); }} onOk={() => editForm.submit()} okText="保存修改" okButtonProps={{ loading: editSaving }} cancelButtonProps={{ disabled: editSaving }}>

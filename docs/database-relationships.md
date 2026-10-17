@@ -255,7 +255,7 @@ flowchart LR
 
 `project_repositories` 保存公开或已授权私有仓库的规范名称、`is_private` 标记、分支、项目目标、需求基线文字、最近读取的 commit SHA 和读取时间；`owner_id` 是管理端账号外键，删除账号时级联清除连接。唯一索引限制同一账号重复接入同一仓库分支。列表与详情都按当前账号过滤，猜测 UUID 不会读到其他账号的连接。`last_checked_at` 表示读取分支的时间，不代表完成分析的时间。最近分析时间及对应 commit 从该仓库最近一条已完成的 `project_analyses` 查询得出，仓库本体不另存可过期副本；[060 索引迁移](../db/migrations/060_project_latest_analysis_idx.sql)用于按完成时间检索。
 
-`project_github_oauth_states` 保存一次性随机授权状态的哈希、发起授权的管理端账号及过期时间；`project_github_connections` 保存该账号对应的 GitHub 用户 ID、登录名、加密访问／刷新令牌和到期时间。两表的 `owner_id` 均指向 `users`，删除账号时级联清理。它们不与 `project_repositories` 建立 SQL 外键：连接可断开而历史仓库行保留。公开仓库仍走不携带凭证的读取路径；私有仓库登记和详情读取按当前账号在线核验 GitHub App 用户权限，扫描／分析尚未开放，详见[GitHub App 授权边界](project-github-app.md)。
+`project_github_oauth_states` 保存一次性随机授权状态的哈希、发起授权的管理端账号及过期时间；`project_github_connections` 保存该账号对应的 GitHub 用户 ID、登录名、加密访问／刷新令牌和到期时间。两表的 `owner_id` 均指向 `users`，删除账号时级联清理。它们不与 `project_repositories` 建立 SQL 外键：连接可断开而历史仓库行保留。公开仓库仍走不携带凭证的读取路径；私有仓库登记、详情和扫描按当前账号在线核验 GitHub App 用户权限，模型分析尚未开放，详见[GitHub App 授权边界](project-github-app.md)。
 
 `project_repository_tasks` 以仓库 ID＋任务 ID 为复合主键，分别通过外键指向 `project_repositories` 和 `tasks`，删除任一实体时关联级联删除；`linked_by` 指向创建关联的账号，账号删除时置空。仓库所属账号可读取并移除其关联；新增关联只允许本人任务，管理员可关联任意未删除任务。任务与仓库不因关联而共享归属或改变任务正文。
 

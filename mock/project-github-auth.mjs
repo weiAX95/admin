@@ -51,7 +51,7 @@ export async function getGithubUserToken(client, ownerId) {
     if (new Date(row.access_expires_at).getTime() > Date.now() + 60_000) {
       const token = openGithubSecret(row, 'access');
       await connection.query('COMMIT');
-      return { token, updatedAt: row.updated_at };
+      return { token, accessTag: row.access_tag };
     }
     let response;
     try {
@@ -78,10 +78,10 @@ export async function getGithubUserToken(client, ownerId) {
     const refresh = seal(data.refresh_token, ownerId, 'refresh', version);
     const updated = await connection.query(`UPDATE project_github_connections SET access_cipher=$2,access_nonce=$3,access_tag=$4,
       refresh_cipher=$5,refresh_nonce=$6,refresh_tag=$7,access_expires_at=now()+($8 * interval '1 second'),
-      refresh_expires_at=now()+($9 * interval '1 second'),key_version=$10,updated_at=now() WHERE owner_id=$1 RETURNING updated_at`,
+      refresh_expires_at=now()+($9 * interval '1 second'),key_version=$10,updated_at=now() WHERE owner_id=$1 RETURNING access_tag`,
     [ownerId,access.data,access.nonce,access.tag,refresh.data,refresh.nonce,refresh.tag,Number(data.expires_in),Number(data.refresh_token_expires_in),version]);
     await connection.query('COMMIT');
-    return { token: data.access_token, updatedAt: updated.rows[0].updated_at };
+    return { token: data.access_token, accessTag: updated.rows[0].access_tag };
   } catch (error) {
     await connection.query('ROLLBACK').catch(() => undefined);
     throw error;
@@ -91,13 +91,31 @@ export async function getGithubUserToken(client, ownerId) {
 export async function githubUserFetch(client, ownerId, url) {
   const target = new URL(url);
   if (target.origin !== 'https://api.github.com' || target.username || target.password || target.hash) throw new Error('GitHub API 地址无效');
-  const { token, updatedAt } = await getGithubUserToken(client, ownerId);
-  const response = await fetch(target, {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' },
-    signal: AbortSignal.timeout(10000),
-  });
+  const { token, accessTag } = await getGithubUserToken(client, ownerId);
+  const pooled = client instanceof pg.Pool;
+  const connection = pooled ? await client.connect() : client;
+  let response;
+  try {
+    await connection.query('BEGIN');
+    const current = await connection.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 AND access_tag=$2 FOR SHARE', [ownerId,accessTag]);
+    if (!current.rowCount) throw new GithubAuthorizationError('GitHub 授权已变化，请重试');
+    const upstream = await fetch(target, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' },
+      signal: AbortSignal.timeout(10000),
+    });
+    const chunks = [];
+    let size = 0;
+    if (upstream.body) for await (const chunk of upstream.body) {
+      size += chunk.byteLength;
+      if (size > 32 * 1024 * 1024) throw new Error('GitHub 响应超出读取上限');
+      chunks.push(chunk);
+    }
+    response = new Response(size ? Buffer.concat(chunks) : null, { status: upstream.status, statusText: upstream.statusText, headers: upstream.headers });
+    await connection.query('COMMIT');
+  } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
+  finally { if (pooled) connection.release(); }
   if (response.status === 401) {
-    await client.query('DELETE FROM project_github_connections WHERE owner_id=$1 AND updated_at=$2', [ownerId,updatedAt]);
+    await client.query('DELETE FROM project_github_connections WHERE owner_id=$1 AND access_tag=$2', [ownerId,accessTag]);
     throw new GithubAuthorizationError('GitHub 授权已失效，请重新连接');
   }
   return response;
@@ -106,7 +124,11 @@ export async function githubUserFetch(client, ownerId, url) {
 export async function assertGithubPrivateRepoAccess(client, ownerId, fullName) {
   if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(fullName || '')) throw new GithubAuthorizationError('仓库名称无效');
   const response = await githubUserFetch(client, ownerId, `https://api.github.com/repos/${fullName}`);
-  if (response.status === 404) throw new GithubAuthorizationError('GitHub App 当前无权访问该私有仓库');
+  if ([403,429].includes(response.status) && (response.status === 429 || response.headers.get('x-ratelimit-remaining') === '0' || response.headers.get('retry-after'))) {
+    const wait = Number(response.headers.get('retry-after'));
+    throw Object.assign(new Error('GitHub 请求受限'), { rateLimited: true, retryAfterMs: Number.isFinite(wait) && wait > 0 ? wait * 1000 : 60_000 });
+  }
+  if ([403,404].includes(response.status)) throw new GithubAuthorizationError('GitHub App 当前无权访问该私有仓库');
   if (!response.ok) throw new Error('暂时无法核验 GitHub 仓库权限');
   const info = await response.json();
   if (info.private !== true || info.full_name?.toLowerCase() !== fullName.toLowerCase()) throw new GithubAuthorizationError('该仓库已不属于当前私有授权范围');

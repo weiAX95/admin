@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { GithubAuthorizationError } from './project-github-auth.mjs';
 
 const SHA = /^[a-f\d]{40}$/i;
 const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'vendor', 'target', '.venv', '__pycache__']);
@@ -116,7 +117,7 @@ export async function scanPublicRepository({ fullName, commitSha, fetchGithub = 
       files.push({ ...file, status: 'read', contentSha256: crypto.createHash('sha256').update(bytes).digest('hex'), content });
       readCount++;
     } catch (error) {
-      if (error.rateLimited) throw error;
+      if (error.rateLimited || error instanceof GithubAuthorizationError) throw error;
       files.push({ ...file, status: 'failed', reason: 'blob_unavailable_or_invalid' }); failedCount++;
     }
   }

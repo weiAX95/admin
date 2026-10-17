@@ -34,7 +34,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
 
   const start = async () => {
     setStarting(true);
-    try { const scan = await startProjectScan(repository.id, { budgetFileLimit, budgetByteLimit, forceFull }); setItems(current => [scan, ...current.filter(item => item.id !== scan.id)]); message.success('扫描任务已提交'); }
+    try { const scan = await startProjectScan(repository.id, { budgetFileLimit, budgetByteLimit, forceFull: repository.private || forceFull }); setItems(current => [scan, ...current.filter(item => item.id !== scan.id)]); message.success('扫描任务已提交'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '扫描提交失败'); }
     finally { setStarting(false); }
   };
@@ -56,11 +56,11 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
   const unindexed = Math.max(0,(detail?.unscannedCount || 0) - unreadFiles.length);
 
   return <Card title={`${repository.fullName} · 扫描记录`}>
-    <Typography.Paragraph type="secondary">每次扫描固定提交时的 commit SHA。目录和文件读取预算有限；“部分覆盖”表示仍有失败或未扫描范围，不能据此认定项目已完整分析。已读取的文本正文保存在服务端，仅仓库所属账号可按需查看。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">每次扫描固定提交时的 commit SHA。目录和文件读取预算有限；“部分覆盖”表示仍有失败或未扫描范围，不能据此认定项目已完整分析。已读取的文本正文保存在服务端，仅仓库所属账号可按需查看。{repository.private && ' 私有仓库每次扫描前后核验 GitHub 授权，不复用旧文件正文；断开授权后无法读取扫描记录。'}</Typography.Paragraph>
     <Space wrap style={{ marginBottom: 16 }}>
       <Select aria-label="扫描文件上限" value={budgetFileLimit} onChange={setBudgetFileLimit} style={{ width: 170 }} options={[50,100,200,500].map(value => ({ value, label: `最多 ${value} 个文件` }))} />
       <Select aria-label="扫描读取总量上限" value={budgetByteLimit} onChange={setBudgetByteLimit} style={{ width: 170 }} options={[1,5,10].map(value => ({ value: value * 1024 * 1024, label: `最多读取 ${value} MiB` }))} />
-      <Checkbox checked={forceFull} onChange={event => setForceFull(event.target.checked)}>全量重扫（不复用缓存）</Checkbox>
+      {!repository.private && <Checkbox checked={forceFull} onChange={event => setForceFull(event.target.checked)}>全量重扫（不复用缓存）</Checkbox>}
       <Button type="primary" loading={starting} disabled={items.some(item => item.status === 'queued' || item.status === 'scanning')} onClick={() => void start()}>扫描当前 commit</Button>
     </Space>
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
@@ -85,7 +85,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
         { title: '原路径', dataIndex: 'oldPath', render: (value: string | null) => value || '—' },
       ]} />}
       {detail.status === 'partial' && <Alert type="warning" showIcon message="本次为部分覆盖，不能视作完整分析" description={<Space direction="vertical"><span>未读取：文件数预算 {fileBudgetGaps}、字节预算 {byteBudgetGaps}{legacyBudgetGaps ? `、旧版未区分预算 ${legacyBudgetGaps}` : ''}；索引外或无效目录项 {unindexed}；未展开目录 {detail.unscannedSubtrees}；读取失败 {detail.failedCount}。</span>{unreadFiles.length > 0 && <span>未读示例：{unreadFiles.slice(0, 5).map(file => file.path).join('、')}{unreadFiles.length > 5 ? ` 等 ${unreadFiles.length} 个` : ''}。可提高上方预算后重新扫描；原报告不随新扫描改变。</span>}</Space>} style={{ marginBottom: 12 }} />}
-      {detail.status === 'failed' && <Alert type="error" showIcon message={detail.errorCode === 'GITHUB_RATE_LIMIT' ? 'GitHub 限流重试已达上限，请稍后新建扫描' : '扫描失败'} description={detail.errorCode || undefined} style={{ marginBottom: 12 }} />}
+      {detail.status === 'failed' && <Alert type="error" showIcon message={detail.errorCode === 'GITHUB_RATE_LIMIT' ? 'GitHub 限流重试已达上限，请稍后新建扫描' : detail.errorCode === 'GITHUB_AUTH_REQUIRED' ? 'GitHub 授权已失效，请重新连接后新建扫描' : '扫描失败'} description={detail.errorCode || undefined} style={{ marginBottom: 12 }} />}
       {detail.nextAttemptAt && <Alert type="info" showIcon message={`GitHub 限流，预计 ${new Date(detail.nextAttemptAt).toLocaleString('zh-CN')} 后自动重试`} description={`已安排第 ${detail.retryCount}/3 次重试；刷新页面不会丢失等待状态。`} style={{ marginBottom: 12 }} />}
       <Table rowKey="path" size="small" dataSource={detail.files} pagination={{ pageSize: 10 }} scroll={{ x: 680 }} columns={[
         { title: '路径', dataIndex: 'path' },

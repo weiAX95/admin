@@ -2348,7 +2348,7 @@ const server = http.createServer((req, res) => {
         if (privateRepository) {
           try { await assertGithubPrivateRepoAccess(pool,me.id,privateRepository.full_name); }
           catch (error) { return sendImmediate(res,error instanceof GithubAuthorizationError ? 403 : 502,{ error: error instanceof GithubAuthorizationError ? error.message : '暂时无法核验 GitHub 私有仓库权限' }); }
-          if (req.method === 'POST' && (/\/scans$/.test(pathname) || /\/analyses$/.test(pathname))) return sendImmediate(res,409,{ error: '私有仓库扫描与分析尚未开放，请等待授权边界接通' });
+          if (req.method === 'POST' && /\/analyses$/.test(pathname)) return sendImmediate(res,409,{ error: '私有仓库分析尚未开放，请等待模型数据确认流程接通' });
         }
       }
       const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
