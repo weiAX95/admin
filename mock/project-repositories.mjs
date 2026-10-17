@@ -5,6 +5,7 @@ import { parseProjectRequirements } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
+import { assertGithubPrivateRepoAccess, githubUserFetch, GithubAuthorizationError } from './project-github-auth.mjs';
 
 export function parseGitHubRepository(value) {
   let url;
@@ -18,7 +19,7 @@ export function parseGitHubRepository(value) {
 
 const validBranch = value => typeof value === 'string' && value.length >= 1 && value.length <= 200 && /^[\w./-]+$/.test(value) && !value.startsWith('/') && !value.endsWith('/') && !value.includes('..') && !value.includes('//');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const publicRow = row => ({ id: row.id, ownerId: row.owner_id, fullName: row.full_name, url: `https://github.com/${row.full_name}`, branch: row.branch, goal: row.goal, requirementBaseline: row.requirement_baseline, baselineVersionId: row.baseline_version_id || null, commitSha: row.commit_sha.trim(), lastCheckedAt: row.last_checked_at, lastAnalysisAt: row.last_analysis_at || null, lastAnalyzedCommitSha: row.last_analyzed_commit_sha?.trim() || null, createdAt: row.created_at, updatedAt: row.updated_at });
+const publicRow = row => ({ id: row.id, ownerId: row.owner_id, fullName: row.full_name, url: `https://github.com/${row.full_name}`, private: row.is_private === true, branch: row.branch, goal: row.goal, requirementBaseline: row.requirement_baseline, baselineVersionId: row.baseline_version_id || null, commitSha: row.commit_sha.trim(), lastCheckedAt: row.last_checked_at, lastAnalysisAt: row.last_analysis_at || null, lastAnalyzedCommitSha: row.last_analyzed_commit_sha?.trim() || null, createdAt: row.created_at, updatedAt: row.updated_at });
 const repositoryQuery = `SELECT r.*, latest.finished_at AS last_analysis_at, latest.commit_sha AS last_analyzed_commit_sha
   FROM project_repositories r LEFT JOIN LATERAL (
     SELECT finished_at, commit_sha FROM project_analyses
@@ -72,7 +73,7 @@ async function githubFetch(url) {
 async function readGithub(fetchGithub, url) {
   let response;
   try { response = await fetchGithub(url); }
-  catch { return { error: fail(502, '无法连接 GitHub，请稍后重试') }; }
+  catch (error) { return { error: error instanceof GithubAuthorizationError ? fail(409,error.message) : fail(502, '无法连接 GitHub，请稍后重试') }; }
   if (response.status === 404) return { error: fail(404, '仓库或分支不存在，或当前无权访问') };
   if (response.status === 409) return { error: fail(422, '仓库尚无提交，暂不能分析') };
   if (response.status === 403 || response.status === 429) return { error: fail(429, 'GitHub 请求受限，请稍后重试') };
@@ -81,12 +82,12 @@ async function readGithub(fetchGithub, url) {
   catch { return { error: fail(502, 'GitHub 返回了无效数据') }; }
 }
 
-async function resolveRepository(fetchGithub, parsed, requestedBranch) {
+async function resolveRepository(fetchGithub, parsed, requestedBranch, expectPrivate = false) {
   const base = `https://api.github.com/repos/${parsed.owner}/${parsed.repo}`;
   const repository = await readGithub(fetchGithub, base);
   if (repository.error) return repository;
   const info = repository.data;
-  if (info.private !== false) return { error: fail(403, '第一阶段仅支持公开仓库') };
+  if (expectPrivate ? info.private !== true : info.private !== false) return { error: fail(403, expectPrivate ? '请选择当前 GitHub App 可访问的私有仓库' : '公开接入仅支持公开仓库') };
   if (info.empty === true || info.size === 0) return { error: fail(422, '仓库尚无提交，暂不能分析') };
   const branch = requestedBranch || info.default_branch;
   if (!validBranch(branch)) return { error: fail(400, '分支名称无效') };
@@ -103,7 +104,13 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
   if (pathname === '/api/project-repositories' && method === 'GET') {
     if (!canAccess(me,'project_repositories','read',{ownerId:me.id})) return fail(403,'无权查看项目仓库');
     const rows = (await client.query(`${repositoryQuery} WHERE r.owner_id=$1 ORDER BY r.updated_at DESC`, [me.id])).rows;
-    return { status: 200, data: { items: rows.map(publicRow) } };
+    const visible = [];
+    for (const row of rows) {
+      if (!row.is_private) { visible.push(row); continue; }
+      try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name); visible.push(row); }
+      catch { /* 失去当前 GitHub 授权时隐藏私有仓库元数据。 */ }
+    }
+    return { status: 200, data: { items: visible.map(publicRow) } };
   }
   if (pathname === '/api/project-repositories' && method === 'POST') {
     if (!canAccess(me,'project_repositories','create')) return fail(403,'无权创建项目仓库');
@@ -113,12 +120,19 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     const goal = typeof body.goal === 'string' ? body.goal.trim() : '';
     const baseline = typeof body.requirementBaseline === 'string' ? body.requirementBaseline.trim() : '';
     if (!goal || goal.length > 2000 || baseline.length > 200 || containsKnownSecret(goal) || containsKnownSecret(baseline) || (body.branch && !validBranch(body.branch))) return fail(400, '项目目标、需求基线或分支格式无效，且不得包含凭据');
-    const resolved = await resolveRepository(fetchGithub, parsed, body.branch);
+    if (body.useGithubApp !== undefined && typeof body.useGithubApp !== 'boolean') return fail(400, 'GitHub 授权模式无效');
+    const privateMode = body.useGithubApp === true;
+    if (privateMode) {
+      try { await assertGithubPrivateRepoAccess(client,me.id,parsed.fullName); }
+      catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
+    }
+    const repositoryFetch = privateMode ? url => githubUserFetch(client,me.id,url) : fetchGithub;
+    const resolved = await resolveRepository(repositoryFetch, parsed, body.branch, privateMode);
     if (resolved.error) return resolved.error;
     const { fullName, branch, commitSha } = resolved.data;
     try {
       return await auditedWrite(client,req,me,'create',result=>result.data.id,async connection => {
-        const row = (await connection.query('INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,requirement_baseline,commit_sha) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *', [crypto.randomUUID(),me.id,fullName,branch,goal,baseline,commitSha])).rows[0];
+        const row = (await connection.query('INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,requirement_baseline,commit_sha,is_private) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *', [crypto.randomUUID(),me.id,fullName,branch,goal,baseline,commitSha,privateMode])).rows[0];
         return { status: 201, data: publicRow(row) };
       });
     } catch (error) { if (error.code === '23505') return fail(409, '该分支已接入'); throw error; }
@@ -198,7 +212,12 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
   if (method === 'GET' && pathname.endsWith(`/${id}`)) return { status: 200, data: publicRow(row) };
   if (method === 'POST' && pathname.endsWith('/refresh')) {
     const [owner, repo] = row.full_name.split('/');
-    const resolved = await resolveRepository(fetchGithub, { owner, repo, fullName: row.full_name }, row.branch);
+    if (row.is_private) {
+      try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name); }
+      catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
+    }
+    const repositoryFetch = row.is_private ? url => githubUserFetch(client,me.id,url) : fetchGithub;
+    const resolved = await resolveRepository(repositoryFetch, { owner, repo, fullName: row.full_name }, row.branch, row.is_private);
     if (resolved.error) return resolved.error;
     return auditedWrite(client,req,me,'refresh',id,async connection => {
       const updated = (await connection.query('UPDATE project_repositories SET commit_sha=$1,last_checked_at=now(),updated_at=now() WHERE id=$2 AND owner_id=$3 RETURNING *', [resolved.data.commitSha,id,me.id])).rows[0];

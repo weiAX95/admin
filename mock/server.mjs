@@ -76,7 +76,7 @@ import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
-import { completeProjectGithubAuthorization, handleProjectGithubAuth } from './project-github-auth.mjs';
+import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, handleProjectGithubAuth } from './project-github-auth.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
 import { handleProjectSuggestionAction } from './project-suggestion-actions.mjs';
@@ -2342,6 +2342,15 @@ const server = http.createServer((req, res) => {
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       const url = new URL(req.url, 'http://localhost');
       const pathname = url.pathname;
+      const projectId = pathname.match(/^\/api\/project-repositories\/([0-9a-f-]{36})(?:\/|$)/i)?.[1];
+      if (projectId) {
+        const privateRepository = (await pool.query('SELECT full_name FROM project_repositories WHERE id=$1 AND owner_id=$2 AND is_private=true', [projectId,me.id])).rows[0];
+        if (privateRepository) {
+          try { await assertGithubPrivateRepoAccess(pool,me.id,privateRepository.full_name); }
+          catch (error) { return sendImmediate(res,error instanceof GithubAuthorizationError ? 403 : 502,{ error: error instanceof GithubAuthorizationError ? error.message : '暂时无法核验 GitHub 私有仓库权限' }); }
+          if (req.method === 'POST' && (/\/scans$/.test(pathname) || /\/analyses$/.test(pathname))) return sendImmediate(res,409,{ error: '私有仓库扫描与分析尚未开放，请等待授权边界接通' });
+        }
+      }
       const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
         || await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
         || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })

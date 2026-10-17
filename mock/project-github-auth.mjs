@@ -103,6 +103,16 @@ export async function githubUserFetch(client, ownerId, url) {
   return response;
 }
 
+export async function assertGithubPrivateRepoAccess(client, ownerId, fullName) {
+  if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(fullName || '')) throw new GithubAuthorizationError('仓库名称无效');
+  const response = await githubUserFetch(client, ownerId, `https://api.github.com/repos/${fullName}`);
+  if (response.status === 404) throw new GithubAuthorizationError('GitHub App 当前无权访问该私有仓库');
+  if (!response.ok) throw new Error('暂时无法核验 GitHub 仓库权限');
+  const info = await response.json();
+  if (info.private !== true || info.full_name?.toLowerCase() !== fullName.toLowerCase()) throw new GithubAuthorizationError('该仓库已不属于当前私有授权范围');
+  return info;
+}
+
 async function listGithubRepositories(client, ownerId) {
   const repositories = [];
   let truncated = false;

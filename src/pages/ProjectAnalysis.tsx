@@ -1,6 +1,6 @@
 import { isAdministrator } from '../utils/roles';
 import { useEffect, useState } from 'react';
-import { Alert, App, Button, Card, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
@@ -8,7 +8,7 @@ import { createProjectRepository, createProjectRequirementBaseline, disconnectPr
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
-type FormValues = { url: string; branch?: string; goal: string; requirementBaseline?: string };
+type FormValues = { url: string; branch?: string; goal: string; requirementBaseline?: string; useGithubApp?: boolean };
 type EditValues = { goal: string; requirementBaseline: string };
 
 export default function ProjectAnalysis() {
@@ -44,6 +44,7 @@ export default function ProjectAnalysis() {
   const [githubRepositories, setGithubRepositories] = useState<GithubAvailableRepository[]>([]);
   const [githubRepositoriesLoading, setGithubRepositoriesLoading] = useState(false);
   const [githubRepositoriesTruncated, setGithubRepositoriesTruncated] = useState(false);
+  const [selectedGithubRepository, setSelectedGithubRepository] = useState<string>();
 
   const loadGithubConnection = async () => {
     try { setGithubConnection(await getProjectGithubConnection()); }
@@ -86,7 +87,7 @@ export default function ProjectAnalysis() {
   useEffect(() => { void load(); }, []);
   const create = async (values: FormValues) => {
     setSaving(true);
-    try { await createProjectRepository(values); form.resetFields(); await load(); message.success('公开仓库已接入'); }
+    try { await createProjectRepository(values); form.resetFields(); await load(); message.success('仓库已接入'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '仓库接入失败'); }
     finally { setSaving(false); }
   };
@@ -190,7 +191,7 @@ export default function ProjectAnalysis() {
   };
 
   return <Space direction="vertical" size={20} style={{ width: '100%' }}>
-    <Alert type="info" showIcon message="公开仓库只读扫描与项目报告" description="先扫描固定 commit，再选择模型生成有文件行证据的报告；结论仍需人工核验，未扫描区域不代表未实现。" />
+    <Alert type="info" showIcon message="GitHub 仓库与项目报告" description="公开仓库可扫描固定 commit 并生成有文件行证据的报告；私有仓库目前可授权登记，扫描与分析将在权限和数据确认流程接通后开放。" />
     <Card title="GitHub App 账号连接">
       <Space direction="vertical">
         <Typography.Text>{githubConnection?.connected ? `已连接 ${githubConnection.githubLogin}` : githubConnection?.configured ? '尚未连接 GitHub 账号' : '服务端尚未配置 GitHub App'}</Typography.Text>
@@ -198,15 +199,16 @@ export default function ProjectAnalysis() {
         {githubConnection?.connected ? <Button danger loading={githubBusy} onClick={() => Modal.confirm({ title: '断开 GitHub 账号？', content: '断开后服务端删除本账号保存的 GitHub 凭证。', okText: '断开连接', okButtonProps: { danger: true }, onOk: disconnectGithub })}>断开连接</Button> : <Button loading={githubBusy} disabled={!githubConnection?.configured} onClick={() => void connectGithub()}>连接 GitHub</Button>}
         {githubConnection?.connected && <>
           <Button loading={githubRepositoriesLoading} onClick={() => void loadGithubRepositories()}>查看已授权仓库</Button>
-          {githubRepositories.length > 0 && <Space wrap>{githubRepositories.map(repo => <Tag key={repo.fullName} color={repo.private ? 'purple' : undefined}>{repo.fullName}{repo.private ? ' · 私有' : ' · 公开'}</Tag>)}</Space>}
+          {githubRepositories.length > 0 && <Space wrap><Select aria-label="选择 GitHub App 已授权仓库" showSearch optionFilterProp="label" value={selectedGithubRepository} onChange={setSelectedGithubRepository} style={{ minWidth: 320 }} options={githubRepositories.map(repo => ({ value: repo.fullName, label: `${repo.fullName} · ${repo.private ? '私有' : '公开'}` }))} /><Button disabled={!selectedGithubRepository} onClick={() => { const repo = githubRepositories.find(item => item.fullName === selectedGithubRepository); if (repo) form.setFieldsValue({ url: `https://github.com/${repo.fullName}`, branch: repo.defaultBranch || undefined, useGithubApp: repo.private }); }}>填入接入表单</Button></Space>}
           {githubRepositoriesTruncated && <Typography.Text type="warning">授权仓库较多，当前仅展示前 500 个；后续提供分页选择。</Typography.Text>}
         </>}
       </Space>
     </Card>
-    <Card title="接入公开 GitHub 仓库">
+    <Card title="接入 GitHub 仓库">
       <Form form={form} layout="vertical" onFinish={values => void create(values)}>
         <Form.Item name="url" label="仓库地址" rules={[{ required: true, message: '请输入 https://github.com/所有者/仓库' }]}><Input placeholder="https://github.com/owner/repo" /></Form.Item>
         <Form.Item name="branch" label="分支（留空使用默认分支）"><Input placeholder="main" /></Form.Item>
+        <Form.Item name="useGithubApp" valuePropName="checked"><Checkbox>使用已连接的 GitHub App 读取私有仓库</Checkbox></Form.Item>
         <Form.Item name="goal" label="项目目标" rules={[{ required: true, message: '请填写项目目标' }, { max: 2000 }]}><Input.TextArea rows={3} placeholder="希望这个项目实现什么？" /></Form.Item>
         <Form.Item name="requirementBaseline" label="需求基线标记（可选）" rules={[{ max: 200 }]}><Input placeholder="接入后可在项目列表添加带正文的版本化需求文档" /></Form.Item>
         <Button type="primary" htmlType="submit" loading={saving}>接入仓库</Button>
@@ -215,13 +217,13 @@ export default function ProjectAnalysis() {
     <Card title="已接入项目">
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
       <Table rowKey="id" loading={loading} dataSource={items} scroll={{ x: 1100 }} pagination={{ pageSize: 10 }} columns={[
-        { title: '仓库', render: (_, item: ProjectRepository) => <a href={item.url} target="_blank" rel="noopener noreferrer">{item.fullName}</a> },
+        { title: '仓库', render: (_, item: ProjectRepository) => <Space><a href={item.url} target="_blank" rel="noopener noreferrer">{item.fullName}</a>{item.private && <Tag color="purple">私有</Tag>}</Space> },
         { title: '分支', dataIndex: 'branch', render: value => <Tag>{value}</Tag> },
         { title: '当前 commit', dataIndex: 'commitSha', render: (value: string, item: ProjectRepository) => <a href={`${item.url}/commit/${value}`} target="_blank" rel="noopener noreferrer" title={value}><code>{value.slice(0, 10)}</code></a> },
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
         { title: '最近完成分析', render: (_, item: ProjectRepository) => item.lastAnalysisAt && item.lastAnalyzedCommitSha ? <Space direction="vertical" size={0}><span>{new Date(item.lastAnalysisAt).toLocaleString('zh-CN')}</span><a href={`${item.url}/commit/${item.lastAnalyzedCommitSha}`} target="_blank" rel="noopener noreferrer" title={item.lastAnalyzedCommitSha}><code>{item.lastAnalyzedCommitSha.slice(0, 10)}</code></a>{item.commitSha !== item.lastAnalyzedCommitSha && <Tag color="warning">有新提交待分析</Tag>}</Space> : '尚无完成的分析' },
-        { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
+        { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" disabled={item.private} title={item.private ? '私有扫描的权限与数据确认流程尚未开放' : undefined} onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />
     </Card>
     <Modal title={editing ? `编辑项目 · ${editing.fullName}` : '编辑项目'} open={Boolean(editing)} forceRender onCancel={() => { if (!editSaving) setEditing(null); }} onOk={() => editForm.submit()} okText="保存修改" okButtonProps={{ loading: editSaving }} cancelButtonProps={{ disabled: editSaving }}>
