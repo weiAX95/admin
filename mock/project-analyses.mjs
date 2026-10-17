@@ -210,6 +210,17 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
   const job = started.rows[0];
   const controller = new AbortController();
   running.set(id,controller);
+  let checkingCancellation = false;
+  const cancellationPoll = setInterval(async () => {
+    if (checkingCancellation || controller.signal.aborted) return;
+    checkingCancellation = true;
+    try {
+      const state = (await db.query('SELECT status FROM project_analyses WHERE id=$1',[id])).rows[0]?.status;
+      if (state !== 'analyzing') controller.abort();
+    } catch { /* 下次轮询重试；模型请求仍受自身超时限制。 */ }
+    finally { checkingCancellation = false; }
+  },1000);
+  cancellationPoll.unref?.();
   try {
     await db.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,$2,$3,'analyzing') ON CONFLICT(analysis_id,attempt) DO UPDATE SET status='analyzing',started_at=CASE WHEN project_analysis_attempts.status='queued' THEN now() ELSE project_analysis_attempts.started_at END WHERE project_analysis_attempts.status IN ('queued','analyzing')", [id,job.attempts,job.estimated_max_cost_usd]);
     if ((await db.query('SELECT status FROM project_analyses WHERE id=$1', [id])).rows[0]?.status !== 'analyzing') return;
@@ -274,7 +285,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE','CALL_OUTCOME_UNKNOWN','SENSITIVE_INPUT','ANALYSIS_BUDGET_EXCEEDED','MODEL_CONNECTION_CHANGED','PRIVATE_CONSENT_REQUIRED','GITHUB_AUTH_REQUIRED','GITHUB_ACCESS_CHECK_FAILED','MODEL_DESTINATION_CHANGED'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
     await db.query("UPDATE project_analyses SET status='failed',error_code=$2,summary=NULL,finished_at=now() WHERE id=$1 AND status='analyzing'", [id,errorCode]);
     await db.query("UPDATE project_analysis_attempts SET status=(SELECT status FROM project_analyses WHERE id=$1) WHERE analysis_id=$1 AND attempt=$2", [id,job.attempts]);
-  } finally { if (running.get(id) === controller) running.delete(id); }
+  } finally { clearInterval(cancellationPoll); if (running.get(id) === controller) running.delete(id); }
   } finally {
     if (locked) await lockClient.query('SELECT pg_advisory_unlock(748206,hashtext($1))', [id]).catch(() => {});
     await releaseModelSlot(lockClient,slot).catch(() => {});

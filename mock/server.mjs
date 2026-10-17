@@ -2348,7 +2348,8 @@ const server = http.createServer((req, res) => {
       const projectId = pathname.match(/^\/api\/project-repositories\/([0-9a-f-]{36})(?:\/|$)/i)?.[1];
       if (projectId) {
         const privateRepository = (await pool.query('SELECT full_name FROM project_repositories WHERE id=$1 AND owner_id=$2 AND is_private=true', [projectId,me.id])).rows[0];
-        if (privateRepository) {
+        const cancelOnly = req.method === 'POST' && /^\/api\/project-repositories\/[0-9a-f-]{36}\/analyses\/[0-9a-f-]{36}\/cancel$/i.test(pathname);
+        if (privateRepository && !cancelOnly) {
           try { await assertGithubPrivateRepoAccess(pool,me.id,privateRepository.full_name); }
           catch (error) { return sendImmediate(res,error instanceof GithubAuthorizationError ? 403 : 502,{ error: error instanceof GithubAuthorizationError ? error.message : '暂时无法核验 GitHub 私有仓库权限' }); }
         }
