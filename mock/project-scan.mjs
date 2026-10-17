@@ -31,7 +31,23 @@ async function githubFetch(url) {
 
 async function getJson(fetchGithub, url) {
   const response = await fetchGithub(url);
-  if (!response.ok) throw Object.assign(new Error(`GitHub 读取失败（${response.status}）`), { status: response.status });
+  if (!response.ok) {
+    const headers = response.headers;
+    const message = (await response.json().catch(() => ({})))?.message || '';
+    const remaining = headers?.get?.('x-ratelimit-remaining');
+    const retryAfter = headers?.get?.('retry-after');
+    const limited = response.status === 429 || response.status === 403 && (remaining === '0' || retryAfter !== null && retryAfter !== undefined || /rate limit/i.test(message));
+    let retryAfterMs = 60_000;
+    if (retryAfter) {
+      const seconds = Number(retryAfter);
+      const until = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter) - Date.now();
+      if (Number.isFinite(until)) retryAfterMs = Math.max(1000,until);
+    } else if (remaining === '0') {
+      const reset = Number(headers?.get?.('x-ratelimit-reset'));
+      if (Number.isFinite(reset) && reset > 0) retryAfterMs = Math.max(1000,reset * 1000 - Date.now() + 1000);
+    }
+    throw Object.assign(new Error(`GitHub 读取失败（${response.status}）`), { status: response.status, rateLimited: limited, retryAfterMs: Math.min(retryAfterMs,86_400_000) });
+  }
   return response.json();
 }
 
@@ -66,7 +82,7 @@ export async function scanPublicRepository({ fullName, commitSha, fetchGithub = 
     unscannedSubtrees += queue.length;
   }
   const files = [];
-  let readCount = 0, attemptedCount = 0, reusedCount = 0, failedCount = 0, excludedCount = 0, totalBytes = 0, unscannedCount = Math.max(0, entries.length - maxIndexEntries), rateLimited = false;
+  let readCount = 0, attemptedCount = 0, reusedCount = 0, failedCount = 0, excludedCount = 0, totalBytes = 0, unscannedCount = Math.max(0, entries.length - maxIndexEntries);
   for (const entry of entries.slice(0,maxIndexEntries)) {
     if (typeof entry.path !== 'string' || !SHA.test(entry.sha || '')) { unscannedCount++; continue; }
     const file = { path: entry.path, gitSha: entry.sha, size: Number.isSafeInteger(entry.size) ? entry.size : null, category: classification(entry.path) };
@@ -87,7 +103,6 @@ export async function scanPublicRepository({ fullName, commitSha, fetchGithub = 
         continue;
       }
     }
-    if (rateLimited) { files.push({ ...file, status: 'unscanned', reason: 'github_rate_limit' }); unscannedCount++; continue; }
     attemptedCount++;
     try {
       const data = await getJson(fetchGithub, `${base}/blobs/${entry.sha}`);
@@ -100,8 +115,8 @@ export async function scanPublicRepository({ fullName, commitSha, fetchGithub = 
       files.push({ ...file, status: 'read', contentSha256: crypto.createHash('sha256').update(bytes).digest('hex'), content });
       readCount++;
     } catch (error) {
-      if (error.status === 403 || error.status === 429) rateLimited = true;
-      files.push({ ...file, status: 'failed', reason: rateLimited ? 'github_rate_limit' : 'blob_unavailable_or_invalid' }); failedCount++;
+      if (error.rateLimited) throw error;
+      files.push({ ...file, status: 'failed', reason: 'blob_unavailable_or_invalid' }); failedCount++;
     }
   }
   return { commitSha, treeSha, files, readCount, attemptedCount, reusedCount, failedCount, excludedCount, unscannedCount, unscannedSubtrees, totalBytes, coverageComplete: failedCount === 0 && unscannedCount === 0 && unscannedSubtrees === 0 };

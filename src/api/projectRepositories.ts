@@ -53,6 +53,8 @@ export interface ProjectScan {
   unscannedCount: number;
   unscannedSubtrees: number;
   totalBytes: number;
+  retryCount: number;
+  nextAttemptAt: string | null;
   errorCode: string | null;
   createdAt: string;
   startedAt: string | null;

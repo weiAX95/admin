@@ -63,6 +63,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
       { title: '提交时间', dataIndex: 'createdAt', render: value => new Date(value).toLocaleString('zh-CN') },
       { title: 'commit', dataIndex: 'commitSha', render: (value: string) => <code title={value}>{value.slice(0, 10)}</code> },
       { title: '状态', render: (_, item: ProjectScan) => <Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'partial' ? 'warning' : 'processing'}>{statusLabels[item.status]}</Tag> },
+      { title: '限流重试', render: (_, item: ProjectScan) => item.nextAttemptAt ? `第 ${item.retryCount}/3 次 · ${new Date(item.nextAttemptAt).toLocaleString('zh-CN')}` : item.status === 'failed' && item.errorCode === 'GITHUB_RATE_LIMIT' ? '限流重试已达上限' : '—' },
       { title: '覆盖', render: (_, item: ProjectScan) => `${item.readCount} 读取 / ${item.excludedCount} 排除 / ${item.failedCount} 失败 / ${item.unscannedCount} 未扫描` },
       { title: '复用', render: (_, item: ProjectScan) => item.reusedCount ? `${item.reusedCount} 个 blob` : '—' },
       { title: '模式', render: (_, item: ProjectScan) => item.forceFull ? <Tag color="blue">全量重扫</Tag> : '增量' },
@@ -78,7 +79,9 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted }: { 
         { title: '当前路径', dataIndex: 'path' },
         { title: '原路径', dataIndex: 'oldPath', render: (value: string | null) => value || '—' },
       ]} />}
-      {!detail.coverageComplete && <Alert type="warning" showIcon message="本次为部分覆盖，不能视作完整分析" description={detail.errorCode || (detail.unscannedSubtrees ? `${detail.unscannedSubtrees} 个目录未展开` : undefined)} style={{ marginBottom: 12 }} />}
+      {detail.status === 'partial' && <Alert type="warning" showIcon message="本次为部分覆盖，不能视作完整分析" description={detail.unscannedSubtrees ? `${detail.unscannedSubtrees} 个目录未展开` : undefined} style={{ marginBottom: 12 }} />}
+      {detail.status === 'failed' && <Alert type="error" showIcon message={detail.errorCode === 'GITHUB_RATE_LIMIT' ? 'GitHub 限流重试已达上限，请稍后新建扫描' : '扫描失败'} description={detail.errorCode || undefined} style={{ marginBottom: 12 }} />}
+      {detail.nextAttemptAt && <Alert type="info" showIcon message={`GitHub 限流，预计 ${new Date(detail.nextAttemptAt).toLocaleString('zh-CN')} 后自动重试`} description={`已安排第 ${detail.retryCount}/3 次重试；刷新页面不会丢失等待状态。`} style={{ marginBottom: 12 }} />}
       <Table rowKey="path" size="small" dataSource={detail.files} pagination={{ pageSize: 10 }} scroll={{ x: 680 }} columns={[
         { title: '路径', dataIndex: 'path' },
         { title: '分类', dataIndex: 'category' },
