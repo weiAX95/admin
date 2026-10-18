@@ -112,6 +112,12 @@ export interface ProjectAnalysisReport extends ProjectAnalysisJob {
   suggestions: { id: string; findingId: string | null; topic: string; reason: string; practice: string; acceptance: string; impact: 'high' | 'medium' | 'low' | null; impactReason: string | null; prerequisites: string[]; status: 'pending' | 'accepted' | 'ignored' | 'stale'; decision: null | { status: 'accepted' | 'ignored'; taskId: string | null; targetMode: 'created' | 'existing' | null; decidedAt: string }; possibleDuplicates: { taskId: string; title: string; exact: boolean; similarity: number }[] }[];
 }
 export const listProjectAnalyses = (repositoryId: string, before?: string) => http.get<{ items: ProjectAnalysisJob[]; nextCursor: string | null }>(`/project-repositories/${repositoryId}/analyses`, { before });
+export interface ProjectLearningRoadmap {
+  repositoryId: string; analysisId: string; commitSha: string; previousAnalysisId: string | null; stale: boolean; nextTaskId: string | null; evidenceScope: string; evidenceTruncated: boolean;
+  tasks: { id: string; title: string; status: string; progress: number | null; priority: string | null; phase: string | null; requirementId: string | null; dependencyIds: string[]; dependencyLevel: number; externalBlockingCount: number; notes: { id: string; title: string; sourceSessionId: string | null }[]; experiments: { id: string; title: string; recordKind: string }[] }[];
+  suggestions: { id: string; topic: string; reason: string; practice: string; acceptance: string; impact: 'high' | 'medium' | 'low' | null; prerequisites: string[]; status: 'pending' | 'accepted' | 'ignored'; requirementId: string | null; newSincePrevious: boolean | null; linkedTaskIds: string[] }[];
+}
+export const getProjectLearningRoadmap = (repositoryId: string, analysisId: string) => http.get<ProjectLearningRoadmap>(`/project-repositories/${repositoryId}/roadmap/${analysisId}`);
 export interface ProjectReportComparison {
   older: ProjectAnalysisJob & { fullName: string }; newer: ProjectAnalysisJob & { fullName: string };
   comparable: boolean; limitations: string[];

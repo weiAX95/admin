@@ -5,6 +5,7 @@ import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform'
 import { listTasks } from '../api/tasks';
 import { addProjectFindingFeedback, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, previewPrivateProjectAnalysis, previewProjectSuggestionTask, retryProjectAnalysis, startProjectAnalysis, updateProjectAutoAnalysis, type PrivateProjectDisclosure, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan, type ProjectSuggestionTaskPreview } from '../api/projectRepositories';
 import ProjectReportComparison from './ProjectReportComparison';
+import ProjectLearningRoadmap from './ProjectLearningRoadmap';
 import { getStoredUser } from '../api/client';
 import { isAdministrator } from '../utils/roles';
 import { orderProjectSuggestions } from '../utils/projectSuggestionOrder';
@@ -344,6 +345,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
       {report.baselineVersionId && <Button size="small" loading={requirementLoading} onClick={() => void showRequirement()}>查看本报告固定的需求正文</Button>}
       <Typography.Paragraph>{report.summary}</Typography.Paragraph>
+      <ProjectLearningRoadmap repositoryId={repository.id} analysisId={report.id} />
       <Typography.Title level={5}>需求逐项对照</Typography.Title>
       <Typography.Paragraph type="secondary">关联任务展示报告完成时的状态快照；任务完成不代表代码已实现，代码判断仍以结论和证据为准。</Typography.Paragraph>
       {report.requirements.length ? <Table rowKey="id" size="small" pagination={false} dataSource={report.requirements} columns={[

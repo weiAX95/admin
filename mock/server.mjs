@@ -83,6 +83,7 @@ import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses
 import { processProjectAutoAnalyses } from './project-auto-analyses.mjs';
 import { processProjectAnalysisNotifications } from './project-analysis-notifications.mjs';
 import { handleProjectSuggestionAction } from './project-suggestion-actions.mjs';
+import { handleProjectLearningRoadmap } from './project-learning-roadmap.mjs';
 import { handleProjectFindingFeedback } from './project-finding-feedback.mjs';
 import { handleProjectRequirementBaselines } from './project-requirement-baselines.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
@@ -2359,6 +2360,7 @@ const server = http.createServer((req, res) => {
         }
       }
       const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
+        || await handleProjectLearningRoadmap({ pathname, method: req.method, client: pool, me })
         || await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
         || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
