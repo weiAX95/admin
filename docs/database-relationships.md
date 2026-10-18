@@ -162,6 +162,8 @@ flowchart LR
 
 [090_alert_rule_webhooks.sql](../db/migrations/090_alert_rule_webhooks.sql) 建立 `alert_rule_webhooks`，两侧分别以级联外键指向告警规则和已有的出站 Webhook 配置。规则可选择多个 `alert.firing` 配置；通知生成时只为这些配置建立投递记录，事件标记为已分发，避免通用广播队列再发送给其他钩子。投递复用已有的公网地址校验、HMAC 签名、失败重试和尝试日志；目前仍是通用 JSON Webhook，企业微信、飞书与钉钉的专用协议尚未适配。`app_notifications.show_in_app` 区分邮件队列记录与顶部铃铛可见记录，未选站内渠道时不计未读数。
 
+[131_alert_session_refusal_rate.sql](../db/migrations/131_alert_session_refusal_rate.sql) 将 `session_refusal_rate` 加入规则和指标样本的约束，并为近一小时 Assistant 消息查询建索引。该指标以近一小时**有 Assistant 回复的会话**为分母，以其中至少一条回复被标记拒答的会话为分子；没有可计会话时不写零值样本，避免把缺少数据误判为零拒答率。原有 `session_refusal_streak` 仍单独表示最近五个会话的拒答数。
+
 Info 级别只留事件；Warning 按所选渠道投递且可被静默；Critical 无论规则是直接设定还是从 Warning 升级，都会给管理员创建站内通知，并给已启用邮箱的管理员排队发邮件。规则选定的出站 Webhook 会另外收到相应的触发、升级或重复提醒事件。
 
 管理员可在告警页面创建仅发给自己的站内或邮件测试通知，并查询邮件队列状态；邮件测试要求个人收件邮箱已启用且 SMTP 已配置。出站 Webhook 设置页的“测试投递”只给选定钩子写入一条无真实业务数据的测试事件和投递记录，管理员可通过原有投递日志查看重试与最终结果。

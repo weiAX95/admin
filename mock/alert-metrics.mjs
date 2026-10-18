@@ -27,6 +27,19 @@ export async function collectAlertMetrics(pool, now = new Date()) {
         ))::integer AS rejected_count
       FROM (SELECT id FROM sessions ORDER BY updated_at DESC NULLS LAST LIMIT 5) s`)).rows[0];
     add('session_refusal_streak', refusal.session_count === 5 ? refusal.rejected_count : 0, refusal.session_count);
+    const refusalRate = (await client.query(`
+      SELECT count(*)::integer AS total,
+        count(*) FILTER (WHERE EXISTS (
+          SELECT 1 FROM session_messages rejected
+          JOIN session_quality_flags f ON f.session_id=rejected.session_id AND f.message_id=rejected.id
+          WHERE rejected.session_id=s.id AND rejected.role='assistant' AND f.flag_type='rejection'
+            AND rejected.at >= $1 AND rejected.at < $2
+        ))::integer AS rejected
+      FROM sessions s WHERE EXISTS (
+        SELECT 1 FROM session_messages m WHERE m.session_id=s.id AND m.role='assistant'
+          AND m.at >= $1 AND m.at < $2
+      )`, [hourAgo.toISOString(), sampledAt.toISOString()])).rows[0];
+    if (refusalRate.total > 0) add('session_refusal_rate', Number(refusalRate.rejected) * 100 / Number(refusalRate.total), refusalRate.total);
     const negative = (await client.query(`
       SELECT count(*)::integer AS total,
         count(*) FILTER (WHERE a.rating<=2 OR EXISTS (

@@ -8,6 +8,7 @@ import AlertAnalytics from '../components/AlertAnalytics';
 
 const metrics = [
   ['session_daily_tokens','会话日 token 消耗'], ['session_refusal_streak','连续会话拒答数'],
+  ['session_refusal_rate','近 1 小时会话拒答率 %'],
   ['session_negative_rate','近 1 小时负面标注率 %'], ['model_5xx_rate','模型 5xx 错误率 %'],
   ['model_p50_ms','模型 P50 延迟 ms'], ['model_p95_ms','模型 P95 延迟 ms'],
   ['model_p99_ms','模型 P99 延迟 ms'], ['model_qps','模型 QPS'],
