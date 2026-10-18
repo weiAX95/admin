@@ -1,10 +1,12 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { appendSecurityAudit } from './account-audit.mjs';
+import { assertGithubPrivateRepoAccess, GithubAuthorizationError } from './project-github-auth.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
 const key = item => `${item.topic.trim().replace(/\s+/g,' ').toLocaleLowerCase()}\n${item.practice.trim().replace(/\s+/g,' ').toLocaleLowerCase()}`;
+const topicKey = value => String(value || '').normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase();
 
 function orderByDependencies(tasks, edges) {
   const byId = new Map(tasks.map(task => [task.id,task]));
@@ -29,8 +31,12 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
   const [,repositoryId,analysisId,action] = match;
   if (method !== (action ? 'POST' : 'GET')) return fail(405,'不支持该操作');
   if (!UUID.test(repositoryId) || !UUID.test(analysisId)) return fail(404,'学习路线不存在');
-  const repository = (await client.query('SELECT id,owner_id,goal,baseline_version_id,commit_sha FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
+  const repository = (await client.query('SELECT id,owner_id,goal,baseline_version_id,commit_sha,is_private,full_name FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
+  if (repository.is_private) {
+    try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name); }
+    catch (error) { return fail(error instanceof GithubAuthorizationError ? 403 : 502,error instanceof GithubAuthorizationError ? error.message : '暂时无法核验私有仓库授权'); }
+  }
   const analysis = (await client.query("SELECT id,repository_id,commit_sha,branch,goal,baseline_version_id,finished_at,analysis_coverage_complete,selected_file_count,available_file_count FROM project_analyses WHERE id=$1 AND repository_id=$2 AND owner_id=$3 AND status='completed'",[analysisId,repositoryId,me.id])).rows[0];
   if (!analysis) return fail(404,'已完成报告不存在');
   if (action === 'evidence') {
@@ -115,11 +121,34 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
     evidence: evidenceRows.rows.filter(row => row.suggestion_id === item.id).map(row => ({ id: row.id, kind: row.kind, response: row.response, artifactUrl: row.artifact_url, createdAt: row.created_at })),
     evidenceCount: Number(evidenceRows.rows.find(row => row.suggestion_id === item.id)?.total_count || 0),
   }));
+  const topicMatches = new Map();
+  for (const item of suggestions) {
+    const normalized = topicKey(item.topic);
+    if (normalized) topicMatches.set(normalized,[...(topicMatches.get(normalized) || []),item]);
+  }
+  const taskById = new Map(tasks.map(task => [task.id,task]));
+  for (const item of suggestions) {
+    item.prerequisiteMappings = item.prerequisites.map(name => {
+      const matches = (topicMatches.get(topicKey(name)) || []).filter(match => match.id !== item.id);
+      if (matches.length !== 1) return { name, suggestionId: null, taskIds: [], state: matches.length ? 'ambiguous' : 'unmapped' };
+      const matched = matches[0];
+      const taskIds = matched.status === 'ignored' ? [] : matched.linkedTaskIds;
+      return { name, suggestionId: matched.id, taskIds, state: taskIds.length ? taskIds.every(id => taskById.get(id)?.status === 'done') ? 'done' : 'pending' : 'unmapped' };
+    });
+  }
+  const impactRank = { high: 0, medium: 1, low: 2 };
+  const suggestionOrder = new Map(suggestionRows.rows.map((row,index) => [row.id,index]));
+  const stale = analysis.goal !== repository.goal || analysis.baseline_version_id !== repository.baseline_version_id || analysis.commit_sha.trim() !== repository.commit_sha.trim();
+  const nextSuggestion = stale ? null : suggestions
+    .filter(item => item.status === 'pending' && item.prerequisiteMappings.every(mapping => mapping.state === 'done'))
+    .sort((a,b) => (impactRank[a.impact] ?? 3)-(impactRank[b.impact] ?? 3) || suggestionOrder.get(a.id)-suggestionOrder.get(b.id))[0];
   const nextTask = tasks.find(task => ['todo','in_progress'].includes(task.status) && task.externalBlockingCount === 0 && task.dependencyIds.every(id => tasks.find(item => item.id === id)?.status === 'done'));
   return { status: 200, data: {
     repositoryId, analysisId, commitSha: analysis.commit_sha.trim(), previousAnalysisId: previousId,
-    stale: analysis.goal !== repository.goal || analysis.baseline_version_id !== repository.baseline_version_id || analysis.commit_sha.trim() !== repository.commit_sha.trim(),
-    nextTaskId: nextTask?.id || null, tasks, suggestions,
+    stale,
+    nextTaskId: nextTask?.id || null, nextSuggestionId: nextSuggestion?.id || null,
+    nextSuggestionReason: nextSuggestion ? nextSuggestion.prerequisites.length ? '已明确关联的前置任务均标为完成；仍需自行核验掌握程度' : '报告未列前置知识，按建议影响程度优先；仍需自行核验掌握程度' : null,
+    tasks, suggestions,
     evidenceTruncated: noteRows.rows.length > 500 || experimentRows.rows.length > 500,
     evidenceScope: '仅关联当前账号可见的任务、本人笔记、本人会话来源和本人实验；学习记录不等于能力证明',
   } };
