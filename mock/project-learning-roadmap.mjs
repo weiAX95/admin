@@ -1,3 +1,7 @@
+import crypto from 'node:crypto';
+import pg from 'pg';
+import { appendSecurityAudit } from './account-audit.mjs';
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
 const key = item => `${item.topic.trim().replace(/\s+/g,' ').toLocaleLowerCase()}\n${item.practice.trim().replace(/\s+/g,' ').toLocaleLowerCase()}`;
@@ -19,16 +23,43 @@ function orderByDependencies(tasks, edges) {
     .sort((a,b) => a.dependencyLevel-b.dependencyLevel || (priority[a.priority] ?? 3)-(priority[b.priority] ?? 3) || a.title.localeCompare(b.title,'zh-CN') || a.id.localeCompare(b.id));
 }
 
-export async function handleProjectLearningRoadmap({ pathname, method, client, me }) {
-  const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/roadmap\/([^/]+)$/);
+export async function handleProjectLearningRoadmap({ pathname, method, client, me, readBody, req }) {
+  const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/roadmap\/([^/]+)(?:\/(evidence))?$/);
   if (!match) return null;
-  if (method !== 'GET') return fail(405,'不支持该操作');
-  const [,repositoryId,analysisId] = match;
+  const [,repositoryId,analysisId,action] = match;
+  if (method !== (action ? 'POST' : 'GET')) return fail(405,'不支持该操作');
   if (!UUID.test(repositoryId) || !UUID.test(analysisId)) return fail(404,'学习路线不存在');
   const repository = (await client.query('SELECT id,owner_id,goal,baseline_version_id,commit_sha FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
   const analysis = (await client.query("SELECT id,repository_id,commit_sha,branch,goal,baseline_version_id,finished_at,analysis_coverage_complete,selected_file_count,available_file_count FROM project_analyses WHERE id=$1 AND repository_id=$2 AND owner_id=$3 AND status='completed'",[analysisId,repositoryId,me.id])).rows[0];
   if (!analysis) return fail(404,'已完成报告不存在');
+  if (action === 'evidence') {
+    const body = await readBody();
+    const response = typeof body?.response === 'string' ? body.response.trim() : '';
+    const artifactUrl = typeof body?.artifactUrl === 'string' ? body.artifactUrl.trim() : '';
+    const responseLength = Array.from(response).length;
+    if (!UUID.test(body?.suggestionId || '') || !['understanding','practice'].includes(body?.kind) || responseLength < 20 || responseLength > 4000 || artifactUrl.length > 2048) return fail(400,'理解检查或实践记录内容无效');
+    if (artifactUrl) {
+      try { const url = new URL(artifactUrl); if (url.protocol !== 'https:' || url.username || url.password) throw new Error(); }
+      catch { return fail(400,'实践证据链接须为无账号密码的 HTTPS 地址'); }
+    }
+    const pooled = client instanceof pg.Pool;
+    const connection = pooled ? await client.connect() : client;
+    try {
+      await connection.query('BEGIN');
+      const suggestion = (await connection.query('SELECT id FROM project_analysis_suggestions WHERE id=$1 AND analysis_id=$2',[body.suggestionId,analysisId])).rows[0];
+      if (!suggestion) { await connection.query('ROLLBACK'); return fail(404,'学习建议不属于此报告'); }
+      const id = crypto.randomUUID();
+      const saved = (await connection.query(`INSERT INTO project_learning_evidence
+        (id,repository_id,analysis_id,suggestion_id,owner_id,kind,response,artifact_url)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING created_at`,
+      [id,repositoryId,analysisId,suggestion.id,me.id,body.kind,response,artifactUrl || null])).rows[0];
+      if (req) await appendSecurityAudit(connection,req,me,'create','project_learning_evidence',id,{repositoryId,analysisId,suggestionId:suggestion.id,kind:body.kind});
+      await connection.query('COMMIT');
+      return { status: 201, data: { id, suggestionId: suggestion.id, kind: body.kind, response, artifactUrl: artifactUrl || null, createdAt: saved.created_at } };
+    } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
+    finally { if (pooled) connection.release(); }
+  }
   const [taskRows,suggestionRows,previousRows] = await Promise.all([
     client.query(`SELECT t.id,t.title,t.status,t.progress,t.priority,t.phase,l.requirement_id
       FROM project_repository_tasks l JOIN tasks t ON t.id=l.task_id
@@ -46,7 +77,7 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
   ]);
   const taskIds = taskRows.rows.map(row => row.id);
   const previousId = previousRows.rows[0]?.id || null;
-  const [edgeRows,noteRows,experimentRows,oldSuggestionRows] = await Promise.all([
+  const [edgeRows,noteRows,experimentRows,oldSuggestionRows,evidenceRows] = await Promise.all([
     taskIds.length ? client.query('SELECT d.task_id,d.dependency_id,dependency.status AS dependency_status,dependency.deleted_at AS dependency_deleted_at FROM task_dependencies d JOIN tasks dependency ON dependency.id=d.dependency_id WHERE d.task_id=ANY($1::text[])',[taskIds]) : Promise.resolve({ rows: [] }),
     taskIds.length ? client.query(`SELECT n.id,n.title,n.task_id,s.id AS session_id
       FROM notes n LEFT JOIN sessions s ON s.id=n.source_session_id AND s.ingested_by=$2
@@ -56,6 +87,12 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
       WHERE task_id=ANY($1::text[]) AND owner_id=$2 AND deleted_at IS NULL
       ORDER BY updated_at DESC LIMIT 501`,[taskIds,me.id]) : Promise.resolve({ rows: [] }),
     previousId ? client.query('SELECT topic,practice FROM project_analysis_suggestions WHERE analysis_id=$1',[previousId]) : Promise.resolve({ rows: [] }),
+    client.query(`SELECT id,suggestion_id,kind,response,artifact_url,created_at,total_count FROM (
+      SELECT id,suggestion_id,kind,response,artifact_url,created_at,
+        row_number() OVER (PARTITION BY suggestion_id ORDER BY created_at DESC,id DESC) AS position,
+        count(*) OVER (PARTITION BY suggestion_id) AS total_count
+      FROM project_learning_evidence WHERE analysis_id=$1 AND owner_id=$2
+    ) recent WHERE position<=3 ORDER BY suggestion_id,created_at DESC,id DESC`,[analysisId,me.id]),
   ]);
   const oldKeys = new Set(oldSuggestionRows.rows.map(key));
   const linkedIds = new Set(taskIds);
@@ -72,6 +109,8 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
     impact: item.impact, prerequisites: item.prerequisites || [], status: item.decision_state || 'pending',
     requirementId: item.requirement_id, newSincePrevious: previousId ? !oldKeys.has(key(item)) : null,
     linkedTaskIds: tasks.filter(task => task.id === item.decision_task_id || item.requirement_id && task.requirementId === item.requirement_id).map(task => task.id),
+    evidence: evidenceRows.rows.filter(row => row.suggestion_id === item.id).map(row => ({ id: row.id, kind: row.kind, response: row.response, artifactUrl: row.artifact_url, createdAt: row.created_at })),
+    evidenceCount: Number(evidenceRows.rows.find(row => row.suggestion_id === item.id)?.total_count || 0),
   }));
   const nextTask = tasks.find(task => ['todo','in_progress'].includes(task.status) && task.externalBlockingCount === 0 && task.dependencyIds.every(id => tasks.find(item => item.id === id)?.status === 'done'));
   return { status: 200, data: {

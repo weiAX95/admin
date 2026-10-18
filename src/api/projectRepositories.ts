@@ -115,9 +115,11 @@ export const listProjectAnalyses = (repositoryId: string, before?: string) => ht
 export interface ProjectLearningRoadmap {
   repositoryId: string; analysisId: string; commitSha: string; previousAnalysisId: string | null; stale: boolean; nextTaskId: string | null; evidenceScope: string; evidenceTruncated: boolean;
   tasks: { id: string; title: string; status: string; progress: number | null; priority: string | null; phase: string | null; requirementId: string | null; dependencyIds: string[]; dependencyLevel: number; externalBlockingCount: number; notes: { id: string; title: string; sourceSessionId: string | null }[]; experiments: { id: string; title: string; recordKind: string }[] }[];
-  suggestions: { id: string; topic: string; reason: string; practice: string; acceptance: string; impact: 'high' | 'medium' | 'low' | null; prerequisites: string[]; status: 'pending' | 'accepted' | 'ignored'; requirementId: string | null; newSincePrevious: boolean | null; linkedTaskIds: string[] }[];
+  suggestions: { id: string; topic: string; reason: string; practice: string; acceptance: string; impact: 'high' | 'medium' | 'low' | null; prerequisites: string[]; status: 'pending' | 'accepted' | 'ignored'; requirementId: string | null; newSincePrevious: boolean | null; linkedTaskIds: string[]; evidence: ProjectLearningEvidence[]; evidenceCount: number }[];
 }
 export const getProjectLearningRoadmap = (repositoryId: string, analysisId: string) => http.get<ProjectLearningRoadmap>(`/project-repositories/${repositoryId}/roadmap/${analysisId}`);
+export interface ProjectLearningEvidence { id: string; kind: 'understanding' | 'practice'; response: string; artifactUrl: string | null; createdAt: string }
+export const addProjectLearningEvidence = (repositoryId: string, analysisId: string, body: { suggestionId: string; kind: ProjectLearningEvidence['kind']; response: string; artifactUrl?: string }) => http.post<ProjectLearningEvidence>(`/project-repositories/${repositoryId}/roadmap/${analysisId}/evidence`, body);
 export interface ProjectReportComparison {
   older: ProjectAnalysisJob & { fullName: string }; newer: ProjectAnalysisJob & { fullName: string };
   comparable: boolean; limitations: string[];

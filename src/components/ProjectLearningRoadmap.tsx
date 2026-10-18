@@ -1,16 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Card, Empty, Space, Tag, Typography } from 'antd';
+import { Alert, App, Button, Card, Empty, Input, Modal, Select, Space, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
-import { getProjectLearningRoadmap, type ProjectLearningRoadmap as Roadmap } from '../api/projectRepositories';
+import { addProjectLearningEvidence, getProjectLearningRoadmap, type ProjectLearningEvidence, type ProjectLearningRoadmap as Roadmap } from '../api/projectRepositories';
 
 const taskStatus: Record<string,string> = { todo: '待办', in_progress: '进行中', blocked: '阻塞', done: '已完成' };
 const suggestionStatus: Record<string,string> = { pending: '待决定', accepted: '已接受', ignored: '已忽略' };
 
 export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { repositoryId: string; analysisId: string }) {
+  const { message } = App.useApp();
   const [data, setData] = useState<Roadmap | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
+  const [checkSuggestionId, setCheckSuggestionId] = useState('');
+  const [checkKind, setCheckKind] = useState<ProjectLearningEvidence['kind']>('understanding');
+  const [checkResponse, setCheckResponse] = useState('');
+  const [checkArtifactUrl, setCheckArtifactUrl] = useState('');
+  const [savingCheck, setSavingCheck] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -21,6 +27,20 @@ export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { r
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [repositoryId,analysisId,revision]);
+
+  const saveCheck = async () => {
+    if (!checkSuggestionId) return;
+    setSavingCheck(true);
+    try {
+      await addProjectLearningEvidence(repositoryId,analysisId,{ suggestionId: checkSuggestionId, kind: checkKind, response: checkResponse.trim(), artifactUrl: checkArtifactUrl.trim() });
+      setCheckSuggestionId('');
+      setCheckResponse('');
+      setCheckArtifactUrl('');
+      setRevision(value => value + 1);
+      message.success('个人学习记录已保存，尚未核验掌握程度');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '学习记录保存失败'); }
+    finally { setSavingCheck(false); }
+  };
 
   return <Card size="small" title="学习路线与个人记录" loading={loading} extra={<Button size="small" onClick={() => setRevision(value => value + 1)}>刷新</Button>} style={{ marginBottom: 16 }}>
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
@@ -43,8 +63,17 @@ export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { r
         <Typography.Paragraph><strong>实践：</strong>{item.practice}</Typography.Paragraph>
         <Typography.Paragraph><strong>验收：</strong>{item.acceptance}</Typography.Paragraph>
         <Typography.Text type="secondary">前置知识：{item.prerequisites.length ? item.prerequisites.join('、') : '报告未给出'}；对应本人任务：{item.linkedTaskIds.length ? item.linkedTaskIds.map(id => data.tasks.find(task => task.id === id)?.title || '已关联任务').join('、') : '暂无明确关联'}</Typography.Text>
+        <div style={{ marginTop: 8 }}><Button size="small" onClick={() => { setCheckSuggestionId(item.id); setCheckKind('understanding'); setCheckResponse(''); setCheckArtifactUrl(''); }}>记录理解或实践</Button></div>
+        {item.evidence.length > 0 && <Space direction="vertical" style={{ width: '100%', marginTop: 8 }}>{item.evidence.map(entry => <Typography.Text key={entry.id} type="secondary">{entry.kind === 'understanding' ? '理解回答' : '实践记录'} · {new Date(entry.createdAt).toLocaleString('zh-CN')} · 已提交待核验：{entry.response.slice(0,150)}{entry.response.length > 150 ? '…' : ''}{entry.artifactUrl && <> · <a href={entry.artifactUrl} target="_blank" rel="noopener noreferrer">查看本人提供的材料</a></>}</Typography.Text>)}{item.evidenceCount > item.evidence.length && <Typography.Text type="secondary">另有 {item.evidenceCount - item.evidence.length} 条历史记录</Typography.Text>}</Space>}
       </Card>)}</Space> : <Empty description="本报告没有学习建议" />}
-      <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>接受或忽略建议请使用本报告下方的处理入口；理解检查和实践验收尚未记录时，系统不推断个人掌握程度。</Typography.Paragraph>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>接受或忽略建议请使用本报告下方的处理入口。本人提交的理解回答或实践记录尚需核验；系统不据此推断个人掌握程度。</Typography.Paragraph>
     </>}
+    <Modal title="记录个人理解或实践" open={Boolean(checkSuggestionId)} onCancel={() => { if (!savingCheck) setCheckSuggestionId(''); }} onOk={() => void saveCheck()} okText="保存记录" okButtonProps={{ loading: savingCheck, disabled: Array.from(checkResponse.trim()).length < 20 || Array.from(checkResponse.trim()).length > 4000 }}>
+      <Alert type="info" showIcon message="此记录是本人提交的学习证据，保存后仍标为待核验，不会自动判定掌握" style={{ marginBottom: 12 }} />
+      <Select aria-label="记录类型" value={checkKind} onChange={setCheckKind} style={{ width: '100%', marginBottom: 12 }} options={[{ value: 'understanding', label: '简短理解检查' },{ value: 'practice', label: '实践验收记录' }]} />
+      <Typography.Paragraph>{checkKind === 'understanding' ? `请用自己的话解释“${data?.suggestions.find(item => item.id === checkSuggestionId)?.topic || '本主题'}”的关键概念，并举出一个容易出错的边界。` : `请说明你如何完成实践，以及如何核对验收标准：${data?.suggestions.find(item => item.id === checkSuggestionId)?.acceptance || '按报告要求验证'}`}</Typography.Paragraph>
+      <Input.TextArea aria-label="理解回答或实践记录" value={checkResponse} onChange={event => setCheckResponse(event.target.value)} rows={6} maxLength={4000} showCount placeholder="至少 20 字，请写出自己的理解或实践过程" />
+      <Input aria-label="实践材料链接" value={checkArtifactUrl} onChange={event => setCheckArtifactUrl(event.target.value)} maxLength={2048} placeholder="可选：HTTPS 证据链接" style={{ marginTop: 12 }} />
+    </Modal>
   </Card>;
 }
