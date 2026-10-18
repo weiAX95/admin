@@ -1,6 +1,6 @@
 import { isAdministrator, isSuperAdmin } from '../utils/roles';
 import { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Avatar, Badge, Button, Drawer, Empty, Layout, Menu, Popover, Space, Spin, Typography } from "antd";
+import { Alert, Avatar, Badge, Button, Drawer, Empty, Layout, List, Menu, Space, Spin, Typography } from "antd";
 import {
   BellOutlined, DashboardOutlined, ExperimentOutlined, FileTextOutlined, LogoutOutlined,
   MenuFoldOutlined, MenuOutlined, MenuUnfoldOutlined, MessageOutlined,
@@ -79,6 +79,7 @@ export default function AdminLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [notifications, setNotifications] = useState<ReviewNotification[]>([]);
+  const [notificationOpen, setNotificationOpen] = useState(false);
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [unread, setUnread] = useState(0);
   useEffect(() => {
@@ -152,6 +153,27 @@ export default function AdminLayout() {
       </Sider>
       <Drawer className="mobile-navigation" title={brandNode} placement="left" width={280}
         open={mobileOpen} onClose={() => setMobileOpen(false)}>{menu}</Drawer>
+      <Drawer title={<Space>站内通知 <Badge count={unread} size="small" /></Space>} placement="right"
+        width="min(420px, 100vw)" open={notificationOpen} onClose={() => setNotificationOpen(false)}
+        extra={<Button size="small" onClick={refreshNotifications}>刷新</Button>}>
+        {notifications.length ? <List dataSource={notifications} renderItem={item => (
+          <List.Item key={item.id}>
+            <Space direction="vertical" size={4} style={{ width: '100%' }}>
+              <Space align="start">
+                {!item.readAt && <Badge status="processing" />}
+                <Link to={item.targetUrl || (item.noteId ? `/notes/${item.noteId}` : '/notes/reviews')}
+                  onClick={() => {
+                    setNotificationOpen(false);
+                    if (!item.readAt) void markNotificationRead(item.id).then(refreshNotifications).catch(() => undefined);
+                  }}>{item.title}</Link>
+              </Space>
+              <Typography.Text type="secondary">{item.dueOn ? `到期 ${item.dueOn}` : item.body || ''}</Typography.Text>
+              <Typography.Text type="secondary">{new Date(item.createdAt).toLocaleString('zh-CN')}</Typography.Text>
+            </Space>
+          </List.Item>
+        )} /> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无通知" />}
+        <Button type="link" onClick={() => { setNotificationOpen(false); navigate('/notes/reviews'); }}>打开复习面板</Button>
+      </Drawer>
       <Layout className="admin-main">
         <Header className="admin-header">
           <Space size={12}>
@@ -161,13 +183,9 @@ export default function AdminLayout() {
           </Space>
           <Space size={14} className="header-account">
             <GlobalSearch />
-            <Popover trigger="click" placement="bottomRight" title="站内通知" content={<div style={{ width: 320, maxHeight: 360, overflowY: "auto" }}>
-              {notifications.length ? notifications.map(item => <div key={item.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--ant-color-border-secondary)" }}>
-                <Space><Link to={item.targetUrl || `/notes/${item.noteId}`} onClick={() => { if (!item.readAt) void markNotificationRead(item.id).then(refreshNotifications); }}>{item.title}</Link>{!item.readAt && <Badge status="processing" />}</Space>
-                <div><Typography.Text type="secondary">{item.dueOn ? `到期 ${item.dueOn}` : item.body || ''}</Typography.Text></div>
-              </div>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无通知" />}
-              <Button type="link" onClick={() => navigate("/notes/reviews")}>打开复习面板</Button>
-            </div>}><Button type="text" aria-label={`站内通知，未读 ${unread} 条`} icon={<Badge count={unread} size="small"><BellOutlined /></Badge>} onClick={refreshNotifications} /></Popover>
+            <Button type="text" aria-label={`站内通知，未读 ${unread} 条`}
+              icon={<Badge count={unread} size="small"><BellOutlined /></Badge>}
+              onClick={() => { setNotificationOpen(true); refreshNotifications(); }} />
             <Avatar size={32} className="account-avatar">{name.slice(0, 1)}</Avatar>
             <div className="account-copy"><strong>{name}</strong><span>{isSuperAdmin(user) ? "超级管理员" : isAdministrator(user) ? "管理员" : "普通成员"}</span></div>
             <Button type="text" icon={<LogoutOutlined />} aria-label="退出登录" onClick={() => { void logout().catch(() => undefined).finally(() => { clearAuth(); navigate("/login", { replace: true }); }); }}>
