@@ -81,7 +81,7 @@ Docker Compose 将开发库映射到本机 `55432` 端口，并初始化独立�
 docker compose exec -T postgres pg_dump -U admin -Fc agent_admin > agent_admin.dump
 ```
 
-恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、当前 146 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
+恢复前先确认目标数据库和备份版本，避免覆盖现有数据。开发库与测试库应保持隔离；不要把生产数据导入测试库。本仓库的 API 面向本地开发，本轮不包含生产部署。各页面的取数路径、当前 147 张表的关系与外键边界见 [数据库关系图](docs/database-relationships.md)；迁移取舍见 [架构决策](docs/adr/001-postgresql-migration.md)。
 
 “项目分析”页面支持按账号接入公开 GitHub 仓库，以及通过 GitHub App 授权接入指定私有仓库；读取默认或指定分支的 commit SHA，并保存项目目标和需求基线文字。服务端仅向固定的 `api.github.com` 仓库接口发起只读请求；私有仓库访问每次均核验当前账号权限。项目行的“扫描记录”可以提交后台扫描：任务与文件索引持久化到 PostgreSQL，页面显示读取、排除、失败及未扫描范围；部分覆盖不会标成完整分析。已读取的文本正文也在扫描预算内保存，仅仓库所属账号可按需读取；扫描列表不传输正文。旧扫描记录没有正文，需重新扫描后才能作为后续报告材料。敏感路径与已知凭据格式的排除范围见 [项目分析输入边界](docs/project-analysis-input-safety.md)。未认证的公开 API 存在速率限制。GitHub App 的私有仓库授权及入站 Webhook 配置见 [GitHub App 授权边界](docs/project-github-app.md)：提交后自动扫描需要另设服务端 `GITHUB_APP_WEBHOOK_SECRET` 和公网接收 URL，公开仓库可另行确认开启有逐次费用上限的自动模型分析；私有仓库可开启提交后待确认分析，每次查看发送范围并确认后才会调用模型。[GitHub 仓库接口](https://docs.github.com/en/rest/repos/repos)、[分支接口](https://docs.github.com/en/rest/branches/branches)与[Trees API](https://docs.github.com/en/rest/git/trees)为此阶段的读取依据。
 

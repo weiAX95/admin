@@ -65,9 +65,11 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
       FROM project_repository_tasks l JOIN tasks t ON t.id=l.task_id
       WHERE l.repository_id=$1 AND t.owner_id=$2 AND t.deleted_at IS NULL`,[repositoryId,me.id]),
     client.query(`SELECT s.id,s.topic,s.reason,s.practice,s.acceptance,s.impact,s.prerequisites,
+      adj.practice AS adjusted_practice,adj.acceptance AS adjusted_acceptance,adj.rationale AS adjustment_rationale,
       f.requirement_id,d.state AS decision_state,d.task_id AS decision_task_id
       FROM project_analysis_suggestions s LEFT JOIN project_analysis_findings f ON f.id=s.finding_id
       LEFT JOIN project_suggestion_decisions d ON d.suggestion_id=s.id
+      LEFT JOIN project_suggestion_adjustments adj ON adj.suggestion_id=s.id
       WHERE s.analysis_id=$1 ORDER BY s.position`,[analysisId]),
     analysis.baseline_version_id && analysis.analysis_coverage_complete ? client.query(`SELECT id FROM project_analyses
       WHERE repository_id=$1 AND owner_id=$2 AND status='completed' AND id<>$3 AND finished_at<$4
@@ -106,6 +108,7 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
   }));
   const suggestions = suggestionRows.rows.map(item => ({
     id: item.id, topic: item.topic, reason: item.reason, practice: item.practice, acceptance: item.acceptance,
+    adjustment: item.adjusted_practice ? { practice: item.adjusted_practice, acceptance: item.adjusted_acceptance, rationale: item.adjustment_rationale } : null,
     impact: item.impact, prerequisites: item.prerequisites || [], status: item.decision_state || 'pending',
     requirementId: item.requirement_id, newSincePrevious: previousId ? !oldKeys.has(key(item)) : null,
     linkedTaskIds: tasks.filter(task => task.id === item.decision_task_id || item.requirement_id && task.requirementId === item.requirement_id).map(task => task.id),

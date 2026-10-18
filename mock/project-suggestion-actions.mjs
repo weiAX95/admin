@@ -23,13 +23,13 @@ function appendedDescription(task, row) {
 }
 
 export async function handleProjectSuggestionAction({ pathname, method, client, me, url, readBody = async () => ({}), req }) {
-  const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/([^/]+)\/suggestions\/([^/]+)\/(accept|ignore|preview)$/);
+  const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/([^/]+)\/suggestions\/([^/]+)\/(accept|ignore|preview|adjust)$/);
   if (!match) return null;
-  if (method !== (match[4] === 'preview' ? 'GET' : 'POST')) return fail(405,'不支持该操作');
+  if (method !== (match[4] === 'preview' ? 'GET' : match[4] === 'adjust' ? 'PATCH' : 'POST')) return fail(405,'不支持该操作');
   const [,repositoryId,analysisId,suggestionId,action] = match;
   if (![repositoryId,analysisId,suggestionId].every(value => UUID.test(value))) return fail(404,'建议不存在');
   const body = action === 'preview' ? null : await readBody();
-  const taskOperation = action === 'ignore' ? null : action === 'preview' || body?.targetTaskId ? 'update' : 'create';
+  const taskOperation = action === 'ignore' || action === 'adjust' ? null : action === 'preview' || body?.targetTaskId ? 'update' : 'create';
   if (taskOperation && !canAccess(me, 'tasks', taskOperation)) return fail(403, '仅管理员可通过项目建议创建或修改任务');
   const pooled = client instanceof pg.Pool;
   const connection = pooled ? await client.connect() : client;
@@ -44,15 +44,36 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
       LEFT JOIN project_analysis_findings f ON f.id=s.finding_id
       WHERE s.id=$1 AND a.id=$2 AND a.repository_id=$3 AND r.owner_id=$4 FOR UPDATE OF s FOR SHARE OF r`, [suggestionId,analysisId,repositoryId,me.id])).rows[0];
     if (!row) { await connection.query('ROLLBACK'); return fail(404,'建议不存在'); }
-    const operation = action === 'ignore' ? 'manage' : action === 'preview' ? 'read' : 'create';
+    const operation = action === 'ignore' || action === 'adjust' ? 'manage' : action === 'preview' ? 'read' : 'create';
     if (!canAccess(me,'project_suggestions',operation,{ownerId:row.repository_owner_id})) { await connection.query('ROLLBACK'); return fail(403,'无权处理该项目建议'); }
     if (row.analysis_status !== 'completed') { await connection.query('ROLLBACK'); return fail(409,'报告尚未完成'); }
     const existing = (await connection.query('SELECT * FROM project_suggestion_decisions WHERE suggestion_id=$1', [suggestionId])).rows[0];
+    if (action === 'adjust') {
+      if (existing) { await connection.query('ROLLBACK'); return fail(409,'已处理的建议不能再调整'); }
+      const practice = typeof body?.practice === 'string' ? body.practice.trim() : '';
+      const acceptance = typeof body?.acceptance === 'string' ? body.acceptance.trim() : '';
+      const rationale = typeof body?.rationale === 'string' ? body.rationale.trim() : '';
+      const size = value => Array.from(value).length;
+      if (size(practice) < 10 || size(practice) > 2000 || size(acceptance) < 10 || size(acceptance) > 2000 || size(rationale) < 10 || size(rationale) > 1000 || !Number.isInteger(body?.expectedVersion) || body.expectedVersion < 0) { await connection.query('ROLLBACK'); return fail(400,'建议调整内容或版本无效'); }
+      const previous = (await connection.query('SELECT version FROM project_suggestion_adjustments WHERE suggestion_id=$1',[suggestionId])).rows[0];
+      if ((previous?.version || 0) !== body.expectedVersion) { await connection.query('ROLLBACK'); return fail(409,'调整稿版本已变化，请刷新报告'); }
+      const saved = (await connection.query(`INSERT INTO project_suggestion_adjustments
+        (suggestion_id,analysis_id,repository_id,owner_id,practice,acceptance,rationale)
+        VALUES($1,$2,$3,$4,$5,$6,$7)
+        ON CONFLICT(suggestion_id) DO UPDATE SET practice=EXCLUDED.practice,acceptance=EXCLUDED.acceptance,
+          rationale=EXCLUDED.rationale,version=project_suggestion_adjustments.version+1,updated_at=now()
+        RETURNING version,updated_at`,[suggestionId,analysisId,repositoryId,me.id,practice,acceptance,rationale])).rows[0];
+      if (req) await appendSecurityAudit(connection,req,me,'update','project_suggestion_adjustments',suggestionId,{repositoryId,analysisId,version:saved.version});
+      await connection.query('COMMIT');
+      return { status: 200, data: { suggestionId, practice, acceptance, rationale, version: saved.version, updatedAt: saved.updated_at } };
+    }
     if (existing) {
       if (action === 'preview' || action === 'accept' && body?.targetTaskId && body.targetTaskId !== existing.task_id) { await connection.query('ROLLBACK'); return fail(409,'该建议已处理'); }
       await connection.query('COMMIT');
       return existing.state === (action === 'accept' ? 'accepted' : 'ignored') ? { status: 200, data: { suggestionId, status: existing.state, taskId: existing.task_id, targetMode: existing.target_mode, decidedAt: existing.decided_at } } : fail(409,'该建议已有不同处理结果');
     }
+    const adjustment = (await connection.query('SELECT practice,acceptance FROM project_suggestion_adjustments WHERE suggestion_id=$1',[suggestionId])).rows[0];
+    if (adjustment) { row.practice = adjustment.practice; row.acceptance = adjustment.acceptance; }
     const key = fingerprint(row);
     if (action === 'preview' || action === 'accept') {
       if (row.report_goal !== row.current_goal || row.report_baseline !== row.current_baseline || row.report_baseline_version_id !== row.current_baseline_version_id || row.commit_sha.trim() !== row.current_commit?.trim()) { await connection.query('ROLLBACK'); return fail(409,'项目目标、需求基线或 commit 已变化，请重新分析后确认'); }

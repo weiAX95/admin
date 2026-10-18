@@ -10,4 +10,4 @@
 
 每条建议可通过 `POST /api/project-repositories/:repositoryId/roadmap/:analysisId/evidence` 提交理解回答或实践过程，并可附本人提供的 HTTPS 材料链接。`project_learning_evidence` 逐条保存账号、固定报告、建议、类型、原文和时间；数据库用复合外键保证归属正确。链接仅供页面点击，不由服务端抓取。记录不可改写，页面展示每条建议最近三条及历史总数。它们一律是本人提交、待核验的材料，不做自动正确性判断，更不产生掌握评分。后续需建立独立核验标准与流程。
 
-接受和忽略建议仍使用现有报告操作；调整建议和独立核验属于后续 14.12 工作。
+在报告中可为未处理建议调用 `PATCH /api/project-repositories/:repositoryId/analyses/:analysisId/suggestions/:suggestionId/adjust`，保存个人调整的实践文字、验收标准和理由。原报告建议保持不可变；再次编辑须提交当前调整版本，过期版本返回冲突。接受建议创建任务或追加到已有任务时使用调整稿，已处理建议不可再改。调整不是能力核验，独立核验仍属于后续 14.12 工作。
