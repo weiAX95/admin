@@ -158,6 +158,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     }
     return auditedWrite(client,req,me,'update_webhook_scan',id,async connection => {
       const updated = (await connection.query('UPDATE project_repositories SET webhook_scan_enabled=$3,auto_analysis_enabled=CASE WHEN $3 THEN auto_analysis_enabled ELSE false END,updated_at=now() WHERE id=$1 AND owner_id=$2 AND webhook_scan_enabled=$4 RETURNING *',[id,me.id,body.enabled,body.expectedEnabled])).rows[0];
+      if (updated && !body.enabled) await connection.query("UPDATE project_scans SET auto_analysis_state='skipped',auto_analysis_error='提交后扫描已关闭' WHERE repository_id=$1 AND auto_analysis_state IN ('pending','approval_required')",[id]);
       return updated ? { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) } : fail(409,'自动扫描设置已变化，请刷新后重试');
     });
   }
@@ -166,8 +167,11 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     const body = await readBody();
     if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.enabled !== 'boolean' || typeof body.expectedEnabled !== 'boolean' || Object.keys(body).some(key => !['enabled','expectedEnabled','modelId','tokenBudget','costBudgetUsd','confirmRecurringCost'].includes(key))) return fail(400,'自动分析设置无效');
     if (body.enabled) {
-      if (row.is_private) return fail(409,'私有仓库仍需每次确认代码发送范围，暂不支持自动模型分析');
       if (!row.webhook_scan_enabled) return fail(409,'请先开启提交后扫描');
+      if (row.is_private) {
+        try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name); }
+        catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
+      }
       if (body.confirmRecurringCost !== true || typeof body.modelId !== 'string' || ![30000,60000,120000].includes(body.tokenBudget) || ![0.1,0.5,1,5].includes(body.costBudgetUsd)) return fail(400,'请选择模型和单次费用／token 上限，并确认持续调用');
       const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1',[body.modelId])).rows[0];
       if (!modelUsable(model,me) || !supportedProvider.has(model.provider) || !model.capabilities?.output?.includes('text') || !await modelConnectionAvailable(client,model)) return fail(409,'模型不可用或没有访问权限');
@@ -179,6 +183,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
         auto_analysis_cost_budget_usd=CASE WHEN $3 THEN $6 ELSE auto_analysis_cost_budget_usd END,
         updated_at=now() WHERE id=$1 AND owner_id=$2 AND auto_analysis_enabled=$7 AND ($3=false OR webhook_scan_enabled=true)
         RETURNING *`,[id,me.id,body.enabled,body.modelId || null,body.tokenBudget || null,body.costBudgetUsd || null,body.expectedEnabled])).rows[0];
+      if (updated && !body.enabled) await connection.query("UPDATE project_scans SET auto_analysis_state='skipped',auto_analysis_error='提交后分析已关闭' WHERE repository_id=$1 AND auto_analysis_state IN ('pending','approval_required')",[id]);
       return updated ? { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) } : fail(409,'自动分析设置已变化，请刷新后重试');
     });
   }

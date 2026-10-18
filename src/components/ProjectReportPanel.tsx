@@ -39,7 +39,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [comparing, setComparing] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [privatePreview, setPrivatePreview] = useState<{ disclosure: PrivateProjectDisclosure; scanId: string; modelId: string; tokenBudget: number | null; costBudgetUsd: number | null } | null>(null);
+  const [privatePreview, setPrivatePreview] = useState<{ disclosure: PrivateProjectDisclosure; scanId: string; modelId: string; tokenBudget: number | null; costBudgetUsd: number | null; autoApproval: boolean } | null>(null);
   const [actingId, setActingId] = useState('');
   const [actingSuggestionId, setActingSuggestionId] = useState('');
   const [attachSuggestionId, setAttachSuggestionId] = useState('');
@@ -117,10 +117,10 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     return () => { cancelled = true; };
   }, [repository.id, repository.goal, repository.requirementBaseline, repository.baselineVersionId, repository.commitSha]);
 
-  const submit = async (selectedScan: string, selectedModel: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }, disclosure?: PrivateProjectDisclosure) => {
+  const submit = async (selectedScan: string, selectedModel: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }, disclosure?: PrivateProjectDisclosure, autoApproval = false) => {
     setStarting(true);
     try {
-      const job = await startProjectAnalysis(repository.id, selectedScan, selectedModel, budget, disclosure ? { disclosureDigest: disclosure.digest } : undefined);
+      const job = await startProjectAnalysis(repository.id, selectedScan, selectedModel, budget, disclosure ? { disclosureDigest: disclosure.digest } : undefined, autoApproval);
       setItems(current => [job, ...current.filter(item => item.id !== job.id)]);
       setPrivatePreview(null);
       message.success('分析任务已提交');
@@ -139,15 +139,15 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       finally { setAutoSaving(false); }
     };
     if (!enabled) return void save();
-    Modal.confirm({ title: '确认开启持续模型分析？', content: `公开仓库每次收到对应分支的提交后，将在扫描完成时自动向所选模型发送代码摘录、项目目标和需求文档。每次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}；仍受账号每日预算和限流约束，重复提交可能持续产生费用。`, okText: '确认开启', onOk: save });
+    Modal.confirm({ title: repository.private ? '确认开启提交后待审核分析？' : '确认开启持续模型分析？', content: repository.private ? `私有仓库收到对应分支提交后只会自动扫描。每次模型分析仍需查看代码范围并确认，确认后单次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}。` : `公开仓库每次收到对应分支的提交后，将在扫描完成时自动向所选模型发送代码摘录、项目目标和需求文档。每次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}；仍受账号每日预算和限流约束，重复提交可能持续产生费用。`, okText: '确认开启', onOk: save });
   };
-  const start = async (selectedScan = scanId, selectedModel = modelId) => {
+  const start = async (selectedScan = scanId, selectedModel = modelId, budget = { tokenBudget, costBudgetUsd }, autoApproval = false) => {
     if (!selectedScan || !selectedModel) return;
-    if (!repository.private) return submit(selectedScan,selectedModel,{ tokenBudget,costBudgetUsd });
+    if (!repository.private) return submit(selectedScan,selectedModel,budget);
     setStarting(true);
     try {
       const disclosure = await previewPrivateProjectAnalysis(repository.id,selectedScan,selectedModel);
-      setPrivatePreview({ disclosure, scanId: selectedScan, modelId: selectedModel, tokenBudget, costBudgetUsd });
+      setPrivatePreview({ disclosure, scanId: selectedScan, modelId: selectedModel, ...budget, autoApproval });
     } catch (cause) { setError(cause instanceof Error ? cause.message : '私有代码范围预览失败'); }
     finally { setStarting(false); }
   };
@@ -260,7 +260,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const renderSnapshotTask = (task: ProjectAnalysisReport['linkedTasks'][number]) => <Space key={task.id} size="small" wrap><Tag>{taskStates[task.status] || task.status} · {task.progress === null ? '进度未知' : `${Math.round(task.progress)}%`}</Tag>{task.currentlyAvailable ? <Link to={`/tasks/${task.id}`}>{task.title}</Link> : <Typography.Text type="secondary">{task.title}（当前不可访问）</Typography.Text>}</Space>;
 
   return <Card title="项目分析报告">
-    {!repository.private && <Card size="small" title="提交后自动分析" style={{ marginBottom: 16 }}>
+    <Card size="small" title={repository.private ? '提交后待确认分析' : '提交后自动分析'} style={{ marginBottom: 16 }}>
       <Space wrap>
         <Select aria-label="自动分析模型" placeholder="选择模型" value={autoModelId || undefined} onChange={setAutoModelId} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
         <Select aria-label="自动分析 token 上限" value={autoTokenBudget} onChange={setAutoTokenBudget} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 170 }} options={[30000,60000,120000].map(value => ({ value, label: `${value.toLocaleString()} token` }))} />
@@ -268,8 +268,9 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <Switch aria-label="提交后自动模型分析" checked={repository.autoAnalysisEnabled} loading={autoSaving} disabled={!repository.autoAnalysisEnabled && (!repository.webhookScanEnabled || !autoModelId)} onChange={value => void setAutoAnalysis(value)} />
         <Typography.Text>{repository.autoAnalysisEnabled ? '已开启' : '未开启'}</Typography.Text>
       </Space>
-      <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>仅公开仓库可用。先开启“提交后扫描”，再单独确认持续模型调用。已开启时如需更换模型或费用上限，请先关闭后重新配置。</Typography.Paragraph>
-    </Card>}
+      <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>{repository.private ? '先开启“提交后扫描”。每次扫描结束后仍需查看私有代码发送范围，并由你确认本次模型调用。' : '先开启“提交后扫描”，再单独确认持续模型调用。'}已开启时如需更换模型或费用上限，请先关闭后重新配置。</Typography.Paragraph>
+      {repository.private && repository.autoAnalysisEnabled && scans.filter(item => item.autoAnalysisState === 'approval_required').map(item => <div key={item.id} style={{ marginTop: 8 }}><Button loading={starting} onClick={() => void start(item.id, repository.autoAnalysisModelId || '', { tokenBudget: repository.autoAnalysisTokenBudget, costBudgetUsd: repository.autoAnalysisCostBudgetUsd }, true)}>审核 {item.commitSha.slice(0,10)} 的发送范围并分析</Button></div>)}
+    </Card>
     <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
     <Space wrap style={{ marginBottom: 16 }}>
       <Select aria-label="扫描记录" placeholder="选择扫描记录" value={scanId || undefined} onChange={setScanId} style={{ minWidth: 230 }} options={scans.filter(scan => ['completed', 'partial'].includes(scan.status)).map(scan => ({ value: scan.id, label: `${scan.commitSha.slice(0, 10)} · ${scan.status === 'partial' ? '部分覆盖' : '完整覆盖'}${scan.forceFull ? ' · 全量重扫' : ''}` }))} />
@@ -279,12 +280,13 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       <Button type="primary" disabled={!scanId || !modelId || items.some(item => item.scanId === scanId && item.modelId === modelId && ['queued', 'analyzing'].includes(item.status))} loading={starting} onClick={() => void start()}>生成报告</Button>
     </Space>
     <Typography.Paragraph type="secondary">可选上限会固定到分析任务，重试累计计算已用量。提交前按输入字符保守预留 token 和费用；每次继续调用前重新核对，已发出的单次模型调用仍可能产生超出预估的用量。</Typography.Paragraph>
-    <Modal title="确认私有代码分析范围" open={Boolean(privatePreview)} onCancel={() => { if (!starting) setPrivatePreview(null); }} footer={<Space><Button disabled={starting} onClick={() => setPrivatePreview(null)}>取消</Button><Button type="primary" loading={starting} onClick={() => { if (privatePreview) void submit(privatePreview.scanId,privatePreview.modelId,{ tokenBudget:privatePreview.tokenBudget,costBudgetUsd:privatePreview.costBudgetUsd },privatePreview.disclosure); }}>确认发送并生成报告</Button></Space>} width={700}>
+    <Modal title="确认私有代码分析范围" open={Boolean(privatePreview)} onCancel={() => { if (!starting) setPrivatePreview(null); }} footer={<Space><Button disabled={starting} onClick={() => setPrivatePreview(null)}>取消</Button><Button type="primary" loading={starting} onClick={() => { if (privatePreview) void submit(privatePreview.scanId,privatePreview.modelId,{ tokenBudget:privatePreview.tokenBudget,costBudgetUsd:privatePreview.costBudgetUsd },privatePreview.disclosure,privatePreview.autoApproval); }}>确认发送并生成报告</Button></Space>} width={700}>
       {privatePreview && <Space direction="vertical" style={{ width:'100%' }}>
         <Alert type="warning" showIcon message="以下内容将发送给模型提供方" description="本次扫描中选出的代码／文档摘录、项目目标和需求文档会作为模型输入。仓库正文与注释只作为待分析材料，不会执行仓库脚本。" />
         <Typography.Text>提供方：{privatePreview.disclosure.provider} · 模型：{privatePreview.disclosure.model}</Typography.Text>
         <Typography.Text>数据目的地：<code>{privatePreview.disclosure.destination}</code></Typography.Text>
         <Typography.Text>固定 commit：{scans.find(item => item.id === privatePreview.scanId)?.commitSha.slice(0,10)}</Typography.Text>
+        {privatePreview.autoApproval && <Typography.Text>本次上限：{privatePreview.tokenBudget?.toLocaleString()} token、最多 ${privatePreview.costBudgetUsd?.toFixed(2)}</Typography.Text>}
         <Typography.Text>扫描预算：{privatePreview.disclosure.scanFileLimit} 个文件、{Math.round(privatePreview.disclosure.scanByteLimit / 1024 / 1024)} MiB；本次选中 {privatePreview.disclosure.fileCount} 个文件摘录，{privatePreview.disclosure.truncatedCount} 个摘录已截短。</Typography.Text>
         {!privatePreview.disclosure.scanCoverageComplete && <Alert type="warning" showIcon message="本次扫描为部分覆盖，未读文件不会送入模型" />}
         <div style={{ maxHeight:180,overflow:'auto',background:'rgba(127,127,127,0.06)',borderRadius:6,padding:8 }}>{privatePreview.disclosure.paths.map(path => <div key={path}><code>{path}</code></div>)}</div>

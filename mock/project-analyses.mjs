@@ -497,13 +497,16 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   }
   if (method !== 'POST' || analysisId) return fail(405,'不支持该操作');
   const body = await readBody();
+  const autoApproval = body?.autoApproval === true;
+  const source = autoApproval ? 'webhook' : triggerSource;
   if (!UUID.test(body?.scanId || '') || typeof body?.modelId !== 'string' || !body.modelId) return fail(400,'请选择扫描记录和模型');
   const tokenBudget = body.tokenBudget ?? null;
   const costBudgetUsd = body.costBudgetUsd ?? null;
   if (tokenBudget !== null && !TOKEN_BUDGETS.includes(tokenBudget) || costBudgetUsd !== null && !COST_BUDGETS.includes(costBudgetUsd)) return fail(400,'分析预算选项无效');
   const scan = (await client.query("SELECT * FROM project_scans WHERE id=$1 AND repository_id=$2 AND status IN ('completed','partial')", [body.scanId,repositoryId])).rows[0];
   if (!scan) return fail(404,'已完成的扫描记录不存在');
-  if (triggerSource === 'webhook' && (repository.is_private || scan.trigger_source !== 'webhook' || !repository.webhook_scan_enabled || !repository.auto_analysis_enabled || repository.auto_analysis_model_id !== body.modelId || repository.auto_analysis_token_budget !== tokenBudget || Number(repository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) return fail(409,'自动分析设置或扫描来源已变化');
+  if (autoApproval && (!repository.is_private || scan.auto_analysis_state !== 'approval_required')) return fail(409,'本次私有分析不在待审核状态');
+  if (source === 'webhook' && (scan.trigger_source !== 'webhook' || repository.is_private !== autoApproval || !repository.webhook_scan_enabled || !repository.auto_analysis_enabled || repository.auto_analysis_model_id !== body.modelId || repository.auto_analysis_token_budget !== tokenBudget || Number(repository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) return fail(409,'自动分析设置或扫描来源已变化');
   const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1', [body.modelId])).rows[0];
   if (!modelUsable(model,me) || !supportedProvider.has(model.provider) || !model.capabilities?.output?.includes('text')) return fail(409,'模型不可用或没有访问权限');
   if (!await connectionAvailable(client,model)) return fail(409,'模型连接尚未配置');
@@ -539,14 +542,21 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     await connection.query('SELECT pg_advisory_xact_lock(748204)');
     const currentRepository = (await connection.query('SELECT goal,requirement_baseline,baseline_version_id,commit_sha,webhook_scan_enabled,auto_analysis_enabled,auto_analysis_model_id,auto_analysis_token_budget,auto_analysis_cost_budget_usd FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR SHARE',[repositoryId,me.id])).rows[0];
     if (!currentRepository || currentRepository.goal !== repository.goal || currentRepository.requirement_baseline !== repository.requirement_baseline || currentRepository.baseline_version_id !== repository.baseline_version_id || currentRepository.commit_sha.trim() !== repository.commit_sha.trim()) { await connection.query('ROLLBACK'); return fail(409,'项目目标、需求版本或 commit 已变化，请重新提交分析'); }
-    if (triggerSource === 'webhook' && (!currentRepository.webhook_scan_enabled || !currentRepository.auto_analysis_enabled || currentRepository.auto_analysis_model_id !== model.id || currentRepository.auto_analysis_token_budget !== tokenBudget || Number(currentRepository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) { await connection.query('ROLLBACK'); return fail(409,'自动分析设置已变化'); }
+    if (source === 'webhook' && (!currentRepository.webhook_scan_enabled || !currentRepository.auto_analysis_enabled || currentRepository.auto_analysis_model_id !== model.id || currentRepository.auto_analysis_token_budget !== tokenBudget || Number(currentRepository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) { await connection.query('ROLLBACK'); return fail(409,'自动分析设置已变化'); }
+    if (autoApproval && !(await connection.query("SELECT 1 FROM project_scans WHERE id=$1 AND auto_analysis_state='approval_required' FOR UPDATE",[scan.id])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'本次私有分析已处理，请刷新'); }
     if (repository.is_private && !(await connection.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 FOR SHARE',[me.id])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'GitHub 授权已断开，请重新连接'); }
     if (modelConnection && !(await connection.query('SELECT 1 FROM model_connections WHERE id=$1 AND version=$2 AND active=true',[modelConnection.id,modelConnection.version])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'模型连接配置已变化，请重新提交分析'); }
     const active = (await connection.query("SELECT * FROM project_analyses WHERE scan_id=$1 AND model_id=$2 AND status IN ('queued','analyzing') LIMIT 1", [scan.id,model.id])).rows[0];
-    if (active) { await connection.query('COMMIT'); return { status: 202, data: view(active) }; }
-    if (triggerSource === 'webhook') {
+    if (active) {
+      if (autoApproval) await connection.query("UPDATE project_scans SET auto_analysis_state='queued',auto_analysis_id=$2,auto_analysis_error=NULL WHERE id=$1",[scan.id,active.id]);
+      await connection.query('COMMIT'); return { status: 202, data: view(active) };
+    }
+    if (source === 'webhook') {
       const existing = (await connection.query("SELECT * FROM project_analyses WHERE scan_id=$1 AND trigger_source='webhook' LIMIT 1",[scan.id])).rows[0];
-      if (existing) { await connection.query('COMMIT'); return { status: 202, data: view(existing) }; }
+      if (existing) {
+        if (autoApproval) await connection.query("UPDATE project_scans SET auto_analysis_state='queued',auto_analysis_id=$2,auto_analysis_error=NULL WHERE id=$1",[scan.id,existing.id]);
+        await connection.query('COMMIT'); return { status: 202, data: view(existing) };
+      }
     }
     if (budget.calls) {
       const settings = (await connection.query('SELECT daily_budget_usd,concurrency_limit FROM experiment_settings WHERE id=1')).rows[0];
@@ -560,7 +570,8 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     if (quota && quota.status !== 200) { await connection.query('ROLLBACK'); return quota; }
     const rate = budget.calls ? await checkModelRate(connection,[{ modelId: model.id, calls: budget.calls, tokens: budget.reservedTokens }]) : null;
     if (rate && rate.status !== 200) { await connection.query('ROLLBACK'); await recordModelRateRejection(connection,rate,'projects',me.id); return rate; }
-    created = (await connection.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,baseline_version_id,model_id,provider,api_model,connection_id,connection_version,input_price,output_price,estimated_max_cost_usd,analysis_plan_version,token_budget,cost_budget_usd,reused_call_count,private_disclosure,trigger_source,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$23,$19,$20,$21,$22::jsonb,$24,'queued') RETURNING *", [id,repositoryId,scan.id,me.id,scan.full_name,scan.branch,scan.commit_sha,repository.goal,repository.requirement_baseline,repository.baseline_version_id,model.id,model.provider,model.api_model,modelConnection?.id || null,modelConnection?.version || null,model.input_usd_per_million,model.output_usd_per_million,estimatedCost,tokenBudget,costBudgetUsd,reusable.size,disclosure ? JSON.stringify({ ...disclosure, confirmedAt: new Date().toISOString() }) : null,CURRENT_ANALYSIS_PLAN_VERSION,triggerSource])).rows[0];
+    created = (await connection.query("INSERT INTO project_analyses(id,repository_id,scan_id,owner_id,full_name,branch,commit_sha,goal,requirement_baseline,baseline_version_id,model_id,provider,api_model,connection_id,connection_version,input_price,output_price,estimated_max_cost_usd,analysis_plan_version,token_budget,cost_budget_usd,reused_call_count,private_disclosure,trigger_source,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$23,$19,$20,$21,$22::jsonb,$24,'queued') RETURNING *", [id,repositoryId,scan.id,me.id,scan.full_name,scan.branch,scan.commit_sha,repository.goal,repository.requirement_baseline,repository.baseline_version_id,model.id,model.provider,model.api_model,modelConnection?.id || null,modelConnection?.version || null,model.input_usd_per_million,model.output_usd_per_million,estimatedCost,tokenBudget,costBudgetUsd,reusable.size,disclosure ? JSON.stringify({ ...disclosure, confirmedAt: new Date().toISOString() }) : null,CURRENT_ANALYSIS_PLAN_VERSION,source])).rows[0];
+    if (autoApproval) await connection.query("UPDATE project_scans SET auto_analysis_state='queued',auto_analysis_id=$2,auto_analysis_error=NULL WHERE id=$1",[scan.id,id]);
     await connection.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,1,$2,'queued')", [id,estimatedCost]);
     for (const [moduleKey,cache] of reusable) await connection.query("INSERT INTO project_analysis_module_calls(analysis_id,attempt,module_key,status,response_output,prompt_tokens,completion_tokens,cost_usd,input_fingerprint,reused,reused_source_analysis_id,reused_source_commit_sha,completed_at) VALUES($1,1,$2,'completed',$3,0,0,0,$4,true,$5,$6,now())",[id,moduleKey,cache.output,cache.fingerprint,cache.sourceAnalysisId,cache.sourceCommitSha]);
     if (budget.calls) {
