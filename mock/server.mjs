@@ -2349,7 +2349,7 @@ const server = http.createServer((req, res) => {
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
       const url = new URL(req.url, 'http://localhost');
       const pathname = url.pathname;
-      const projectId = pathname.match(/^\/api\/project-repositories\/([0-9a-f-]{36})(?:\/|$)/i)?.[1];
+      const projectId = pathname.match(/^\/api\/project-repositories\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i)?.[1];
       if (projectId) {
         const privateRepository = (await pool.query('SELECT full_name FROM project_repositories WHERE id=$1 AND owner_id=$2 AND is_private=true', [projectId,me.id])).rows[0];
         const authCleanup = req.method === 'POST' && /^\/api\/project-repositories\/[0-9a-f-]{36}\/analyses\/[0-9a-f-]{36}\/cancel$/i.test(pathname)

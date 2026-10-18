@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { appendSecurityAudit } from './account-audit.mjs';
-import { assertGithubPrivateRepoAccess, GithubAuthorizationError } from './project-github-auth.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -31,12 +30,8 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
   const [,repositoryId,analysisId,action] = match;
   if (method !== (action ? 'POST' : 'GET')) return fail(405,'不支持该操作');
   if (!UUID.test(repositoryId) || !UUID.test(analysisId)) return fail(404,'学习路线不存在');
-  const repository = (await client.query('SELECT id,owner_id,goal,baseline_version_id,commit_sha,is_private,full_name FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
+  const repository = (await client.query('SELECT id,owner_id,goal,baseline_version_id,commit_sha FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
-  if (repository.is_private) {
-    try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name); }
-    catch (error) { return fail(error instanceof GithubAuthorizationError ? 403 : 502,error instanceof GithubAuthorizationError ? error.message : '暂时无法核验私有仓库授权'); }
-  }
   const analysis = (await client.query("SELECT id,repository_id,commit_sha,branch,goal,baseline_version_id,finished_at,analysis_coverage_complete,selected_file_count,available_file_count FROM project_analyses WHERE id=$1 AND repository_id=$2 AND owner_id=$3 AND status='completed'",[analysisId,repositoryId,me.id])).rows[0];
   if (!analysis) return fail(404,'已完成报告不存在');
   if (action === 'evidence') {
