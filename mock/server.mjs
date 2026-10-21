@@ -25,6 +25,7 @@ import { quickActionCounts, quickPreview } from "./quick-actions.mjs";
 import { computeOverdueTasks } from "./overdue.mjs";
 import crypto from "node:crypto";
 import { parseLoginIpAllowlist, requestLoginIp } from './login-network.mjs';
+import { checkApiAccountRateLimit, checkApiIpRateLimit } from './api-rate-limit.mjs';
 import { differentLoginRegion, loginLocation } from './login-geolocation.mjs';
 import { recordAccountAction } from './account-audit.mjs';
 import { handleAccountAudit } from './account-audit-api.mjs';
@@ -615,8 +616,7 @@ async function handleRequest(req, res) {
     try { connected = await completeProjectGithubAuthorization(activeClient, url.searchParams, browserNonce); }
     catch { console.error('[project-github] authorization callback failed'); }
     const secureCookie = process.env.GITHUB_APP_CALLBACK_URL?.startsWith('https:') ? '; Secure' : '';
-    res.writeHead(302, { Location: `/project-analysis?github=${connected ? 'connected' : 'failed'}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Set-Cookie': `project_github_oauth_nonce=; Max-Age=0; HttpOnly; SameSite=Lax; Path=/api/project-github/callback${secureCookie}` });
-    res.end();
+    res.__redirect = { status: 302, headers: { Location: `/project-analysis?github=${connected ? 'connected' : 'failed'}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Set-Cookie': `project_github_oauth_nonce=; Max-Age=0; HttpOnly; SameSite=Lax; Path=/api/project-github/callback${secureCookie}` } };
     return;
   }
 
@@ -2238,7 +2238,7 @@ async function withData(work) {
   });
 }
 
-const server = http.createServer((req, res) => {
+function routeHttpRequest(req, res, pathname, method) {
   if (new URL(req.url, 'http://localhost').pathname === '/api/client-errors') {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
@@ -2382,12 +2382,12 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  if (pathname.startsWith('/api/project-github')) {
+  if (pathname.startsWith('/api/project-github') && pathname !== '/api/project-github/callback') {
     void (async () => {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
-      const response = await handleProjectGithubAuth({ pathname, method, client: activeClient, me, req });
+      const response = await handleProjectGithubAuth({ pathname, method, client: pool, me, req });
       if (response?.browserNonce) res.setHeader('Set-Cookie', `project_github_oauth_nonce=${response.browserNonce}; Max-Age=600; HttpOnly; SameSite=Lax; Path=/api/project-github/callback${response.secureCookie ? '; Secure' : ''}`);
       sendImmediate(res, response?.status || 404, response?.data || { error: 'GitHub 授权接口不存在' });
     })().catch(() => {
@@ -2439,6 +2439,11 @@ const server = http.createServer((req, res) => {
     if (res.__accountBefore) res.__accountAfter = db.users.find(user => user.id === res.__accountBefore.id);
     await recordAccountAction(activeClient, req, res);
   }).then(({ changed }) => {
+    if (res.__redirect) {
+      res.writeHead(res.__redirect.status, res.__redirect.headers);
+      res.end();
+      return;
+    }
     const pending = res.__pending || { status: 500, payload: { error: "接口没有返回结果" } };
     send(res, pending.status, pending.payload);
     if (changed || (req.method === 'POST' && new URL(req.url, 'http://localhost').pathname === '/api/auth/login' && pending.status === 200)) notifyLive();
@@ -2447,6 +2452,29 @@ const server = http.createServer((req, res) => {
   }).catch(error => {
     console.error("[api] request failed:", error);
     send(res, 500, { error: "数据库操作失败" });
+  });
+}
+
+const server = http.createServer((req, res) => {
+  const pathname = new URL(req.url, 'http://localhost').pathname;
+  const method = req.method || 'GET';
+  const ipLimit = checkApiIpRateLimit(req, pathname, method);
+  if (ipLimit) return sendImmediate(res, 429, ipLimit);
+  if (method === 'OPTIONS' || !(pathname === '/api' || pathname.startsWith('/api/'))) {
+    return routeHttpRequest(req, res, pathname, method);
+  }
+
+  // Resolve a valid bearer token to the account ID before dispatching any of
+  // the independent API routes. Invalid and absent tokens remain IP-limited;
+  // the route still performs its usual authorization check.
+  const bearer = String(req.headers.authorization || '').match(/^Bearer ([a-f0-9]{64})$/i)?.[1];
+  if (!bearer) return routeHttpRequest(req, res, pathname, method);
+  void lookupSession(bearer, pool, true, true).then(account => {
+    const accountLimit = checkApiAccountRateLimit(account?.id);
+    if (accountLimit) return sendImmediate(res, 429, accountLimit);
+    routeHttpRequest(req, res, pathname, method);
+  }).catch(() => {
+    if (!res.headersSent) sendImmediate(res, 503, { error: '暂时无法核验登录状态，请稍后重试' });
   });
 });
 for (const signal of ['SIGTERM','SIGINT']) process.on(signal, () => { void flushModelCallAudits().finally(() => pool.end().finally(() => process.exit(0))); });
@@ -2459,18 +2487,28 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
+  const ipLimit = checkApiIpRateLimit(req, '/api/live');
+  if (ipLimit) {
+    const body = JSON.stringify(ipLimit);
+    socket.end(`HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nRetry-After: ${ipLimit.retryAfterSeconds}\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+    return;
+  }
   liveServer.handleUpgrade(req, socket, head, (ws) => liveServer.emit("connection", ws));
 });
 liveServer.on("connection", (ws) => {
   const authTimeout = setTimeout(() => ws.close(1008, "authentication required"), 5000);
+  let authenticationPending = false;
   ws.on("message", async (raw) => {
-    if (liveClients.has(ws)) return;
+    if (liveClients.has(ws) || authenticationPending) return;
+    authenticationPending = true;
     let message;
     try { message = JSON.parse(String(raw)); } catch { ws.close(1008, "invalid authentication"); return; }
     let user = null;
     try { user = message?.type === "auth" ? await lookupSession(message.token) : null; }
     catch { ws.close(1011, "database unavailable"); return; }
     if (!user) { ws.close(1008, "invalid authentication"); return; }
+    if (checkApiAccountRateLimit(user.id)) { ws.close(1013, 'request rate limited'); return; }
+    if (ws.readyState !== WebSocket.OPEN) return;
     clearTimeout(authTimeout);
     liveClients.set(ws, message.token);
     ws.send(JSON.stringify({ type: "ready" }));
