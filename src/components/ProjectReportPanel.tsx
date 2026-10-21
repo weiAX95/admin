@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography } from 'antd';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tree, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
 import { listTasks } from '../api/tasks';
-import { addProjectFindingFeedback, adjustProjectSuggestion, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, previewPrivateProjectAnalysis, previewProjectSuggestionTask, retryProjectAnalysis, startProjectAnalysis, updateProjectAutoAnalysis, type PrivateProjectDisclosure, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan, type ProjectSuggestionTaskPreview } from '../api/projectRepositories';
+import { addProjectFindingFeedback, adjustProjectSuggestion, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, listProjectModuleFiles, previewPrivateProjectAnalysis, previewProjectSuggestionTask, retryProjectAnalysis, startProjectAnalysis, updateProjectAutoAnalysis, type PrivateProjectDisclosure, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectModuleFile, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan, type ProjectSuggestionTaskPreview } from '../api/projectRepositories';
 import ProjectReportComparison from './ProjectReportComparison';
 import ProjectLearningRoadmap from './ProjectLearningRoadmap';
 import { getStoredUser } from '../api/client';
@@ -16,6 +16,34 @@ const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'],
 const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' };
 const taskStates: Record<string, string> = { todo: '待办', in_progress: '进行中', done: '已完成', blocked: '阻塞' };
 const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用', ANALYSIS_BUDGET_EXCEEDED: '本次分析预算已不足以发起剩余模型调用', MODEL_CONNECTION_CHANGED: '模型连接配置已变化，请新建分析', PRIVATE_CONSENT_REQUIRED: '缺少私有代码发送授权', GITHUB_AUTH_REQUIRED: 'GitHub 私有仓库授权已失效', GITHUB_ACCESS_CHECK_FAILED: '暂时无法核验 GitHub 私有仓库权限', MODEL_DESTINATION_CHANGED: '模型目的地已变化，请重新预览并创建分析' };
+const moduleFileStatuses: Record<ProjectModuleFile['status'], { label: string; color: string }> = { read: { label: '已读取', color: 'success' }, excluded: { label: '已排除', color: 'default' }, failed: { label: '读取失败', color: 'error' }, unscanned: { label: '未扫描', color: 'warning' } };
+const moduleFileReasons: Record<string, string> = { dependency_or_build: '依赖或构建产物', sensitive_path: '敏感路径', sensitive_content: '疑似密钥内容', non_regular_file: '非普通文件', binary_type: '二进制类型', file_size: '超出单文件限制', scan_budget: '旧记录：扫描预算用尽', file_budget: '文件数预算用尽', byte_budget: '读取字节预算不足', github_rate_limit: 'GitHub 限流', blob_unavailable_or_invalid: '内容不可读取或格式无效' };
+const moduleFileCategories: Record<string, string> = { source: '源码', test: '测试', documentation: '文档', config: '配置' };
+type ModuleTreeNode = { key: string; title: ReactNode; children?: ModuleTreeNode[] };
+type ModuleFilePage = { items: ProjectModuleFile[]; nextCursor: string | null; loading: boolean; loaded: boolean; error: string };
+
+function moduleTree(files: ProjectModuleFile[], moduleKey: string, sourceLink: (path: string, line: number) => string): ModuleTreeNode[] {
+  const roots: ModuleTreeNode[] = [];
+  const directories = new Map<string, ModuleTreeNode>();
+  for (const file of files) {
+    const relative = moduleKey !== '(root)' && file.path.startsWith(`${moduleKey}/`) ? file.path.slice(moduleKey.length + 1) : file.path;
+    const parts = relative.split('/');
+    let parent = roots, prefix = moduleKey;
+    for (const part of parts.slice(0,-1)) {
+      prefix = `${prefix}/${part}`;
+      let directory = directories.get(prefix);
+      if (!directory) {
+        directory = { key: `directory:${prefix}`, title: <Typography.Text type="secondary">{part}/</Typography.Text>, children: [] };
+        directories.set(prefix,directory);
+        parent.push(directory);
+      }
+      parent = directory.children!;
+    }
+    const status = moduleFileStatuses[file.status];
+    parent.push({ key: `file:${file.path}`, title: <Space size={6} wrap><a href={sourceLink(file.path,1)} target="_blank" rel="noopener noreferrer">{parts.at(-1)}</a><Tag color={status.color}>{status.label}</Tag><Typography.Text type="secondary">{moduleFileCategories[file.category] || file.category}{file.reason ? ` · ${moduleFileReasons[file.reason] || file.reason}` : ''}</Typography.Text></Space> });
+  }
+  return roots;
+}
 
 export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted, onRepositoryChanged }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void; onRepositoryChanged: () => void }) {
   const canEditTasks = isAdministrator(getStoredUser<AuthUser>());
@@ -31,6 +59,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [autoCostBudgetUsd, setAutoCostBudgetUsd] = useState(repository.autoAnalysisCostBudgetUsd || 0.1);
   const [autoSaving, setAutoSaving] = useState(false);
   const [report, setReport] = useState<ProjectAnalysisReport | null>(null);
+  const [moduleFiles, setModuleFiles] = useState<Record<string, ModuleFilePage>>({});
+  const loadingModuleFiles = useRef(new Set<string>());
   const [scopeJob, setScopeJob] = useState<ProjectAnalysisReport | null>(null);
   const [scopeLoadingId, setScopeLoadingId] = useState('');
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -198,6 +228,30 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     finally { setActingId(''); }
   };
   const sourceLink = (path: string, line: number) => `https://github.com/${report?.fullName}/blob/${report?.commitSha}/${path.split('/').map(encodeURIComponent).join('/')}#L${line}`;
+  const loadModuleFiles = async (moduleKey: string, after?: string) => {
+    if (!report) return;
+    const key = `${report.id}:${moduleKey}`;
+    if (loadingModuleFiles.current.has(key) || !after && moduleFiles[key]?.loaded) return;
+    loadingModuleFiles.current.add(key);
+    setModuleFiles(previous => ({ ...previous, [key]: { items: after ? previous[key]?.items || [] : [], nextCursor: previous[key]?.nextCursor || null, loading: true, loaded: false, error: '' } }));
+    try {
+      const page = await listProjectModuleFiles(repository.id,report.id,moduleKey,after);
+      setModuleFiles(previous => ({ ...previous, [key]: { items: after ? [...(previous[key]?.items || []),...page.items] : page.items, nextCursor: page.nextCursor, loading: false, loaded: true, error: '' } }));
+    } catch (cause) {
+      setModuleFiles(previous => ({ ...previous, [key]: { ...(previous[key] || { items: [], nextCursor: null }), loading: false, loaded: Boolean(previous[key]?.items.length), error: cause instanceof Error ? cause.message : '模块文件读取失败' } }));
+    } finally { loadingModuleFiles.current.delete(key); }
+  };
+  const renderModuleFiles = (module: ProjectAnalysisReport['modules'][number]) => {
+    if (!report) return null;
+    const page = moduleFiles[`${report.id}:${module.moduleKey}`];
+    return <div style={{ padding: '4px 8px' }}>
+      <Typography.Paragraph type="secondary">以下路径来自本报告固定扫描的 commit；「已读取」不代表进入模型或运行验证。已展示 {page?.items.length || 0}/{module.indexedCount} 个已索引路径。索引外文件与未展开目录不在此树中。</Typography.Paragraph>
+      {page?.error && <Alert type="error" showIcon message={page.error} action={<Button size="small" onClick={() => void loadModuleFiles(module.moduleKey,page.items.length ? page.nextCursor || undefined : undefined)}>重试</Button>} style={{ marginBottom: 8 }} />}
+      {page?.items.length ? <Tree key={`${report.id}:${module.moduleKey}:${page.items.length}`} defaultExpandAll selectable={false} treeData={moduleTree(page.items,module.moduleKey,sourceLink)} /> : !page || page.loading ? <Typography.Text type="secondary">正在读取模块文件…</Typography.Text> : page.error ? null : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="该模块暂无已索引路径" />}
+      {page?.nextCursor && <Button size="small" loading={page.loading} onClick={() => void loadModuleFiles(module.moduleKey,page.nextCursor || undefined)}>加载更多路径</Button>}
+      {!page?.nextCursor && page?.loaded && page.items.length < module.indexedCount && <Typography.Text type="warning">报告记录的索引数量与当前扫描不一致，不能视为完整文件结构。</Typography.Text>}
+    </div>;
+  };
   const decide = async (suggestionId: string, action: 'accept' | 'ignore') => {
     if (!report) return;
     setActingSuggestionId(suggestionId);
@@ -383,7 +437,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       <Typography.Paragraph type="secondary">以下内容来自该 commit 的依赖清单，不代表运行环境已通过验证。</Typography.Paragraph>
       {report.technologies.length ? <Space wrap style={{ marginBottom: 16 }}>{report.technologies.map(item => <Tag key={item.name}><a href={sourceLink(item.evidence.path,item.evidence.line)} target="_blank" rel="noopener noreferrer">{item.name}</a> <Typography.Text type="secondary">({item.packageName})</Typography.Text></Tag>)}</Space> : <Typography.Paragraph type="secondary">扫描范围内未发现可确认的依赖清单线索</Typography.Paragraph>}
       <Typography.Title level={5}>模块覆盖</Typography.Title>
-      {report.modules.length ? <Table rowKey="moduleKey" size="small" pagination={false} dataSource={report.modules} scroll={{ x: 650 }} columns={[
+      {report.modules.length ? <Table rowKey="moduleKey" size="small" pagination={false} dataSource={report.modules} scroll={{ x: 650 }} expandable={{ expandedRowRender: renderModuleFiles, onExpand: (expanded,module) => { if (expanded) void loadModuleFiles(module.moduleKey); } }} columns={[
         { title: '模块', dataIndex: 'moduleKey' },
         { title: '已索引', dataIndex: 'indexedCount' },
         { title: '已读取', dataIndex: 'readCount' },

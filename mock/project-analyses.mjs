@@ -348,6 +348,29 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     };
     return { status: 200, data: compareProjectReports(report(olderId),report(newerId)) };
   }
+  const moduleFilesRoute = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/([^/]+)\/module-files$/);
+  if (moduleFilesRoute && method === 'GET') {
+    const [, repositoryId, analysisId] = moduleFilesRoute;
+    if (!UUID.test(repositoryId) || !UUID.test(analysisId)) return fail(404,'项目或分析不存在');
+    const job = (await client.query(`SELECT a.id,a.scan_id,r.owner_id FROM project_analyses a
+      JOIN project_repositories r ON r.id=a.repository_id
+      WHERE a.id=$1 AND a.repository_id=$2 AND r.owner_id=$3`,[analysisId,repositoryId,me.id])).rows[0];
+    if (!job) return fail(404,'分析不存在');
+    if (!canAccess(me,'project_analyses','read',{ownerId:job.owner_id})) return fail(403,'无权访问项目分析');
+    const moduleKey = url?.searchParams.get('moduleKey') || '';
+    const after = url?.searchParams.get('after') || '';
+    if (!moduleKey || moduleKey.length > 500 || after.length > 2000) return fail(400,'模块或分页游标无效');
+    if (!(await client.query('SELECT 1 FROM project_analysis_modules WHERE analysis_id=$1 AND module_key=$2',[analysisId,moduleKey])).rowCount) return fail(404,'报告中不存在此模块');
+    const rows = (await client.query(`SELECT path,git_sha,category,status,reason FROM project_scan_files
+      WHERE scan_id=$1 AND path>$2 AND
+        (CASE WHEN strpos(path,'/')=0 THEN '(root)'
+          WHEN split_part(path,'/',1) IN ('src','app','lib','packages','apps','services') AND split_part(path,'/',3)<>''
+            THEN split_part(path,'/',1)||'/'||split_part(path,'/',2)
+          ELSE split_part(path,'/',1) END)=$3
+      ORDER BY path LIMIT 51`,[job.scan_id,after,moduleKey])).rows;
+    const items = rows.slice(0,50).map(row => ({ path:row.path, gitSha:row.git_sha.trim(), category:row.category, status:row.status, reason:row.reason }));
+    return { status:200, data:{ items, nextCursor:rows.length>50 ? items.at(-1).path : null } };
+  }
   const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses(?:\/([^/]+)(?:\/(cancel|retry))?)?$/);
   if (!match) return null;
   const [, repositoryId, analysisId, action] = match;
