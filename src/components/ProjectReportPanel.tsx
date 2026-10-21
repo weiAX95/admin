@@ -9,10 +9,11 @@ import ProjectLearningRoadmap from './ProjectLearningRoadmap';
 import { getStoredUser } from '../api/client';
 import { isAdministrator } from '../utils/roles';
 import { orderProjectSuggestions } from '../utils/projectSuggestionOrder';
+import { projectFindingBasis, projectSourceLabel } from '../utils/projectEvidence';
 import type { AuthUser } from '../types';
 
 const states: Record<ProjectAnalysisJob['status'], string> = { queued: '排队中', analyzing: '分析中', completed: '已完成', failed: '失败', canceled: '已取消' };
-const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
+const findingStates: Record<ProjectAnalysisReport['findings'][number]['status'], string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '模型未发现实现线索', unverified: '待验证' };
 const impactLabels = { high: '高影响', medium: '中影响', low: '低影响' };
 const taskStates: Record<string, string> = { todo: '待办', in_progress: '进行中', done: '已完成', blocked: '阻塞' };
 const errors: Record<string, string> = { INVALID_REPORT: '模型输出或证据未通过校验', NO_EVIDENCE: '没有可分析的文本', SCAN_MISSING: '原始扫描已删除', INVALID_USAGE: '模型用量无效', MODEL_LIMIT: '模型限流或配额不足', MODEL_TIMEOUT: '模型调用超时', MODEL_FAILED: '模型调用失败', CALL_OUTCOME_UNKNOWN: '上次模型调用结果未知，已停止自动重试；再次执行可能产生费用', SENSITIVE_INPUT: '分析输入包含凭据，已停止模型调用', ANALYSIS_BUDGET_EXCEEDED: '本次分析预算已不足以发起剩余模型调用', MODEL_CONNECTION_CHANGED: '模型连接配置已变化，请新建分析', PRIVATE_CONSENT_REQUIRED: '缺少私有代码发送授权', GITHUB_AUTH_REQUIRED: 'GitHub 私有仓库授权已失效', GITHUB_ACCESS_CHECK_FAILED: '暂时无法核验 GitHub 私有仓库权限', MODEL_DESTINATION_CHANGED: '模型目的地已变化，请重新预览并创建分析' };
@@ -418,7 +419,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       {report.staleReasons.length > 0 && <Alert type="warning" showIcon message="报告基线已变化，旧建议需重审" description={<Space direction="vertical"><span>{report.staleReasons.join('；')}</span>{reviewScan && reviewModelAvailable ? <Popconfirm title="按当前基线重新分析？" description="会重新调用模型，可能产生费用；旧报告和人工处理记录仍保留。" onConfirm={() => void start(reviewScan.id, report.modelId)}><Button size="small" loading={starting}>重新分析当前扫描</Button></Popconfirm> : <span>{reviewScan ? '原模型当前不可用，请选择其他模型生成报告。' : '请先扫描当前 commit，再生成新报告。'}</span>}</Space>} style={{ marginBottom: 12 }} />}
       {!report.analysisCoverageComplete && <Alert type="warning" showIcon message="本次报告只覆盖部分内容；未发现实现不代表整个仓库没有实现" description={`可读文件中有 ${Math.max(0,report.availableFileCount - report.selectedFileCount)} 个未进入模型，另有 ${report.modules.reduce((sum,module) => sum + module.truncatedCount,0)} 个输入文件被截断；扫描阶段还有文件数预算未读 ${report.scanScope.gaps.fileBudget}、字节预算未读 ${report.scanScope.gaps.byteBudget}、旧版未区分预算未读 ${report.scanScope.gaps.legacyBudget}、读取失败 ${report.scanScope.gaps.failed}、索引外或无效目录项 ${report.scanScope.gaps.unindexed}、未展开目录 ${report.scanScope.gaps.unscannedSubtrees}。`} style={{ marginBottom: 12 }} />}
       <Alert type={report.scanScope.comparisonComplete ? 'info' : 'warning'} showIcon message={report.scanScope.baselineCommitSha ? `扫描基线 ${report.scanScope.baselineCommitSha.slice(0, 10)} → ${report.commitSha.slice(0, 10)}` : `首次扫描 ${report.commitSha.slice(0, 10)}`} description={<Space direction="vertical"><span>范围：{report.selectedFileCount}/{report.availableFileCount} 个可读文件进入分析；{report.scanScope.forceFull ? '全量重扫，未跨报告复用分析输出' : `复用 ${report.reusedCallCount} 次目录模块输出`}。</span>{report.scanScope.baselineCommitSha && <span>已索引文件差异：新增 {report.scanScope.changes.added || 0}、修改 {report.scanScope.changes.modified || 0}、删除 {report.scanScope.changes.deleted || 0}、重命名 {report.scanScope.changes.renamed || 0}。{!report.scanScope.comparisonComplete && '至少一侧扫描为部分覆盖，差异不代表完整仓库。'}</span>}</Space>} style={{ marginBottom: 12 }} />
-      {report.reusedCalls.length > 0 && <Alert type="info" showIcon message={`复用 ${report.reusedCalls.length} 次已验证的模块输出`} description={<Space wrap>{report.reusedCalls.map(item => <Tag key={item.moduleKey}>{item.moduleKey.startsWith('@cross-module') ? '跨模块综合' : item.moduleKey} · 来源 commit {item.sourceCommitSha?.slice(0, 10) || '未知'}</Tag>)}</Space>} style={{ marginBottom: 12 }} />}
+      {report.reusedCalls.length > 0 && <Alert type="info" showIcon message={`复用 ${report.reusedCalls.length} 次已校验证据的模块输出`} description={<Space wrap>{report.reusedCalls.map(item => <Tag key={item.moduleKey}>{item.moduleKey.startsWith('@cross-module') ? '跨模块综合' : item.moduleKey} · 来源 commit {item.sourceCommitSha?.slice(0, 10) || '未知'}</Tag>)}</Space>} style={{ marginBottom: 12 }} />}
       <Typography.Paragraph><strong>项目目标：</strong>{report.goal}</Typography.Paragraph>
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
       {report.baselineVersionId && <Button size="small" loading={requirementLoading} onClick={() => void showRequirement()}>查看本报告固定的需求正文</Button>}
@@ -451,7 +452,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       {report.flows.length ? report.flows.map(flow => <Card key={flow.id} size="small" title={<Space>{flow.title}<Tag color={flow.moduleKey ? undefined : 'purple'}>{flow.moduleKey || '跨模块线索'}</Tag></Space>} style={{ marginBottom: 8 }}>
         <ol style={{ margin: 0, paddingLeft: 20 }}>{flow.steps.map((step,index) => <li key={`${flow.id}-${index}`} style={{ marginBottom: 10 }}>
           <Typography.Text>{step.description}</Typography.Text><br />
-          <Typography.Text type="secondary">{step.evidence.type === 'test' ? '测试证据' : '代码证据'}：</Typography.Text>
+          <Typography.Text type="secondary">{projectSourceLabel(step.evidence.type)}：</Typography.Text>
           <a href={sourceLink(step.evidence.path,step.evidence.line)} target="_blank" rel="noopener noreferrer">{step.evidence.path}:{step.evidence.line}</a><br />
           <code style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{step.evidence.excerpt}</code>
         </li>)}</ol>
@@ -459,8 +460,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       <Typography.Title level={5}>进度判断与证据</Typography.Title>
       {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}{finding.requirementId && <Tag color="purple">{finding.requirementId}</Tag>}{finding.moduleKey && <Tag>{finding.moduleKey}</Tag>}<Tag>{findingStates[finding.status]}</Tag></Space>}>
         <Typography.Paragraph>{finding.detail}</Typography.Paragraph>
-        {finding.evidence && <Typography.Paragraph type="secondary">{finding.evidence.type === 'test' ? '测试证据' : finding.evidence.type === 'document' ? '文档线索' : '代码证据'}：<a href={sourceLink(finding.evidence.path, finding.evidence.line)} target="_blank" rel="noopener noreferrer">{finding.evidence.path}:{finding.evidence.line}</a><br /><code>{finding.evidence.excerpt}</code></Typography.Paragraph>}
-        {finding.feedback.map(entry => <Typography.Paragraph key={entry.id} type="secondary"><Tag color="blue">人工判断：{findingStates[entry.correctedStatus]}</Tag>{entry.reason} · {entry.author} · {new Date(entry.createdAt).toLocaleString('zh-CN')}</Typography.Paragraph>)}
+        <Typography.Paragraph type="secondary">{projectFindingBasis(finding)}{finding.evidence && <>：<a href={sourceLink(finding.evidence.path, finding.evidence.line)} target="_blank" rel="noopener noreferrer">{finding.evidence.path}:{finding.evidence.line}</a><br /><code>{finding.evidence.excerpt}</code></>}</Typography.Paragraph>
+        {finding.feedback.map(entry => <Typography.Paragraph key={entry.id} type="secondary"><Tag color="blue">人工校正：{findingStates[entry.correctedStatus]}</Tag>{entry.reason} · {entry.author} · {new Date(entry.createdAt).toLocaleString('zh-CN')} · 不改写模型原结论或文件证据</Typography.Paragraph>)}
         <Button size="small" onClick={() => { setFeedbackFindingId(finding.id); setFeedbackStatus(finding.feedback[0]?.correctedStatus || finding.status); setFeedbackReason(''); }}>修正判断</Button>
       </Card>) : <Empty description="暂无结论" />}
       <Typography.Title level={5}>学习建议</Typography.Title>

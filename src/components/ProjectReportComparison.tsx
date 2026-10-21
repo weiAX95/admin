@@ -1,15 +1,16 @@
 import { Alert, Button, Card, Empty, Space, Table, Tag, Typography } from 'antd';
 import type { ProjectReportComparison as Comparison } from '../api/projectRepositories';
+import { projectFindingBasis } from '../utils/projectEvidence';
 
-const statusLabels: Record<string, string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '扫描范围内未发现', unverified: '待验证' };
+const statusLabels: Record<string, string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '模型未发现实现线索', unverified: '待验证' };
 const kindLabels: Record<Comparison['changes'][number]['kind'], string> = {
   completion_signal: '新增完成线索', possible_regression: '可能退化', new_gap: '新发现缺口', improved_gap: '缺口改善线索', changed: '判断变化',
 };
 
 export default function ProjectReportComparison({ comparison, onOpenReport, onClose }: { comparison: Comparison; onOpenReport: (id: string) => void; onClose: () => void }) {
-  const source = (report: Comparison['older'], evidence: Comparison['changes'][number]['before']['evidence']) => evidence
-    ? <Space direction="vertical" size={0}><a href={`https://github.com/${report.fullName}/blob/${report.commitSha}/${evidence.path.split('/').map(encodeURIComponent).join('/')}#L${evidence.line}`} target="_blank" rel="noopener noreferrer">{evidence.path}:{evidence.line}</a><Typography.Text type="secondary">{evidence.type === 'test' ? '测试' : evidence.type === 'document' ? '文档' : '代码'} · {evidence.excerpt}</Typography.Text></Space>
-    : <Typography.Text type="secondary">无逐行证据</Typography.Text>;
+  const source = (report: Comparison['older'], finding: Comparison['changes'][number]['before']) => finding.evidence
+    ? <Space direction="vertical" size={0}><a href={`https://github.com/${report.fullName}/blob/${report.commitSha}/${finding.evidence.path.split('/').map(encodeURIComponent).join('/')}#L${finding.evidence.line}`} target="_blank" rel="noopener noreferrer">{finding.evidence.path}:{finding.evidence.line}</a><Typography.Text type="secondary">{projectFindingBasis(finding)} · {finding.evidence.excerpt}</Typography.Text></Space>
+    : <Typography.Text type="secondary">{projectFindingBasis(finding)}</Typography.Text>;
   const reportLabel = (item: Comparison['older']) => `${new Date(item.finishedAt || item.createdAt).toLocaleString('zh-CN')} · ${item.branch} · ${item.commitSha.slice(0, 10)} · ${item.selectedFileCount}/${item.availableFileCount} 文件`;
 
   return <Card size="small" title="两次报告对照" extra={<Button type="text" onClick={onClose}>关闭</Button>} style={{ marginTop: 16 }}>
@@ -19,8 +20,8 @@ export default function ProjectReportComparison({ comparison, onOpenReport, onCl
     {comparison.changes.length ? <Table rowKey="requirementId" size="small" pagination={false} dataSource={comparison.changes} scroll={{ x: 850 }} columns={[
       { title: '需求', dataIndex: 'requirementId', width: 125 },
       { title: '变化', render: (_, item: Comparison['changes'][number]) => <Tag color={item.kind === 'completion_signal' || item.kind === 'improved_gap' ? 'green' : item.kind === 'possible_regression' || item.kind === 'new_gap' ? 'orange' : 'default'}>{kindLabels[item.kind]}</Tag> },
-      { title: '旧结论与证据', render: (_, item: Comparison['changes'][number]) => <Space direction="vertical"><strong>{statusLabels[item.before.status]} · {item.before.title}</strong><span>{item.before.detail}</span>{source(comparison.older,item.before.evidence)}</Space> },
-      { title: '新结论与证据', render: (_, item: Comparison['changes'][number]) => <Space direction="vertical"><strong>{statusLabels[item.after.status]} · {item.after.title}</strong><span>{item.after.detail}</span>{source(comparison.newer,item.after.evidence)}</Space> },
+      { title: '旧结论与证据', render: (_, item: Comparison['changes'][number]) => <Space direction="vertical"><strong>{statusLabels[item.before.status]} · {item.before.title}</strong><span>{item.before.detail}</span>{source(comparison.older,item.before)}</Space> },
+      { title: '新结论与证据', render: (_, item: Comparison['changes'][number]) => <Space direction="vertical"><strong>{statusLabels[item.after.status]} · {item.after.title}</strong><span>{item.after.detail}</span>{source(comparison.newer,item.after)}</Space> },
     ]} /> : <Empty description="没有可按同一需求 ID 安全配对的状态变化" />}
     <Typography.Title level={5} style={{ marginTop: 16 }}>学习建议变化</Typography.Title>
     <Typography.Paragraph type="secondary">按主题和实践文字比较；措辞变化可能被识别为新增或移除，不代表建议已经完成。</Typography.Paragraph>
