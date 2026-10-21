@@ -461,7 +461,7 @@ flowchart LR
 | `experiment_datasets` | 数据集目录；创建账号外键可置空。 | `/experiments/datasets` |
 | `experiment_dataset_versions` | 不可变的版本标识；`dataset_id` 外键。 | 数据集版本选择 |
 | `experiment_dataset_cases` | 稳定用例键、变量、参考答案、难度与分类；版本外键。 | 回归逐项比较 |
-| `experiment_run_metrics` | 单次运行的规则、Judge 和合成评分；运行与指标版本外键。 | 回归报告、自动评分 |
+| `experiment_run_metrics` | 单次运行的规则、Judge 和合成评分；运行与指标版本外键。 | 数据集／回归评测报告、自动评分 |
 | `experiment_annotations` | 人工星级；实验、具体运行和评分账号外键，账号删除后匿名保留。 | 实验输出评分 |
 | `experiment_annotation_tags` | 人工标签；标注外键和七值 CHECK。 | 实验输出标签 |
 | `experiment_dataset_candidates` | 标注衍生的待审核候选；实验、运行、标注均为外键。 | 数据集候选池 |
@@ -564,7 +564,7 @@ flowchart LR
 
 ## 评测报告只读分享（028）
 
-[028_evaluation_report_shares.sql](../db/migrations/028_evaluation_report_shares.sql) 增加一张报告分享表。分享链接只保存 SHA-256 令牌哈希、可选到期时间和撤销时间；创建人删除时置空，报告批次删除时级联。分享固定 `batch_id`，因此同批次的重试和结果更新反映在原链接，不会转到另一个批次。
+[028_evaluation_report_shares.sql](../db/migrations/028_evaluation_report_shares.sql) 增加一张报告分享表。首次数据集评测和回归评测共用报告与分享记录；前者没有 baseline 和退化比较。分享链接只保存 SHA-256 令牌哈希、可选到期时间和撤销时间；创建人删除时置空，报告批次删除时级联。分享固定 `batch_id`，因此同批次的重试和结果更新反映在原链接，不会转到另一个批次。公开报告包含已提示的输入、上下文、参考答案、输出和媒体及相关统计，但不返回内部运行请求消息（例如 system prompt）。
 
 ```mermaid
 flowchart LR

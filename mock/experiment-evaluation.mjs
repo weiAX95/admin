@@ -79,28 +79,40 @@ function summary(values) {
 }
 
 export async function regressionReport(client, batchId) {
-  const batch = (await client.query('SELECT * FROM experiment_batches WHERE id=$1 AND kind=$2', [batchId, 'regression'])).rows[0];
-  if (!batch) return fail('回归批次不存在', 404);
+  const batch = (await client.query("SELECT * FROM experiment_batches WHERE id=$1 AND kind IN ('dataset','regression')", [batchId])).rows[0];
+  if (!batch) return fail('评测批次不存在', 404);
+  const baselineBatchId = batch.kind === 'regression' ? batch.baseline_batch_id : null;
   const metric = (await client.query('SELECT * FROM experiment_metric_versions WHERE id=$1', [batch.metric_version_id])).rows[0];
   const rows = (await client.query('SELECT r.id,r.case_id,r.variant_id,v.label AS variant_label,r.status,r.auto_score,r.latency_ms,r.completion_tokens,r.output,r.output_parts,r.request_messages,r.error,c.case_key,c.variables,c.input_payload,c.expected_payload,c.reference_answer,c.context_payload,c.difficulty,c.category,m.passed,m.rule_score,m.judge_score,m.metric_details FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id JOIN experiment_variants v ON v.id=r.variant_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1 ORDER BY c.case_key', [batch.id, batch.metric_version_id])).rows;
-  const baseline = (await client.query('SELECT r.auto_score,r.status,r.latency_ms,r.completion_tokens,c.case_key,c.variables,c.input_payload,c.context_payload,c.difficulty,c.category,m.passed,m.metric_details FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1', [batch.baseline_batch_id,batch.metric_version_id])).rows;
+  const baseline = baselineBatchId ? (await client.query('SELECT r.auto_score,r.status,r.latency_ms,r.completion_tokens,c.case_key,c.variables,c.input_payload,c.context_payload,c.difficulty,c.category,m.passed,m.metric_details FROM experiment_runs r JOIN experiment_dataset_cases c ON c.id=r.case_id LEFT JOIN experiment_run_metrics m ON m.run_id=r.id AND m.metric_version_id=$2 WHERE r.batch_id=$1', [baselineBatchId,batch.metric_version_id])).rows : [];
   const baselineByCase = new Map(baseline.map(item => [item.case_key, item]));
   const currentKeys = new Set(rows.map(row => row.case_key));
   const removed = baseline.filter(item => !currentKeys.has(item.case_key)).map(item => item.case_key);
   const compared = rows.map(row => {
     const prior = baselineByCase.get(row.case_key);
-    const comparisonStatus = !prior ? 'added' : caseInputFingerprint(prior) !== caseInputFingerprint(row) ? 'input_changed' : prior.auto_score === null || prior.status !== 'completed' ? 'baseline_unscored' : 'comparable';
+    const comparisonStatus = !baselineBatchId ? 'not_applicable' : !prior ? 'added' : caseInputFingerprint(prior) !== caseInputFingerprint(row) ? 'input_changed' : prior.auto_score === null || prior.status !== 'completed' ? 'baseline_unscored' : 'comparable';
     const baselineScore = comparisonStatus === 'comparable' ? prior.auto_score : null;
     return { caseId: row.case_id, caseKey: row.case_key, variantId: row.variant_id, variantLabel: row.variant_label, score: row.auto_score, baselineScore, comparisonStatus, delta: row.auto_score === null || baselineScore === null ? null : Number((row.auto_score - baselineScore).toFixed(3)), passed: row.passed, status: row.status, difficulty: row.difficulty || '未分类', category: row.category || '未分类', ruleScore: row.rule_score, judgeScore: row.judge_score, metricDetails: row.metric_details, input: row.input_payload, context: row.context_payload, expectedOutput: row.expected_payload || row.reference_answer, requestMessages: row.request_messages, output: row.output, outputParts: row.output_parts, error: row.error };
   });
   const scored = compared.filter(item => item.score !== null && item.status === 'completed');
   const strata = field => {
-    const groups = new Map(compared.map(item => [item[field], { name: item[field], count: 0, passed: 0, totalScore: 0 }]));
-    for (const item of scored) { const group = groups.get(item[field]); group.count++; group.passed += item.passed ? 1 : 0; group.totalScore += item.score; }
-    return [...groups.values()].map(group => ({ name: group.name, count: group.count, passRate: group.count ? group.passed / group.count : null, averageScore: group.count ? group.totalScore / group.count : null }));
+    const groups = new Map();
+    for (const item of compared) {
+      if (!groups.has(item[field])) groups.set(item[field], { name: item[field], count: 0, scored: 0, failed: 0, unscored: 0, passed: 0, totalScore: 0 });
+      const group = groups.get(item[field]);
+      group.count++;
+      if (item.status === 'failed') group.failed++;
+      else if (item.status === 'completed' && item.score === null) group.unscored++;
+      else if (item.status === 'completed' && item.score !== null) {
+        group.scored++;
+        group.passed += item.passed ? 1 : 0;
+        group.totalScore += item.score;
+      }
+    }
+    return [...groups.values()].map(group => ({ name: group.name, count: group.count, scored: group.scored, failed: group.failed, unscored: group.unscored, passRate: group.scored ? group.passed / group.scored : null, averageScore: group.scored ? group.totalScore / group.scored : null }));
   };
   const histogram = Array.from({ length: 5 }, (_, index) => ({ range: `${index}–${index + 1}`, count: scored.filter(item => item.score >= index && (index === 4 ? item.score <= 5 : item.score < index + 1)).length }));
-  return ok({ batchId, status: batch.status, datasetVersionId: batch.dataset_version_id, baselineBatchId: batch.baseline_batch_id, metricVersionId: metric.id, passThreshold: metric.pass_threshold, regressionThreshold: metric.regression_threshold, normalizedRegressionThreshold:Number(metric.normalized_regression_threshold), total: compared.length, scored: scored.length, passRate: scored.length ? scored.filter(item => item.passed).length / scored.length : null, box: summary(scored.map(item => item.score)), histogram, efficiency: summarizeEfficiency(rows.map(row => ({ latencyMs: row.latency_ms, completionTokens: row.completion_tokens }))), statusDistribution: { passed: scored.filter(item => item.passed).length, belowThreshold: scored.filter(item => !item.passed).length, failed: compared.filter(item => item.status === 'failed').length, unscored: compared.filter(item => item.status === 'completed' && item.score === null).length }, degraded: compared.filter(item => item.delta !== null && item.delta < -metric.regression_threshold).sort((a,b) => a.delta - b.delta), degradedMetrics:degradedRunMetrics(rows,baseline,metric.goal_ranges,Number(metric.normalized_regression_threshold)), removedCaseKeys: removed, byDifficulty: strata('difficulty'), byCategory: strata('category'), cases: compared });
+  return ok({ batchId, kind: batch.kind, status: batch.status, datasetVersionId: batch.dataset_version_id, baselineBatchId, metricVersionId: metric.id, passThreshold: metric.pass_threshold, regressionThreshold: metric.regression_threshold, normalizedRegressionThreshold:Number(metric.normalized_regression_threshold), total: compared.length, scored: scored.length, passRate: scored.length ? scored.filter(item => item.passed).length / scored.length : null, box: summary(scored.map(item => item.score)), histogram, efficiency: summarizeEfficiency(rows.map(row => ({ latencyMs: row.latency_ms, completionTokens: row.completion_tokens }))), statusDistribution: { passed: scored.filter(item => item.passed).length, belowThreshold: scored.filter(item => !item.passed).length, failed: compared.filter(item => item.status === 'failed').length, unscored: compared.filter(item => item.status === 'completed' && item.score === null).length }, degraded: compared.filter(item => item.delta !== null && item.delta < -metric.regression_threshold).sort((a,b) => a.delta - b.delta), degradedMetrics:baselineBatchId ? degradedRunMetrics(rows,baseline,metric.goal_ranges,Number(metric.normalized_regression_threshold)) : [], removedCaseKeys: removed, byDifficulty: strata('difficulty'), byCategory: strata('category'), cases: compared });
 }
 
 function titleSimilarity(left, right) {
@@ -378,8 +390,8 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   if (datasetRunRoute && method === 'POST') return createBatch(client, datasetRunRoute[1], me, await readBody(), datasetRunRoute[2] === 'regression' ? 'regression' : 'dataset');
   const reportRoute = pathname.match(/^\/api\/experiment-batches\/([^/]+)\/report$/);
   if (reportRoute && method === 'GET') {
-    const batch = (await client.query("SELECT owner_id FROM experiment_batches WHERE id=$1 AND kind='regression'", [reportRoute[1]])).rows[0];
-    if (!batch) return fail('回归报告不存在', 404);
+    const batch = (await client.query("SELECT owner_id FROM experiment_batches WHERE id=$1 AND kind IN ('dataset','regression')", [reportRoute[1]])).rows[0];
+    if (!batch) return fail('评测报告不存在', 404);
     if (!isAdministrator(me) && batch.owner_id !== me.id) return fail('无权查看此报告', 403);
     return regressionReport(client, reportRoute[1]);
   }

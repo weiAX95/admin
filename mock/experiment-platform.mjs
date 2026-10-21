@@ -149,7 +149,7 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
       usageByVariant.set(variant.id,usages);
     }
   } catch(error) {return fail(error.message,409);}
-  const retryLimit = kind === 'dataset' || kind === 'regression' ? 2 : 0;
+  const retryLimit = kind === 'dataset' || kind === 'regression' ? 3 : 0;
   const estimate = variants.reduce((total, variant) => total + prompts.reduce((sum, prompt,index) => sum + runCeiling(variant, prompt, models.get(variant.modelId), judgeFor(variant.parameters.output_kind || 'text'),usageByVariant.get(variant.id)[index]), 0), 0) * (retryLimit + 1);
   const spent = Number((await client.query("SELECT COALESCE(sum(reserved_usd),0) AS total FROM experiment_runs WHERE (created_at AT TIME ZONE 'Asia/Shanghai')::date=(now() AT TIME ZONE 'Asia/Shanghai')::date")).rows[0].total);
   if (spent + estimate > settings.daily_budget_usd) return fail(`预计上限 $${estimate.toFixed(6)} 超过今日剩余额度 $${(settings.daily_budget_usd - spent).toFixed(6)}`, 409);
@@ -176,7 +176,7 @@ export async function createBatch(client, experimentId, me, body, kind = 'single
   if (body.dryRun) return ok({ runCount: variants.length * inputs.length, estimatedMaxCostUsd: estimate, remainingBudgetUsd: settings.daily_budget_usd - spent });
   const batchId = uuid();
   const runReservations=[];
-  await client.query('INSERT INTO experiment_batches(id,experiment_id,owner_id,kind,status,inputs,dataset_version_id,baseline_batch_id,metric_version_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [batchId, experimentId, me.id, kind, 'queued', JSON.stringify(inputs), body.datasetVersionId || null, body.baselineBatchId || null, metricVersionId]);
+  await client.query('INSERT INTO experiment_batches(id,experiment_id,owner_id,kind,status,inputs,dataset_version_id,baseline_batch_id,metric_version_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)', [batchId, experimentId, me.id, kind, 'queued', JSON.stringify(inputs), body.datasetVersionId || null, kind === 'regression' ? body.baselineBatchId : null, metricVersionId]);
   for (const variant of variants) for (let index = 0; index < inputs.length; index++) {
     const model = models.get(variant.modelId);
     const mediaUsage=usageByVariant.get(variant.id)[index];
@@ -355,12 +355,12 @@ export async function handleExperimentPlatform({ pathname, method, client, me, r
       count(r.id) FILTER (WHERE r.status IN ('completed','failed'))::int AS finished_runs,
       count(r.id) FILTER (WHERE r.status='failed')::int AS failed_runs
       FROM experiment_batches b LEFT JOIN experiment_runs r ON r.batch_id=b.id
-      WHERE b.id=$1 GROUP BY b.id,b.status`, [progressRoute[1]])).rows[0];
+      WHERE b.id=$1 AND (b.owner_id=$2 OR $3) GROUP BY b.id,b.status`, [progressRoute[1],me.id,isAdministrator(me)])).rows[0];
     return row ? ok({ id:row.id,status:row.status,totalRuns:row.total_runs,finishedRuns:row.finished_runs,failedRuns:row.failed_runs }) : fail('批次不存在',404);
   }
   const batchRoute = pathname.match(/^\/api\/experiment-batches\/([^/]+)$/);
   if (batchRoute && method === 'GET') {
-    const row = (await client.query('SELECT * FROM experiment_batches WHERE id=$1', [batchRoute[1]])).rows[0];
+    const row = (await client.query('SELECT * FROM experiment_batches WHERE id=$1 AND (owner_id=$2 OR $3)', [batchRoute[1],me.id,isAdministrator(me)])).rows[0];
     if (!row) return fail('批次不存在', 404);
     const runs = (await client.query('SELECT * FROM experiment_runs WHERE batch_id=$1 ORDER BY input_index,created_at', [row.id])).rows.map(mapRun);
     return ok({ id: row.id, experimentId: row.experiment_id, kind: row.kind, status: row.status, inputs: row.inputs, totalRuns: runs.length, finishedRuns: runs.filter(run => ['completed','failed'].includes(run.status)).length, failedRuns: runs.filter(run => run.status === 'failed').length, runs, winRates: winRates(runs) });

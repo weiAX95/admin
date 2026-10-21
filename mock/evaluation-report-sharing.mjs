@@ -10,8 +10,8 @@ const uuid = () => crypto.randomUUID();
 const publicRoute = /^\/api\/public\/evaluation-reports\/([0-9a-f-]{36})$/;
 
 async function ownedBatch(client, batchId, me) {
-  const row = (await client.query("SELECT id,owner_id FROM experiment_batches WHERE id=$1 AND kind='regression'", [batchId])).rows[0];
-  if (!row) return { error: fail('回归报告不存在', 404) };
+  const row = (await client.query("SELECT id,owner_id FROM experiment_batches WHERE id=$1 AND kind IN ('dataset','regression')", [batchId])).rows[0];
+  if (!row) return { error: fail('评测报告不存在', 404) };
   if (!isAdministrator(me) && row.owner_id !== me.id) return { error: fail('无权管理此报告分享', 403) };
   return { row };
 }
@@ -24,7 +24,9 @@ export async function handlePublicEvaluationReport({ pathname, method, client })
   if (share.revoked_at) return fail('分享已撤销', 410);
   if (share.expires_at && new Date(share.expires_at).getTime() <= Date.now()) return fail('分享已过期', 410);
   const report = await regressionReport(client, share.batch_id);
-  return report.status === 200 ? ok({ report: report.data, expiresAt: share.expires_at }) : report;
+  if (report.status !== 200) return report;
+  const cases = report.data.cases.map(({ requestMessages, ...item }) => item);
+  return ok({ report: { ...report.data, cases }, expiresAt: share.expires_at });
 }
 
 export async function handleEvaluationReportSharing({ pathname, method, client, me, readBody }) {

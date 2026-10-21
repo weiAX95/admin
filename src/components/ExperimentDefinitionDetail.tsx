@@ -62,7 +62,7 @@ export default function ExperimentDefinitionDetail({ id }: { id: string }) {
     {canManage && <Card title="A/B 批量输入"><Typography.Paragraph type="secondary">填写 JSON 数组，每个元素是一组变量。所有变体对每组输入各运行一次。</Typography.Paragraph><Input.TextArea rows={4} value={batchInputs} onChange={event => setBatchInputs(event.target.value)} /><Button style={{ marginTop: 12 }} loading={busy} onClick={() => void submitBatch()}>批量执行</Button></Card>}
     {canManage && <ExperimentRegressionPanel definition={definition} onStarted={() => void load()} />}
     <ExperimentChainLinks definition={definition} canManage={canManage} onUpdated={() => void load()} />
-    {definition.batches.some(batch => batch.kind === 'regression') && <Card title="回归报告"><Space wrap>{definition.batches.filter(batch => batch.kind === 'regression').map(batch => <Link key={batch.id} to={`/experiments/reports/${batch.id}`}>{new Date(batch.createdAt).toLocaleString('zh-CN')} · {batch.status}</Link>)}</Space></Card>}
+    {definition.batches.some(batch => batch.kind === 'regression' || batch.kind === 'dataset') && <Card title="评测报告"><Space wrap>{definition.batches.filter(batch => batch.kind === 'regression' || batch.kind === 'dataset').map(batch => <Link key={batch.id} to={`/experiments/reports/${batch.id}`}>{batch.kind === 'regression' ? '回归' : '数据集'} · {new Date(batch.createdAt).toLocaleString('zh-CN')} · {batch.status}</Link>)}</Space></Card>}
     {definition.batches.map(batch => <BatchCard key={batch.id} batch={batch} canManage={canManage} onRetry={async () => { try { const result = await retryBatch(batch.id); message.success(`已重试 ${result.queued} 项`); await load(); } catch (cause) { message.error(cause instanceof Error ? cause.message : '重试失败'); } }} />)}
   </Space>;
 }
