@@ -436,6 +436,7 @@ flowchart LR
   Cases -->|"FK case_id"| Runs["experiment_runs"]
   Metrics["experiment_metric_versions"] -->|"FK metric_version_id"| Batches
   Metrics -->|"FK metric_version_id"| Scores["experiment_run_metrics"]
+  PromptVersions["prompt_library_versions"] -->|"可选 FK judge_prompt_version_id；限制删除"| Metrics
   Runs -->|"FK run_id"| Scores
   Experiments["experiments"] -->|"FK experiment_id"| Annotations["experiment_annotations"]
   Runs -->|"FK run_id"| Annotations
@@ -451,13 +452,13 @@ flowchart LR
   Experiments -. "app_notifications.entity_id；应用层关联" .-> Notices
 ```
 
-数据集版本固定用例清单，运行通过 `case_id` 记录对应输入。指标版本确定规则评分、Judge 提示词、通过门槛及退化阈值；规则和 Judge 的 0–5 分独立保存，再计算合成分。人工评分与自动分分开存储，人工标签只允许迁移中列出的七种值；标注可进入待审核候选池，不自动改写已发布数据集。版本链只在用户确认相似标题建议后设置稳定 `chain_id`。
+数据集版本固定用例清单，运行通过 `case_id` 记录对应输入。指标版本确定规则评分、Judge 提示词、通过门槛及退化阈值；规则和 Judge 的 0–5 分独立保存，再计算合成分。[134 迁移](../db/migrations/134_metric_judge_prompt_source.sql) 为指标版本增加可空的提示词库版本外键，旧指标保持 `NULL`。选择库内版本时只接受无变量、无引用的纯文本 System 版本，并把全文复制到不可变的 `judge_prompt` 快照；提示词库后续新增版本不会改变既有指标的执行文本。解除该外键需先迁移引用它的指标来源，避免误删历史来源。人工评分与自动分分开存储，人工标签只允许迁移中列出的七种值；标注可进入待审核候选池，不自动改写已发布数据集。版本链只在用户确认相似标题建议后设置稳定 `chain_id`。
 
 分享表只保存随机令牌的哈希，公开页使用令牌查找最新配置和运行结果，过期或撤销后无法访问。调度记录以 `(schedule_id, due_at)` 唯一约束防止同一周期重复执行；账号时区用于计算下次运行时刻。`app_notifications.entity_id` 是应用层多类型关联，没有指向实验或调度的 SQL 外键；笔记复习仍保留原有专用通知表。
 
 | 表 | 当前内容与关键关系 | 对应页面或功能 |
 | --- | --- | --- |
-| `experiment_metric_versions` | 规则类型、Judge 提示词、通过与退化门槛；由批次和运行指标引用。 | 回归设置与报告 |
+| `experiment_metric_versions` | 规则类型、Judge 提示词快照、可选的固定提示词版本来源、通过与退化门槛；由批次和运行指标引用。 | 评测指标设置与报告 |
 | `experiment_datasets` | 数据集目录；创建账号外键可置空。 | `/experiments/datasets` |
 | `experiment_dataset_versions` | 不可变的版本标识；`dataset_id` 外键。 | 数据集版本选择 |
 | `experiment_dataset_cases` | 稳定用例键、变量、参考答案、难度与分类；版本外键。 | 回归逐项比较 |

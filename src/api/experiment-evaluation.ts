@@ -1,6 +1,6 @@
 import { http } from './client';
 
-export interface MetricVersion { id: string; name: string; version: number; rule_type: string; pass_threshold: number; regression_threshold: number; normalized_regression_threshold: number; custom_script_id?: string | null }
+export interface MetricVersion { id: string; name: string; version: number; rule_type: string; pass_threshold: number; regression_threshold: number; normalized_regression_threshold: number; custom_script_id?: string | null; judge_prompt_version_id?: string | null; judge_prompt_name?: string | null; judge_prompt_semver?: string | null }
 export interface Dataset { id: string; name: string; latest_version_id: string; latest_version: number; folder_id?: string | null; parent_version_id?: string | null }
 export interface DatasetPart { type: 'text' | 'image' | 'audio' | 'video'; text?: string; assetId?: string }
 export interface DatasetCase { caseKey: string; variables?: Record<string,string>; input?: string | { parts: DatasetPart[] }; expectedOutput?: string | { parts: DatasetPart[] }; referenceAnswer?: string; context?: { role: string; parts: DatasetPart[] }[]; tags?: string[]; difficulty?: number; category?: string; source?: 'manual' | 'session_extract' | 'qa_import'; expectedTools?: { name: string; arguments: Record<string,unknown> }[] }
@@ -13,7 +13,7 @@ export interface RegressionReport { batchId: string; kind: 'dataset' | 'regressi
 export interface Annotation { mine: { rating: number; tags: string[] } | null; summary: { averageRating: number | null; ratingCount: number; tags: { tag: string; count: number }[] } }
 
 export const listMetricVersions = () => http.get<{ items: MetricVersion[] }>('/experiment-metrics');
-export const createMetricVersion = (body: {name:string;ruleType:string;passThreshold:number;regressionThreshold:number;normalizedRegressionThreshold?:number;judgePrompt:string;customScriptId?:string}) => http.post<{id:string;version:number}>('/experiment-metrics',body);
+export const createMetricVersion = (body: {name:string;ruleType:string;passThreshold:number;regressionThreshold:number;normalizedRegressionThreshold?:number;judgePrompt:string;judgePromptVersionId?:string;customScriptId?:string}) => http.post<{id:string;version:number;judgePromptVersionId:string|null}>('/experiment-metrics',body);
 export const getMetricCatalog = () => http.get<{tokenizerVersion:string;builtIns:string[];pythonEnabled:boolean;bertScoreEnabled:boolean}>('/evaluation/metrics');
 export const listPythonMetricScripts = () => http.get<{items:{id:string;name:string;created_at:string}[]}>('/evaluation/metric-scripts');
 export const createPythonMetricScript = (name:string,source:string) => http.post<{id:string}>('/evaluation/metric-scripts',{name,source});

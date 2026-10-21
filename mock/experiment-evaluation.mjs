@@ -280,11 +280,27 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
     return ok({ items: rows });
   }
   if (pathname === '/api/experiment-metrics') {
-    if (method === 'GET') return ok({ items: (await client.query('SELECT * FROM experiment_metric_versions ORDER BY name,version DESC')).rows });
+    if (method === 'GET') return ok({ items: (await client.query(`SELECT m.*,p.name AS judge_prompt_name,v.semver AS judge_prompt_semver
+      FROM experiment_metric_versions m
+      LEFT JOIN prompt_library_versions v ON v.id=m.judge_prompt_version_id
+      LEFT JOIN prompt_library p ON p.id=v.prompt_id
+      ORDER BY m.name,m.version DESC`)).rows });
     if (method === 'POST') {
       if (!isAdministrator(me)) return fail('仅管理员可配置指标', 403);
       const body = await readBody();
-      if (!body.name?.trim() || !['token_f1','exact','bleu','rouge_l','tool_selection','parameter_accuracy','bertscore','custom_python'].includes(body.ruleType) || typeof body.passThreshold !== 'number' || body.passThreshold < 0 || body.passThreshold > 5 || typeof body.regressionThreshold !== 'number' || body.regressionThreshold < 0 || body.regressionThreshold > 5 || !body.judgePrompt?.trim()) return fail('指标配置无效');
+      if (typeof body?.name !== 'string' || !body.name.trim() || !['token_f1','exact','bleu','rouge_l','tool_selection','parameter_accuracy','bertscore','custom_python'].includes(body.ruleType) || typeof body.passThreshold !== 'number' || body.passThreshold < 0 || body.passThreshold > 5 || typeof body.regressionThreshold !== 'number' || body.regressionThreshold < 0 || body.regressionThreshold > 5 || typeof body.judgePrompt !== 'string' || !body.judgePrompt.trim()) return fail('指标配置无效');
+      const promptVersionId = body.judgePromptVersionId ?? null;
+      if (promptVersionId !== null) {
+        if (typeof promptVersionId !== 'string' || !promptVersionId || promptVersionId.length > 128) return fail('Judge 提示词版本 ID 无效');
+        const source = (await client.query(`SELECT v.content,v.prompt_type,v.format,v.variables,v.messages,v.blocks
+          FROM prompt_library_versions v JOIN prompt_library p ON p.id=v.prompt_id
+          WHERE v.id=$1 AND p.deleted_at IS NULL`, [promptVersionId])).rows[0];
+        if (!source) return fail('Judge 提示词版本不存在', 404);
+        if (source.prompt_type !== 'system' || source.format !== 'text'
+          || source.variables.length || source.messages.length || source.blocks.length
+          || /\{\{[^{}]+\}\}|include:prompt:\/\/\S+/.test(source.content)) return fail('Judge 仅支持无变量、无引用的纯文本 System 提示词版本');
+        if (body.judgePrompt !== source.content) return fail('Judge 提示词内容与固定版本不一致，请重新选择');
+      }
       if (body.ruleType === 'bertscore' && (process.env.EVALUATION_BERTSCORE_ENABLED !== 'true' || !(await pythonMetricAvailable('bertscore')))) return fail('BERTScore worker 尚未启用', 409);
       if (body.ruleType === 'custom_python' && (!(await pythonMetricAvailable()) || !(await client.query('SELECT 1 FROM evaluation_metric_scripts WHERE id=$1',[body.customScriptId])).rowCount)) return fail('隔离 Python 指标或容器不可用',409);
       const normalizedThreshold=body.normalizedRegressionThreshold===undefined?0.2:body.normalizedRegressionThreshold;
@@ -293,8 +309,8 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
       try { goalRanges = validateGoalRanges(body.goalRanges); } catch (error) { return fail(error.message); }
       const version = (await client.query('SELECT COALESCE(max(version),0)+1 AS next FROM experiment_metric_versions WHERE name=$1', [body.name.trim()])).rows[0].next;
       const id = uuid();
-      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version,goal_ranges,custom_script_id,normalized_regression_threshold) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION,JSON.stringify(goalRanges),body.ruleType==='custom_python'?body.customScriptId:null,normalizedThreshold]);
-      return ok({ id, version }, 201);
+      await client.query('INSERT INTO experiment_metric_versions(id,name,version,rule_type,pass_threshold,regression_threshold,judge_prompt,tokenizer_version,goal_ranges,custom_script_id,normalized_regression_threshold,judge_prompt_version_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', [id, body.name.trim(), version, body.ruleType, body.passThreshold, body.regressionThreshold, body.judgePrompt, TOKENIZER_VERSION,JSON.stringify(goalRanges),body.ruleType==='custom_python'?body.customScriptId:null,normalizedThreshold,promptVersionId]);
+      return ok({ id, version, judgePromptVersionId: promptVersionId }, 201);
     }
   }
   if (pathname === '/api/evaluation/datasets/import-preview' || pathname === '/api/evaluation/datasets/import') {
