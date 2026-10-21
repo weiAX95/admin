@@ -45,6 +45,7 @@ export default function Alerts() {
   const incidentRequest = useRef(0);
   const analyticsRequest = useRef(0);
   const groupRequest = useRef(0);
+  const samplesRequest = useRef(0);
   const [samples, setSamples] = useState<AlertMetricSample[]>([]);
   const [models, setModels] = useState<{ id: string; displayName: string }[]>([]);
   const [webhooks, setWebhooks] = useState<WebhookConfig[]>([]);
@@ -83,8 +84,13 @@ export default function Alerts() {
     catch (cause) { if (request === analyticsRequest.current) message.error(cause instanceof Error ? cause.message : '告警分析加载失败'); }
   }, [analyticsDays,analyticsLevel,message]);
   const refreshSamples = useCallback(async (selected: string) => {
-    try { setSamples((await listAlertMetricSamples(selected)).items); }
-    catch (cause) { message.error(cause instanceof Error ? cause.message : '指标样本加载失败'); }
+    const request = ++samplesRequest.current;
+    try {
+      const result = await listAlertMetricSamples(selected);
+      if (request === samplesRequest.current) setSamples(result.items);
+    } catch (cause) {
+      if (request === samplesRequest.current) message.error(cause instanceof Error ? cause.message : '指标样本加载失败');
+    }
   }, [message]);
   const refreshGroups = useCallback(async () => {
     const request = ++groupRequest.current;
@@ -284,7 +290,7 @@ export default function Alerts() {
       ]} /> },
       { key: 'channels', label: '渠道测试', children: <Card size="small"><Typography.Paragraph>站内测试通知会发送到当前管理员的顶部铃铛。邮件测试只发送到当前账号在个人设置中启用的收件邮箱；SMTP 未配置时会明确拒绝。Webhook 可在系统设置的出站 Webhook 列表中逐条测试并查看投递日志。</Typography.Paragraph><Space wrap><Button loading={channelTestBusy} onClick={() => void sendChannelTest('in_app')}>测试站内通知</Button><Button loading={channelTestBusy} onClick={() => void sendChannelTest('email')}>测试邮件</Button><a href="/settings">管理与测试 Webhook</a></Space>{channelTest && <Typography.Paragraph style={{ marginTop: 16 }}>最近测试：{channelTest.channel === 'email' ? '邮件' : '站内'} · {channelTest.status} <Button type="link" onClick={() => void refreshChannelTest()}>刷新状态</Button></Typography.Paragraph>}</Card> },
       { key: 'analytics', label: '历史分析', children: <><Space style={{ marginBottom: 12 }}><Select aria-label="分析时间窗口" value={analyticsDays} style={{ width: 140 }} options={[{value:7,label:'近 7 天'},{value:30,label:'近 30 天'},{value:90,label:'近 90 天'}]} onChange={setAnalyticsDays} /><Select aria-label="分析告警级别" placeholder="全部级别" allowClear value={analyticsLevel} style={{ width: 145 }} options={['info','warning','critical'].map(value => ({value,label:value}))} onChange={setAnalyticsLevel} /></Space><AlertAnalytics data={analytics} /></> },
-      { key: 'metrics', label: '指标样本', children: <><Select aria-label="查看指标" value={metric} options={metricOptions} onChange={setMetric} style={{ minWidth: 270, marginBottom: 16 }} /><Table<AlertMetricSample> rowKey={item => `${item.metric}:${item.scope_id}:${item.sampled_at}`} dataSource={samples} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="暂无采样数据" /> }} columns={[
+      { key: 'metrics', label: '指标样本', children: <><Select aria-label="查看指标" value={metric} options={metricOptions} onChange={next => { samplesRequest.current++; setSamples([]); setMetric(next); }} style={{ minWidth: 270, marginBottom: 16 }} /><Table<AlertMetricSample> rowKey={item => `${item.metric}:${item.scope_id}:${item.sampled_at}`} dataSource={samples} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="暂无采样数据" /> }} columns={[
         { title: '时间', dataIndex: 'sampled_at', render: (value: string) => new Date(value).toLocaleString('zh-CN') },
         { title: '指标', dataIndex: 'metric', render: metricLabel }, { title: '范围', dataIndex: 'scope_id' },
         { title: '值', dataIndex: 'value' }, { title: '来源条数', dataIndex: 'source_count' },

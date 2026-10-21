@@ -8,28 +8,75 @@ export default function AlertAnalytics({ data }: { data: AlertAnalyticsData | nu
   const trendRef = useRef<HTMLCanvasElement>(null);
   const moduleRef = useRef<HTMLCanvasElement>(null);
   const typeRef = useRef<HTMLCanvasElement>(null);
+  const trendChartRef = useRef<Chart<'line'> | null>(null);
+  const moduleChartRef = useRef<Chart<'pie'> | null>(null);
+  const typeChartRef = useRef<Chart<'pie'> | null>(null);
+
+  useEffect(() => () => {
+    trendChartRef.current?.destroy();
+    moduleChartRef.current?.destroy();
+    typeChartRef.current?.destroy();
+    trendChartRef.current = null;
+    moduleChartRef.current = null;
+    typeChartRef.current = null;
+  }, []);
+
   useEffect(() => {
-    if (!data) return;
     const colors = [token.colorInfo, token.colorWarning, token.colorError];
     const common = { responsive: true, maintainAspectRatio: false, animation: false as const };
-    const charts: { destroy: () => void }[] = [];
-    if (trendRef.current) charts.push(new Chart(trendRef.current, { type: 'line', data: {
-      labels: data.daily.map(item => item.day),
-      datasets: (['info','warning','critical'] as const).map((level,index) => ({
-        label: level, data: data.daily.map(item => item[level]), borderColor: colors[index],
-        backgroundColor: colors[index], pointRadius: data.daily.length > 45 ? 0 : 2, tension: 0,
-      })),
-    }, options: { ...common, plugins: { legend: { labels: { color: token.colorText } } }, scales: {
+    const trendOptions = { ...common, plugins: { legend: { labels: { color: token.colorText } } }, scales: {
       x: { ticks: { color: token.colorTextSecondary, maxTicksLimit: 8 } },
       y: { beginAtZero: true, ticks: { color: token.colorTextSecondary, precision: 0 } },
-    } } }));
-    const makePie = (canvas: HTMLCanvasElement, items: { name: string; count: number }[]) => new Chart(canvas, {
-      type: 'pie', data: { labels: items.map(item => item.name), datasets: [{ data: items.map(item => item.count), backgroundColor: [token.colorPrimary,token.colorInfo,token.colorSuccess,token.colorWarning,token.colorError,token.colorTextTertiary] }] },
-      options: { ...common, plugins: { legend: { position: 'bottom', labels: { color: token.colorText } } } },
-    });
-    if (moduleRef.current) charts.push(makePie(moduleRef.current,data.byModule));
-    if (typeRef.current) charts.push(makePie(typeRef.current,data.byType));
-    return () => { charts.forEach(chart => chart.destroy()); };
+    } };
+    if (data?.daily.length && trendRef.current) {
+      const labels = data.daily.map(item => item.day);
+      const datasets = (['info','warning','critical'] as const).map((level,index) => ({
+        label: level, data: data.daily.map(item => item[level]), borderColor: colors[index],
+        backgroundColor: colors[index], pointRadius: data.daily.length > 45 ? 0 : 2, tension: 0,
+      }));
+      const chart = trendChartRef.current;
+      if (chart && chart.canvas === trendRef.current) {
+        chart.data.labels = labels;
+        datasets.forEach((dataset,index) => Object.assign(chart.data.datasets[index],dataset));
+        chart.options = trendOptions;
+        chart.update('none');
+      } else {
+        chart?.destroy();
+        trendChartRef.current = new Chart(trendRef.current,{ type: 'line', data: { labels, datasets }, options: trendOptions });
+      }
+    } else {
+      trendChartRef.current?.destroy();
+      trendChartRef.current = null;
+    }
+
+    const pieOptions = { ...common, plugins: { legend: { position: 'bottom' as const, labels: { color: token.colorText } } } };
+    const pieColors = [token.colorPrimary,token.colorInfo,token.colorSuccess,token.colorWarning,token.colorError,token.colorTextTertiary];
+    const syncPie = (canvas: HTMLCanvasElement | null, chartRef: { current: Chart<'pie'> | null }, items: { name: string; count: number }[]) => {
+      if (!canvas || !items.length) {
+        chartRef.current?.destroy();
+        chartRef.current = null;
+        return;
+      }
+      const labels = items.map(item => item.name);
+      const values = items.map(item => item.count);
+      const chart = chartRef.current;
+      if (chart && chart.canvas === canvas) {
+        const visibleByName = new Map(chart.data.labels?.map((label,index) => [String(label),chart.getDataVisibility(index)]));
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = values;
+        chart.data.datasets[0].backgroundColor = pieColors;
+        labels.forEach((label,index) => {
+          if (chart.getDataVisibility(index) !== (visibleByName.get(label) ?? true)) chart.toggleDataVisibility(index);
+        });
+        chart.options = pieOptions;
+        chart.update('none');
+      } else {
+        chart?.destroy();
+        chartRef.current = new Chart(canvas,{ type: 'pie', data: { labels, datasets: [{ data: values, backgroundColor: pieColors }] }, options: pieOptions });
+      }
+    };
+    syncPie(moduleRef.current,moduleChartRef,data?.byModule || []);
+    syncPie(typeRef.current,typeChartRef,data?.byType || []);
   }, [data,token.colorInfo,token.colorWarning,token.colorError,token.colorText,token.colorTextSecondary,token.colorPrimary,token.colorSuccess,token.colorTextTertiary]);
 
   if (!data) return <Empty description="暂无告警分析数据" />;
