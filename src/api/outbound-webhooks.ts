@@ -1,9 +1,11 @@
 import { http } from './client';
 
 export type WebhookEvent = 'task.completed' | 'experiment.finished' | 'evaluation.completed' | 'alert.firing' | 'note.updated';
+export type WebhookProvider = 'generic' | 'wecom' | 'feishu' | 'dingtalk';
 export interface WebhookConfig {
   id: string;
   event: WebhookEvent;
+  provider: WebhookProvider;
   url: string;
   secretMask: string;
   hasHeaders: boolean;
@@ -36,7 +38,8 @@ export interface WebhookDelivery {
 }
 export interface WebhookInput {
   event: WebhookEvent;
-  url: string;
+  provider: WebhookProvider;
+  url?: string;
   secret?: string;
   headers?: Record<string, string>;
   enabled: boolean;

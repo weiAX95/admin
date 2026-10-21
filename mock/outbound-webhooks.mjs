@@ -7,6 +7,7 @@ import { BlockList, isIP } from 'node:net';
 
 export const WEBHOOK_EVENTS = ['task.completed', 'experiment.finished', 'evaluation.completed', 'alert.firing', 'note.updated'];
 const eventSet = new Set(WEBHOOK_EVENTS);
+const PROVIDERS = new Set(['generic','wecom','feishu','dingtalk']);
 const blocked = new BlockList();
 for (const [address, prefix] of [
   ['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8],
@@ -42,18 +43,32 @@ function decrypt(row, field, env) {
   return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
 }
 function apiView(row) {
-  return { id: row.id, event: row.event_type, url: row.target_url, secretMask: row.secret_mask,
+  const provider = row.provider || 'generic';
+  return { id: row.id, event: row.event_type, url: row.target_url, secretMask: provider === 'generic' ? row.secret_mask : '系统保管',
+    provider,
     hasHeaders: Boolean(row.headers_cipher), enabled: row.enabled, version: row.version,
     deletedAt: row.deleted_at, createdAt: row.created_at, updatedAt: row.updated_at };
 }
-function validateTarget(raw, env = process.env) {
+function validateTarget(raw, env = process.env, provider = 'generic') {
   if (typeof raw !== 'string' || raw.length > 500) throw new Error('Webhook URL 无效');
   let url;
   try { url = new URL(raw); } catch { throw new Error('Webhook URL 无效'); }
-  const local = env.ALLOW_LOCAL_WEBHOOKS === '1' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  const local = provider === 'generic' && env.ALLOW_LOCAL_WEBHOOKS === '1' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
   if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) throw new Error('Webhook 仅允许公网 HTTPS；本地测试需显式启用回环地址');
-  if (url.username || url.password || url.hash || url.search || !url.hostname || url.href.length > 500) throw new Error('Webhook URL 不得包含凭据、查询或片段');
+  if (url.username || url.password || url.hash || !url.hostname || url.href.length > 500) throw new Error('Webhook URL 不得包含凭据或片段');
+  if (provider !== 'generic' && url.port) throw new Error('机器人地址只能使用标准 HTTPS 端口');
+  if (provider === 'generic' && url.search) throw new Error('通用 Webhook URL 不得包含查询参数');
+  const keys = [...url.searchParams.keys()];
+  if (provider === 'wecom' && !(url.hostname === 'qyapi.weixin.qq.com' && url.pathname === '/cgi-bin/webhook/send'
+    && keys.length === 1 && keys[0] === 'key' && /^[A-Za-z0-9_-]{8,256}$/.test(url.searchParams.get('key') || ''))) throw new Error('企业微信机器人地址无效');
+  if (provider === 'feishu' && !(url.hostname === 'open.feishu.cn' && /^\/open-apis\/bot\/v2\/hook\/[A-Za-z0-9_-]{8,256}$/.test(url.pathname)
+    && !url.search)) throw new Error('飞书机器人地址无效');
+  if (provider === 'dingtalk' && !(url.hostname === 'oapi.dingtalk.com' && url.pathname === '/robot/send'
+    && keys.length === 1 && keys[0] === 'access_token' && /^[A-Za-z0-9_-]{8,256}$/.test(url.searchParams.get('access_token') || ''))) throw new Error('钉钉机器人地址无效');
   return { url, local };
+}
+function maskedTarget(raw, provider) {
+  return provider === 'generic' ? raw : `${new URL(raw).origin}/…/••••`;
 }
 function validateHeaders(value) {
   if (value === undefined || value === null) return {};
@@ -66,14 +81,21 @@ function validateHeaders(value) {
 function validateInput(body, env, current = null) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('配置内容无效');
   if (!eventSet.has(body.event)) throw new Error('不支持的 Webhook 事件');
-  validateTarget(body.url, env);
+  const provider = body.provider || current?.provider || 'generic';
+  if (!PROVIDERS.has(provider) || (provider !== 'generic' && body.event !== 'alert.firing')) throw new Error('机器人渠道只支持告警事件');
+  if (current && provider !== current.provider) throw new Error('更换渠道请新建 Webhook 配置');
+  if (body.url) validateTarget(body.url, env, provider);
+  else if (!current || provider !== current.provider) throw new Error('请填写 Webhook 地址');
   if (typeof body.enabled !== 'boolean') throw new Error('启用状态无效');
   if (body.confirmExternalFields !== true) throw new Error('请先确认将要外发的字段');
-  if (!current || body.secret !== undefined) {
+  if (provider !== 'generic' && body.secret !== undefined) throw new Error('机器人渠道不使用自定义共享密钥');
+  if (provider === 'generic' && (!current || current.provider !== 'generic' || body.secret !== undefined)) {
     if (typeof body.secret !== 'string' || body.secret.length < 16 || body.secret.length > 256) throw new Error('共享密钥须为 16–256 字符');
   }
   if (current && (!Number.isInteger(body.version) || body.version !== current.version)) throw new Error('配置版本已过期');
-  validateHeaders(body.headers);
+  const headers = validateHeaders(body.headers);
+  if (provider !== 'generic' && Object.keys(headers).length) throw new Error('机器人渠道不支持自定义请求头');
+  return provider;
 }
 function mask(secret) { return `••••${secret.slice(-4)}`; }
 function problem(status, error) { return { status, data: { error } }; }
@@ -87,13 +109,15 @@ async function handleOutboundWebhooksInner({ pathname, method, client, me, readB
   }
   if (pathname === '/api/settings/webhooks' && method === 'POST') {
     const body = await readBody();
-    validateInput(body, env);
-    await resolveWebhookTarget(body.url, env);
+    const provider = validateInput(body, env);
+    await resolveWebhookTarget(body.url, env, dns.lookup, provider);
     const id = crypto.randomUUID(), version = keyVersion(env), headers = validateHeaders(body.headers);
-    const secret = encrypt(body.secret, id, 'secret', env, version);
+    const secretValue = provider === 'generic' ? body.secret : crypto.randomBytes(32).toString('hex');
+    const secret = encrypt(secretValue, id, 'secret', env, version);
     const extra = Object.keys(headers).length ? encrypt(JSON.stringify(headers), id, 'headers', env, version) : null;
-    const result = await client.query(`INSERT INTO outbound_webhooks(id,event_type,target_url,secret_cipher,secret_nonce,secret_tag,headers_cipher,headers_nonce,headers_tag,key_version,secret_mask,enabled,created_by)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`, [id,body.event,body.url,secret.data,secret.nonce,secret.tag,extra?.data || null,extra?.nonce || null,extra?.tag || null,version,mask(body.secret),body.enabled,me.id]);
+    const endpoint = provider === 'generic' ? null : encrypt(body.url,id,'endpoint',env,version);
+    const result = await client.query(`INSERT INTO outbound_webhooks(id,event_type,target_url,secret_cipher,secret_nonce,secret_tag,headers_cipher,headers_nonce,headers_tag,key_version,secret_mask,enabled,created_by,provider,endpoint_cipher,endpoint_nonce,endpoint_tag)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`, [id,body.event,maskedTarget(body.url,provider),secret.data,secret.nonce,secret.tag,extra?.data || null,extra?.nonce || null,extra?.tag || null,version,mask(secretValue),body.enabled,me.id,provider,endpoint?.data || null,endpoint?.nonce || null,endpoint?.tag || null]);
     return { status: 201, data: apiView(result.rows[0]) };
   }
   const route = pathname.match(/^\/api\/settings\/webhooks\/([0-9a-f-]{36})(?:\/(deliveries|test))?$/);
@@ -126,17 +150,21 @@ async function handleOutboundWebhooksInner({ pathname, method, client, me, readB
   if (!route[2] && method === 'PUT') {
     const body = await readBody();
     if (body.version !== current.version) return problem(409, '配置版本已过期');
-    validateInput(body, env, current);
-    await resolveWebhookTarget(body.url, env);
-    const version = body.secret !== undefined || body.headers !== undefined ? keyVersion(env) : current.key_version;
-    if (version !== current.key_version && (body.secret === undefined || body.headers === undefined && current.headers_cipher)) throw new Error('轮换加密密钥时请同时重填共享密钥和自定义请求头');
-    const secret = body.secret !== undefined ? encrypt(body.secret,id,'secret',env,version) : { data: current.secret_cipher, nonce: current.secret_nonce, tag: current.secret_tag };
-    const headers = body.headers === undefined ? { data: current.headers_cipher, nonce: current.headers_nonce, tag: current.headers_tag } : Object.keys(validateHeaders(body.headers)).length ? encrypt(JSON.stringify(body.headers),id,'headers',env,version) : { data: null, nonce: null, tag: null };
+    const provider = validateInput(body, env, current);
+    const target = body.url || (current.provider === 'generic' ? current.target_url : decrypt(current,'endpoint',env));
+    await resolveWebhookTarget(target, env, dns.lookup, provider);
+    const version = keyVersion(env);
+    const secretValue = body.secret === undefined ? decrypt(current,'secret',env) : body.secret;
+    const secret = encrypt(secretValue,id,'secret',env,version);
+    const headerValues = provider === 'generic' ? body.headers === undefined ? JSON.parse(decrypt(current,'headers',env)) : validateHeaders(body.headers) : {};
+    const headers = Object.keys(headerValues).length ? encrypt(JSON.stringify(headerValues),id,'headers',env,version) : { data: null, nonce: null, tag: null };
+    const endpoint = provider === 'generic' ? null : encrypt(target,id,'endpoint',env,version);
     const result = await client.query(`UPDATE outbound_webhooks SET event_type=$2,target_url=$3,secret_cipher=$4,secret_nonce=$5,secret_tag=$6,
-      headers_cipher=$7,headers_nonce=$8,headers_tag=$9,key_version=$10,secret_mask=$11,enabled=$12,version=version+1,updated_at=now()
-      WHERE id=$1 AND version=$13 RETURNING *`, [id,body.event,body.url,secret.data,secret.nonce,secret.tag,headers.data,headers.nonce,headers.tag,version,body.secret === undefined ? current.secret_mask : mask(body.secret),body.enabled,body.version]);
+      headers_cipher=$7,headers_nonce=$8,headers_tag=$9,key_version=$10,secret_mask=$11,enabled=$12,version=version+1,updated_at=now(),
+      provider=$14,endpoint_cipher=$15,endpoint_nonce=$16,endpoint_tag=$17
+      WHERE id=$1 AND version=$13 RETURNING *`, [id,body.event,maskedTarget(target,provider),secret.data,secret.nonce,secret.tag,headers.data,headers.nonce,headers.tag,version,body.secret === undefined ? current.secret_mask : mask(body.secret),body.enabled,body.version,provider,endpoint?.data || null,endpoint?.nonce || null,endpoint?.tag || null]);
     if (!result.rowCount) return problem(409, '配置版本已过期');
-    if (!body.enabled || body.event !== current.event_type || body.url !== current.target_url) {
+    if (!body.enabled || body.event !== current.event_type || provider !== current.provider || target !== (current.provider === 'generic' ? current.target_url : decrypt(current,'endpoint',env))) {
       await client.query("UPDATE outbound_webhook_deliveries SET status='cancelled',lease_until=NULL WHERE webhook_id=$1 AND status='pending'", [id]);
     }
     return { status: 200, data: apiView(result.rows[0]) };
@@ -162,8 +190,8 @@ export async function handleOutboundWebhooks(context) {
 
 function localAddress(address) { return address === '127.0.0.1' || address === '::1'; }
 function mappedIPv4(address) { return new URL(`http://[${address}]/`).hostname.toLowerCase().startsWith('[::ffff:'); }
-export async function resolveWebhookTarget(raw, env = process.env, lookup = dns.lookup) {
-  const { url, local } = validateTarget(raw, env);
+export async function resolveWebhookTarget(raw, env = process.env, lookup = dns.lookup, provider = 'generic') {
+  const { url, local } = validateTarget(raw, env, provider);
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
   const records = isIP(hostname) ? [{ address: hostname, family: isIP(hostname) }] : await lookup(hostname, { all: true, verbatim: true });
   if (!records.length || records.some(({ address, family }) => !isIP(address) || ![4,6].includes(family) || family === 6 && mappedIPv4(address) || !(local && localAddress(address)) && blocked.check(address, family === 4 ? 'ipv4' : 'ipv6'))) throw new Error('Webhook 目标地址不是可访问的公网地址');
@@ -179,18 +207,42 @@ function redactResponse(body, secret, headers) {
   for (const value of [secret, ...Object.values(headers)]) if (value) text = text.replaceAll(value, '[REDACTED]');
   return text.replace(/(?:sk-[a-zA-Z0-9_-]{8,}|api[_-]?key\s*[:=]\s*\S+)/gi, '[REDACTED]');
 }
+function botPayload(provider, event) {
+  const value = event.payload || {};
+  const title = String(value.title || value.ruleName || '告警通知').slice(0,160);
+  const detail = String(value.body || [value.metric,value.scopeId,value.triggerValue].filter(part => part !== undefined && part !== null).join(' / ')).slice(0,1400);
+  const text = `[告警] ${title}\n${detail}\n事件 ID：${event.id}`;
+  return provider === 'feishu'
+    ? { msg_type: 'text', content: { text } }
+    : { msgtype: 'text', text: { content: text } };
+}
 export async function postWebhook({ row, event, env = process.env, lookup = dns.lookup }) {
-  const { url, address, family } = await resolveWebhookTarget(row.target_url, env, lookup);
-  const secret = decrypt(row, 'secret', env), custom = JSON.parse(decrypt(row, 'headers', env));
-  const raw = JSON.stringify({ id: event.id, event: event.event_type, occurredAt: event.created_at, data: event.payload });
-  const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(raw), ...custom, ...signedWebhookHeaders(secret,event.id,event.event_type,raw) };
+  const provider = row.provider || 'generic';
+  const target = provider === 'generic' ? row.target_url : decrypt(row,'endpoint',env);
+  const { url, address, family } = await resolveWebhookTarget(target, env, lookup, provider);
+  const secret = decrypt(row, 'secret', env), custom = provider === 'generic' ? JSON.parse(decrypt(row, 'headers', env)) : {};
+  const raw = JSON.stringify(provider === 'generic'
+    ? { id: event.id, event: event.event_type, occurredAt: event.created_at, data: event.payload }
+    : botPayload(provider,event));
+  const headers = { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(raw), ...custom,
+    ...(provider === 'generic' ? signedWebhookHeaders(secret,event.id,event.event_type,raw) : {}) };
   return new Promise((resolve, reject) => {
     const transport = url.protocol === 'https:' ? https : http;
     const request = transport.request(url, { method: 'POST', headers, timeout: 10000, lookup: (_host, _options, callback) => callback(null,address,family) }, response => {
       let body = '';
       response.setEncoding('utf8');
       response.on('data', chunk => { if (body.length < 2048) body += chunk.slice(0,2048-body.length); });
-      response.on('end', () => resolve({ statusCode: response.statusCode || 0, responseBody: redactResponse(body,secret,custom) }));
+      response.on('end', () => {
+        if (provider === 'generic') return resolve({ statusCode: response.statusCode || 0, responseBody: redactResponse(body,secret,custom) });
+        let code;
+        try {
+          const parsed = JSON.parse(body);
+          code = provider === 'feishu' ? parsed.code : parsed.errcode;
+        } catch { /* A malformed robot response is a failed delivery, even with HTTP 200. */ }
+        const deliveryError = Number.isInteger(code) && code === 0 ? null : `机器人返回错误码 ${Number.isInteger(code) ? code : '未知'}`;
+        const accepted = response.statusCode >= 200 && response.statusCode < 300;
+        resolve({ statusCode: response.statusCode || 0, responseBody: deliveryError || (accepted ? '机器人已接收' : '机器人 HTTP 错误'), deliveryError });
+      });
       response.on('error', reject);
     });
     request.on('timeout', () => request.destroy(new Error('Webhook 请求超时')));
@@ -230,7 +282,9 @@ export async function processOutboundWebhooks(pool, env = process.env) {
   let result, error;
   try { result = await postWebhook({ row: job, event: { id: job.event_id, event_type: job.queued_event_type, payload: job.payload, created_at: job.event_at }, env }); }
   catch (failure) { error = failure instanceof Error ? failure.message.slice(0,200) : '投递失败'; }
-  const status = result?.statusCode || null, success = status !== null && status >= 200 && status < 300;
+  if (job.provider !== 'generic' && error) error = '机器人投递网络错误';
+  const status = result?.statusCode || null, success = !result?.deliveryError && status !== null && status >= 200 && status < 300;
+  error ||= result?.deliveryError || null;
   const retry = job.attempt_count + 1 < 4;
   const done = await pool.connect();
   try {

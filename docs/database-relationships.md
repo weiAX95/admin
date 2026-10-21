@@ -60,7 +60,7 @@ flowchart LR
 
 [076_outbound_webhooks.sql](../db/migrations/076_outbound_webhooks.sql) 建立四张表。业务表的触发器在同一事务中写事件；事件 `payload` 中的任务、笔记、批次及告警 ID 是历史快照字段，**没有指向业务实体的 SQL 外键**，因此源记录后来删除不会抹去待投递事件。[077_outbound_note_update_event.sql](../db/migrations/077_outbound_note_update_event.sql) 将笔记标题、正文、分类或标签保存导致的更新时间变化统一视为更新事件；[078_outbound_webhook_payloads.sql](../db/migrations/078_outbound_webhook_payloads.sql) 在入队时补入任务和笔记正文、批次运行汇总、告警明细。运行器按事件与当时启用的配置扇出投递；配置停用或软删除后取消尚未开始的投递，已发出的请求仍可能完成。投递表对配置使用默认限制删除的外键，删除配置只写 `deleted_at`，既有日志仍可由管理员查看；事件与逐次尝试分别级联清理下游记录。
 
-配置的共享密钥和自定义 X- 请求头分别加密，数据库只存密文、nonce、认证标签、密钥版本及末四位掩码。投递前重新解析地址并固定实际连接 IP，拒绝内网目标和跳转；签名覆盖时间戳与请求原始字节。队列状态与尝试次数持久化，进程重启后可恢复；网络断开后投递可能重复，接收方须按事件 ID 去重。[079_outbound_webhook_retention.sql](../db/migrations/079_outbound_webhook_retention.sql) 给每日清理结果增加 Webhook 事件清理数；审计保留期到达后只清理已扇出且没有待完成投递的事件，并级联其投递与尝试日志。
+普通 Webhook 的共享密钥和自定义 X- 请求头分别加密，数据库只存密文、nonce、认证标签、密钥版本及末四位掩码。投递前重新解析地址并固定实际连接 IP，拒绝内网目标和跳转；普通 Webhook 的签名覆盖时间戳与请求原始字节。队列状态与尝试次数持久化，进程重启后可恢复；网络断开后投递可能重复，普通 Webhook 接收方须按事件 ID 去重。[079_outbound_webhook_retention.sql](../db/migrations/079_outbound_webhook_retention.sql) 给每日清理结果增加 Webhook 事件清理数；审计保留期到达后只清理已扇出且没有待完成投递的事件，并级联其投递与尝试日志。
 
 [080_outbound_notification_alerts.sql](../db/migrations/080_outbound_notification_alerts.sql) 把模型健康、预算阈值、日成本异常、速率与 token 配额、模型退役、实验／评测调度失败和评测仲裁通知接入 `alert.firing`。`app_notifications` 与 Webhook 事件之间没有 SQL 外键：通知正文、来源类型、业务 ID 在事务中复制到事件快照。`source_key` 对同一来源告警唯一，避免多个管理员的站内通知产生重复外发；个人 token 配额告警额外包含账号 ID，使不同账号的告警仍各自独立。评测退化已由 `evaluation_alerts` 触发器入队，故 `evaluation_regression` 站内通知不再重复入队。
 
@@ -160,7 +160,9 @@ flowchart LR
 
 [089_alert_aggregation.sql](../db/migrations/089_alert_aggregation.sql) 为规则增加默认五分钟的再次触发聚合窗口，建立 `alert_incident_groups`，并由 `alert_incidents.aggregate_group_id` 外键归组。相同规则和范围在窗口内恢复后再次触发时，新事件仍保留独立处置时间线，但组计数增加；已有首发通知时只更新其正文中的组内次数。若整个静默时段内尚无首发通知，静默结束后窗口内再次触发时可发送第一条。聚合组的 `rule_id` 在规则删除或修改后置空，历史事件依然可查。迁移只把旧事件各自建为单独的组，不推测旧通知是否应聚合。
 
-[090_alert_rule_webhooks.sql](../db/migrations/090_alert_rule_webhooks.sql) 建立 `alert_rule_webhooks`，两侧分别以级联外键指向告警规则和已有的出站 Webhook 配置。规则可选择多个 `alert.firing` 配置；通知生成时只为这些配置建立投递记录，事件标记为已分发，避免通用广播队列再发送给其他钩子。投递复用已有的公网地址校验、HMAC 签名、失败重试和尝试日志；目前仍是通用 JSON Webhook，企业微信、飞书与钉钉的专用协议尚未适配。`app_notifications.show_in_app` 区分邮件队列记录与顶部铃铛可见记录，未选站内渠道时不计未读数。
+[090_alert_rule_webhooks.sql](../db/migrations/090_alert_rule_webhooks.sql) 建立 `alert_rule_webhooks`，两侧分别以级联外键指向告警规则和已有的出站 Webhook 配置。规则可选择多个 `alert.firing` 配置；通知生成时只为这些配置建立投递记录，事件标记为已分发，避免通用广播队列再发送给其他钩子。`app_notifications.show_in_app` 区分邮件队列记录与顶部铃铛可见记录，未选站内渠道时不计未读数。
+
+[132_enterprise_alert_webhooks.sql](../db/migrations/132_enterprise_alert_webhooks.sql) 为出站配置增加渠道类型和 AES-256-GCM 加密的机器人完整地址。数据库 `target_url` 和配置接口只保留脱敏展示地址；完整地址中的机器人访问令牌只在服务端解密投递，不进入事件正文与投递日志。企业微信、飞书、钉钉配置仅允许 `alert.firing` 事件及对应平台的固定 HTTPS 主机和路径；保存与投递时均重新解析公网地址并固定连接 IP。同平台可创建多个配置，以独立配置 ID 关联告警规则；编辑现有配置不可更换渠道，需另建配置。普通 JSON Webhook 继续使用原有 HMAC-SHA256 签名；企业机器人使用平台默认 URL 令牌和各自的文本消息格式，不附加本系统 HMAC。应用层非零错误码也进入现有重试队列，最多四次尝试。[133_enterprise_webhook_headers.sql](../db/migrations/133_enterprise_webhook_headers.sql) 以约束禁止机器人配置保存自定义请求头；普通 Webhook 的请求头能力保持不变。钉钉当前按关键词安全模式接入，平台额外加签模式及真实账号送达留待最终验收；停用或删除配置会取消尚未开始的投递。
 
 [131_alert_session_refusal_rate.sql](../db/migrations/131_alert_session_refusal_rate.sql) 将 `session_refusal_rate` 加入规则和指标样本的约束，并为近一小时 Assistant 消息查询建索引。该指标以近一小时**有 Assistant 回复的会话**为分母，以其中至少一条回复被标记拒答的会话为分子；没有可计会话时不写零值样本，避免把缺少数据误判为零拒答率。原有 `session_refusal_streak` 仍单独表示最近五个会话的拒答数。
 
@@ -718,7 +720,7 @@ flowchart LR
 | `note_review_notifications` | 到期站内提醒、已读状态和邮件投递状态；账号、笔记均为级联删除外键，账号＋笔记＋轮次唯一。 | 顶部铃铛、邮件重试 |
 | `media_assets` | 图片 MIME、大小、上传时间；文件存本地附件目录，内容字段通过 URL 逻辑引用。 | Markdown 编辑器及详情预览 |
 | `experiments` | 手工记录或可执行实验定义；`task_id` 为逻辑关联，`owner_id` 与提示词版本为外键。 | `/experiments`、`/experiments/:id`、任务详情“关联” |
-| `outbound_webhooks` | 管理员配置的事件、目标 URL、加密密钥与请求头、启用状态；`created_by` 外键，删除账号后置空。 | `/settings` 出站 Webhook 配置 |
+| `outbound_webhooks` | 管理员配置的事件、渠道类型、脱敏目标 URL、加密机器人完整地址及普通渠道共享密钥／请求头、启用状态；机器人禁止自定义请求头，`created_by` 外键在删除账号后置空。 | `/settings` 出站 Webhook 配置 |
 | `outbound_webhook_events` | 事务内持久化的事件类型、时间和业务正文；业务实体 ID 是快照值，无实体外键。告警通知使用唯一 `source_key` 防止多账号重复外发。 | 后台投递队列 |
 | `outbound_webhook_deliveries` | 每配置每事件唯一的投递状态、次数及下次时间；配置为限制删除外键，事件为级联删除外键。 | `/settings` 投递日志 |
 | `outbound_webhook_attempts` | 每次 HTTP 请求的时间、状态码、脱敏响应及错误；投递为级联删除外键。 | `/settings` 投递日志展开行 |
