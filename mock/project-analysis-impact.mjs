@@ -9,6 +9,7 @@ const namedImport = /\b(?:from\s*|import\s*\(|require\s*\()\s*['"]([^.'"\n/][^'"
 const namedSideEffectImport = /\bimport\s*['"]([^.'"\n/][^'"\n]*)['"]/g;
 const rootConfig = /^(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|tsconfig(?:\.[^/]*)?\.json|vite\.config\.[^/]+|pyproject\.toml|requirements\.txt|go\.mod|Cargo\.toml)$/;
 const aliasConfigPath = /(?:^|\/)(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json$/;
+const nestedConfigPath = /(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json|vite\.config\.[^/]+|pyproject\.toml|requirements\.txt|go\.(?:mod|work)|Cargo\.toml)$/;
 
 function javascriptImports(file, indexed, resolveEmittedNames = false) {
   if (!/\.(?:[cm]?[jt]sx?)$/.test(file.path)) return [];
@@ -181,9 +182,65 @@ function goImports(file, indexed, goModules) {
   return [...found];
 }
 
-function importedPaths(file, indexed, goModules, aliasConfigs = [], includeSameDepth = false) {
+function goPackageName(content) {
+  let offset = content.charCodeAt(0) === 0xfeff ? 1 : 0;
+  while (offset < content.length) {
+    const rest = content.slice(offset);
+    const whitespace = rest.match(/^\s+/);
+    if (whitespace) { offset += whitespace[0].length; continue; }
+    if (rest.startsWith('//')) { offset += rest.indexOf('\n') < 0 ? rest.length : rest.indexOf('\n') + 1; continue; }
+    if (rest.startsWith('/*')) {
+      const end = rest.indexOf('*/');
+      if (end < 0) return null;
+      offset += end + 2;
+      continue;
+    }
+    return rest.match(/^package[ \t]+([A-Za-z_]\w*)[ \t]*(?:\/\/[^\n]*)?(?:\r?\n|$)/)?.[1] || null;
+  }
+  return null;
+}
+
+function goModuleName(content) {
+  const first = content.split(/\r?\n/).map(line => line.trim()).find(line => line && !line.startsWith('//'));
+  return first?.match(/^module[ \t]+([^\s]+)(?:[ \t]*\/\/.*)?$/)?.[1] || null;
+}
+
+function goImportsV8(file, indexed, boundaries, packages) {
+  if (!file.path.endsWith('.go')) return [];
+  const packageName = packages.get(file.path);
+  const found = new Set();
+  if (!packageName) return [];
+  const boundaryFor = name => boundaries.find(item => !item.directory || name.startsWith(`${item.directory}/`));
+  const boundary = boundaryFor(file.path);
+  for (const target of indexed) {
+    if (target === file.path || !target.endsWith('.go') || !file.path.endsWith('_test.go') && target.endsWith('_test.go') || path.posix.dirname(target) !== path.posix.dirname(file.path)) continue;
+    if (packages.get(target) === packageName) found.add(target);
+  }
+  if (!boundary?.name) return [...found];
+  const imported = [];
+  const direct = /^\s*import\s+(?:[\w.]+\s+)?["`]([^"`]+)["`]/gm;
+  let match;
+  while ((match = direct.exec(file.content))) imported.push(match[1]);
+  const blocks = /\bimport\s*\(([^)]*)\)/g;
+  while ((match = blocks.exec(file.content))) for (const line of match[1].split('\n')) {
+    const name = line.match(/^\s*(?:[\w.]+\s+)?["`]([^"`]+)["`]/)?.[1];
+    if (name) imported.push(name);
+  }
+  for (const name of imported.slice(0,200)) {
+    if (name !== boundary.name && !name.startsWith(`${boundary.name}/`)) continue;
+    const suffix = name.slice(boundary.name.length).replace(/^\//,'');
+    const directory = path.posix.join(boundary.directory,suffix);
+    for (const target of indexed) {
+      if (target === file.path || !target.endsWith('.go') || target.endsWith('_test.go') || path.posix.dirname(target) !== directory || boundaryFor(target)?.path !== boundary.path) continue;
+      if (packages.has(target)) found.add(target);
+    }
+  }
+  return [...found];
+}
+
+function importedPaths(file, indexed, goModules, aliasConfigs = [], includeSameDepth = false, goBoundaries = null, goPackages = null) {
   if (typeof file.content !== 'string') return [];
-  return [...new Set([...javascriptImports(file,indexed,true),...javascriptAliasedImports(file,indexed,aliasConfigs,includeSameDepth),...pythonImports(file,indexed),...goImports(file,indexed,goModules)])];
+  return [...new Set([...javascriptImports(file,indexed,true),...javascriptAliasedImports(file,indexed,aliasConfigs,includeSameDepth),...pythonImports(file,indexed),...(goBoundaries ? goImportsV8(file,indexed,goBoundaries,goPackages) : goImports(file,indexed,goModules))])];
 }
 
 export function selectProjectImpactEvidenceV3(files, changes) {
@@ -219,7 +276,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -235,13 +292,15 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   }
   const indexed = new Set([...current.keys(),...changedPaths]);
   const goModules = files.filter(file => file.path.endsWith('go.mod') && file.status === 'read' && typeof file.content === 'string').map(file => ({ directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.content.match(/^module\s+([^\s]+)\s*$/m)?.[1] })).filter(item => item.name).sort((a,b) => b.directory.length - a.directory.length);
+  const goPackages = includeNestedConfigs ? new Map(files.filter(file => file.path.endsWith('.go') && file.status === 'read' && typeof file.content === 'string').map(file => [file.path,goPackageName(file.content)]).filter(([,name]) => name)) : null;
+  const goBoundaries = includeNestedConfigs ? files.filter(file => /(?:^|\/)go\.mod$/.test(file.path)).map(file => ({ path: file.path, directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.status === 'read' && typeof file.content === 'string' ? goModuleName(file.content) : null })).sort((a,b) => b.directory.length - a.directory.length) : null;
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
   const aliasConfigs = includeAliases ? javascriptAliasConfigs(files,includeExtends) : [];
   const reverse = new Map();
   const importsByPath = new Map();
   for (const file of files) {
     if (file.status !== 'read') continue;
-    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends),...(apiEdges.get(file.path) || [])])];
+    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages),...(apiEdges.get(file.path) || [])])];
     importsByPath.set(file.path,imports);
     for (const target of imports) {
       if (!reverse.has(target)) reverse.set(target,new Set());
@@ -266,7 +325,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
     dependencies.add(target);
     impactedModules.add(projectModuleKey(target));
   }
-  if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath) || includeAliases && (aliasConfigPath.test(change.path) || change.oldPath && aliasConfigPath.test(change.oldPath)))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
+  if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath) || includeAliases && (aliasConfigPath.test(change.path) || change.oldPath && aliasConfigPath.test(change.oldPath)) || includeNestedConfigs && (nestedConfigPath.test(change.path) || change.oldPath && nestedConfigPath.test(change.oldPath)))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   const priorityPaths = [...currentChanged].sort().concat(...layers,[...dependencies].sort());
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
@@ -275,3 +334,4 @@ export const selectProjectImpactEvidence = (files, changes) => selectImpactEvide
 export const selectProjectImpactEvidenceV5 = (files, changes) => selectImpactEvidence(files,changes,true);
 export const selectProjectImpactEvidenceV6 = (files, changes) => selectImpactEvidence(files,changes,true,true);
 export const selectProjectImpactEvidenceV7 = (files, changes) => selectImpactEvidence(files,changes,true,true,true);
+export const selectProjectImpactEvidenceV8 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true);
