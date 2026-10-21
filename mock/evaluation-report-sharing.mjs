@@ -1,13 +1,13 @@
 import { isAdministrator } from './roles.mjs';
 import crypto from 'node:crypto';
 import { sha256 } from './postgres-store.mjs';
-import { regressionReport } from './experiment-evaluation.mjs';
+import { regressionReport, reportCasesPage, reportPageOptions } from './experiment-evaluation.mjs';
 
 const ok = (data, status = 200) => ({ status, data });
 const fail = (error, status = 400) => ok({ error }, status);
 const expiries = { '1h': 3600_000, '24h': 86400_000, '7d': 604800_000, permanent: null };
 const uuid = () => crypto.randomUUID();
-const publicRoute = /^\/api\/public\/evaluation-reports\/([0-9a-f-]{36})$/;
+const publicRoute = /^\/api\/public\/evaluation-reports\/([0-9a-f-]{36})(?:\/(cases))?$/;
 
 async function ownedBatch(client, batchId, me) {
   const row = (await client.query("SELECT id,owner_id FROM experiment_batches WHERE id=$1 AND kind IN ('dataset','regression')", [batchId])).rows[0];
@@ -16,24 +16,33 @@ async function ownedBatch(client, batchId, me) {
   return { row };
 }
 
-export async function handlePublicEvaluationReport({ pathname, method, client }) {
+export async function handlePublicEvaluationReport({ pathname, method, client, url }) {
   const match = pathname.match(publicRoute);
   if (!match || method !== 'GET') return null;
   const share = (await client.query('SELECT * FROM evaluation_report_shares WHERE token_hash=$1', [sha256(match[1])])).rows[0];
   if (!share) return fail('分享链接不存在', 404);
   if (share.revoked_at) return fail('分享已撤销', 410);
   if (share.expires_at && new Date(share.expires_at).getTime() <= Date.now()) return fail('分享已过期', 410);
-  const report = await regressionReport(client, share.batch_id);
+  const options = match[2] ? reportPageOptions(url) : null;
+  if (match[2] && !options) return fail('分页或筛选参数无效');
+  const report = await regressionReport(client, share.batch_id, { includeCases: Boolean(match[2]) || url.searchParams.get('summary') !== '1' });
   if (report.status !== 200) return report;
+  if (match[2]) {
+    const page = reportCasesPage(report, options);
+    return ok({ ...page, items: page.items.map(({ requestMessages, ...item }) => item) });
+  }
   const cases = report.data.cases.map(({ requestMessages, ...item }) => item);
   return ok({ report: { ...report.data, cases }, expiresAt: share.expires_at });
 }
 
-export async function handleEvaluationReportSharing({ pathname, method, client, me, readBody }) {
+export async function handleEvaluationReportSharing({ pathname, method, client, me, readBody, url }) {
   const preview = pathname.match(/^\/api\/evaluation\/reports\/([^/]+)\/share-preview$/);
   if (preview && method === 'GET') {
     const { error } = await ownedBatch(client, preview[1], me);
-    return error || regressionReport(client, preview[1]);
+    if (error) return error;
+    const page = Number(url.searchParams.get('page') || 1);
+    if (!Number.isSafeInteger(page) || page < 1) return fail('预览页码无效');
+    return regressionReport(client, preview[1], { includeCases: false, previewCases: 3, previewPage: page });
   }
   const list = pathname.match(/^\/api\/evaluation\/reports\/([^/]+)\/shares$/);
   if (list) {

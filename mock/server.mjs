@@ -623,7 +623,7 @@ async function handleRequest(req, res) {
   try {
     const publicShare = await handlePublicExperimentShare({ pathname, method, client: activeClient });
     if (publicShare) return send(res, publicShare.status, publicShare.data);
-    const publicEvaluationReport = await handlePublicEvaluationReport({ pathname, method, client: activeClient });
+    const publicEvaluationReport = await handlePublicEvaluationReport({ pathname, method, client: activeClient, url });
     if (publicEvaluationReport) return send(res, publicEvaluationReport.status, publicEvaluationReport.data);
     const publicSettings = await handleSystemSettings({ pathname, method, client: activeClient, me: null });
     if (publicSettings) return send(res, publicSettings.status, publicSettings.data);
@@ -869,7 +869,7 @@ async function handleRequest(req, res) {
     if (reviewResponse) return send(res, reviewResponse.status, reviewResponse.data);
     const evaluationScheduleResponse = await handleEvaluationSchedules({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (evaluationScheduleResponse) return send(res, evaluationScheduleResponse.status, evaluationScheduleResponse.data);
-    const evaluationReportShareResponse = await handleEvaluationReportSharing({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
+    const evaluationReportShareResponse = await handleEvaluationReportSharing({ pathname, method, client: activeClient, me, readBody: () => readBody(req), url });
     if (evaluationReportShareResponse) return send(res, evaluationReportShareResponse.status, evaluationReportShareResponse.data);
     const sharingResponse = await handleExperimentSharing({ pathname, method, client: activeClient, me, readBody: () => readBody(req) });
     if (sharingResponse) return send(res, sharingResponse.status, sharingResponse.data);

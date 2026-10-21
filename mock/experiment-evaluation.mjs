@@ -78,7 +78,62 @@ function summary(values) {
   return { min: sorted[0], q1: percentile(0.25), median: percentile(0.5), q3: percentile(0.75), max: sorted.at(-1), count: sorted.length };
 }
 
-export async function regressionReport(client, batchId) {
+function reportChartData(cases) {
+  const metrics = new Map(), variants = new Map();
+  for (const item of cases) {
+    for (const [name, value] of Object.entries(item.metricDetails || {})) {
+      if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+      if (!metrics.has(name)) metrics.set(name, []);
+      metrics.get(name).push(value);
+    }
+    if (!variants.has(item.variantId)) variants.set(item.variantId, { label: item.variantLabel || item.variantId.slice(0, 8), values: [[], [], []] });
+    const variant = variants.get(item.variantId);
+    [item.score, item.ruleScore, item.judgeScore].forEach((value, index) => {
+      if (typeof value === 'number' && Number.isFinite(value)) variant.values[index].push(value);
+    });
+  }
+  return {
+    metrics: [...metrics].sort(([left], [right]) => left.localeCompare(right)).map(([name, values]) => {
+      let min = Infinity, max = -Infinity;
+      for (const value of values) { if (value < min) min = value; if (value > max) max = value; }
+      const step = (max - min || 1) / 5;
+      return { name, bins: Array.from({ length: 5 }, (_, index) => {
+        const low = min + index * step, high = min + (index + 1) * step, last = index === 4;
+        return { min: low, max: high, last, label: `${low.toFixed(2)}–${high.toFixed(2)}`, count: values.filter(value => value >= low && (last ? value <= high : value < high)).length };
+      }) };
+    }),
+    variants: [...variants].map(([id, variant]) => ({ id, label: variant.label, scores: variant.values.map(values => values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0) }))
+  };
+}
+
+export function reportPageOptions(url) {
+  const page = Number(url.searchParams.get('page') || 1), pageSize = Number(url.searchParams.get('pageSize') || 50);
+  if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100) return null;
+  const raw = url.searchParams.get('drill');
+  if (!raw) return { page, pageSize, drill: null };
+  let drill;
+  try { drill = JSON.parse(raw); } catch { return null; }
+  if (!drill || typeof drill !== 'object') return null;
+  if (drill.field === 'status' && ['passed', 'below', 'failed', 'unscored'].includes(drill.value)) return { page, pageSize, drill };
+  if (drill.field === 'score' && Number.isInteger(drill.value) && drill.value >= 0 && drill.value <= 4) return { page, pageSize, drill };
+  if (['category', 'variantId'].includes(drill.field) && typeof drill.value === 'string' && drill.value.length <= 200) return { page, pageSize, drill };
+  if (drill.field === 'metric' && drill.value && typeof drill.value.name === 'string' && drill.value.name.length <= 100 && Number.isFinite(drill.value.min) && Number.isFinite(drill.value.max) && drill.value.max >= drill.value.min && typeof drill.value.last === 'boolean') return { page, pageSize, drill };
+  return null;
+}
+
+export function reportCasesPage(report, { page, pageSize, drill }) {
+  const filtered = report.data.cases.filter(item => {
+    if (!drill) return true;
+    if (drill.field === 'category') return item.category === drill.value;
+    if (drill.field === 'variantId') return item.variantId === drill.value;
+    if (drill.field === 'score') return item.score !== null && item.score >= drill.value && (drill.value === 4 ? item.score <= 5 : item.score < drill.value + 1);
+    if (drill.field === 'metric') { const value = item.metricDetails?.[drill.value.name]; return typeof value === 'number' && value >= drill.value.min && (drill.value.last ? value <= drill.value.max : value < drill.value.max); }
+    return drill.value === 'passed' ? item.passed === true : drill.value === 'below' ? item.passed === false : drill.value === 'failed' ? item.status === 'failed' : item.status === 'completed' && item.score === null;
+  });
+  return { items: filtered.slice((page - 1) * pageSize, page * pageSize), total: filtered.length, page, pageSize };
+}
+
+export async function regressionReport(client, batchId, { includeCases = true, previewCases = null, previewPage = 1 } = {}) {
   const batch = (await client.query("SELECT * FROM experiment_batches WHERE id=$1 AND kind IN ('dataset','regression')", [batchId])).rows[0];
   if (!batch) return fail('评测批次不存在', 404);
   const baselineBatchId = batch.kind === 'regression' ? batch.baseline_batch_id : null;
@@ -112,7 +167,9 @@ export async function regressionReport(client, batchId) {
     return [...groups.values()].map(group => ({ name: group.name, count: group.count, scored: group.scored, failed: group.failed, unscored: group.unscored, passRate: group.scored ? group.passed / group.scored : null, averageScore: group.scored ? group.totalScore / group.scored : null }));
   };
   const histogram = Array.from({ length: 5 }, (_, index) => ({ range: `${index}–${index + 1}`, count: scored.filter(item => item.score >= index && (index === 4 ? item.score <= 5 : item.score < index + 1)).length }));
-  return ok({ batchId, kind: batch.kind, status: batch.status, datasetVersionId: batch.dataset_version_id, baselineBatchId, metricVersionId: metric.id, passThreshold: metric.pass_threshold, regressionThreshold: metric.regression_threshold, normalizedRegressionThreshold:Number(metric.normalized_regression_threshold), total: compared.length, scored: scored.length, passRate: scored.length ? scored.filter(item => item.passed).length / scored.length : null, box: summary(scored.map(item => item.score)), histogram, efficiency: summarizeEfficiency(rows.map(row => ({ latencyMs: row.latency_ms, completionTokens: row.completion_tokens }))), statusDistribution: { passed: scored.filter(item => item.passed).length, belowThreshold: scored.filter(item => !item.passed).length, failed: compared.filter(item => item.status === 'failed').length, unscored: compared.filter(item => item.status === 'completed' && item.score === null).length }, degraded: compared.filter(item => item.delta !== null && item.delta < -metric.regression_threshold).sort((a,b) => a.delta - b.delta), degradedMetrics:baselineBatchId ? degradedRunMetrics(rows,baseline,metric.goal_ranges,Number(metric.normalized_regression_threshold)) : [], removedCaseKeys: removed, byDifficulty: strata('difficulty'), byCategory: strata('category'), cases: compared });
+  const degraded = compared.filter(item => item.delta !== null && item.delta < -metric.regression_threshold).sort((a,b) => a.delta - b.delta);
+  const degradedMetrics = baselineBatchId ? degradedRunMetrics(rows,baseline,metric.goal_ranges,Number(metric.normalized_regression_threshold)) : [];
+  return ok({ batchId, kind: batch.kind, status: batch.status, datasetVersionId: batch.dataset_version_id, baselineBatchId, metricVersionId: metric.id, passThreshold: metric.pass_threshold, regressionThreshold: metric.regression_threshold, normalizedRegressionThreshold:Number(metric.normalized_regression_threshold), total: compared.length, scored: scored.length, passRate: scored.length ? scored.filter(item => item.passed).length / scored.length : null, box: summary(scored.map(item => item.score)), histogram, efficiency: summarizeEfficiency(rows.map(row => ({ latencyMs: row.latency_ms, completionTokens: row.completion_tokens }))), statusDistribution: { passed: scored.filter(item => item.passed).length, belowThreshold: scored.filter(item => !item.passed).length, failed: compared.filter(item => item.status === 'failed').length, unscored: compared.filter(item => item.status === 'completed' && item.score === null).length }, degraded: includeCases ? degraded : [], degradedCount: degraded.length, degradedMetrics: includeCases ? degradedMetrics : [], degradedMetricCount: degradedMetrics.length, removedCaseKeys: removed, byDifficulty: strata('difficulty'), byCategory: strata('category'), chartData: includeCases ? undefined : reportChartData(compared), cases: includeCases ? compared : previewCases === null ? [] : compared.slice((previewPage - 1) * previewCases, previewPage * previewCases) });
 }
 
 function titleSimilarity(left, right) {
@@ -404,12 +461,21 @@ async function handleExperimentEvaluationInner({ pathname, method, client, me, r
   }
   const datasetRunRoute = pathname.match(/^\/api\/experiment-definitions\/([^/]+)\/(dataset-run|regression)$/);
   if (datasetRunRoute && method === 'POST') return createBatch(client, datasetRunRoute[1], me, await readBody(), datasetRunRoute[2] === 'regression' ? 'regression' : 'dataset');
-  const reportRoute = pathname.match(/^\/api\/experiment-batches\/([^/]+)\/report$/);
+  const reportRoute = pathname.match(/^\/api\/experiment-batches\/([^/]+)\/report(?:\/(cases|degraded-metrics))?$/);
   if (reportRoute && method === 'GET') {
     const batch = (await client.query("SELECT owner_id FROM experiment_batches WHERE id=$1 AND kind IN ('dataset','regression')", [reportRoute[1]])).rows[0];
     if (!batch) return fail('评测报告不存在', 404);
     if (!isAdministrator(me) && batch.owner_id !== me.id) return fail('无权查看此报告', 403);
-    return regressionReport(client, reportRoute[1]);
+    if (reportRoute[2]) {
+      const options = reportPageOptions(url);
+      if (!options || (reportRoute[2] === 'degraded-metrics' && options.drill)) return fail('分页或筛选参数无效');
+      const report = await regressionReport(client, reportRoute[1]);
+      if (report.status !== 200) return report;
+      if (reportRoute[2] === 'cases') return ok(reportCasesPage(report, options));
+      const items = report.data.degradedMetrics;
+      return ok({ items: items.slice((options.page - 1) * options.pageSize, options.page * options.pageSize), total: items.length, page: options.page, pageSize: options.pageSize });
+    }
+    return regressionReport(client, reportRoute[1], { includeCases: url.searchParams.get('summary') !== '1' });
   }
   const annotationRoute = pathname.match(/^\/api\/experiment-runs\/([^/]+)\/annotation$/);
   if (annotationRoute) {
