@@ -64,7 +64,9 @@ async function privateDisclosure(client, repository, scan, model, selected) {
 
 async function verifyPrivateAnalysisAccess(client, job) {
   if (!job.private_disclosure) throw Object.assign(new Error('缺少私有代码模型授权'), { code: 'PRIVATE_CONSENT_REQUIRED' });
-  try { await assertGithubPrivateRepoAccess(client,job.owner_id,job.full_name); }
+  const identity = (await client.query('SELECT full_name,github_repository_id FROM project_repositories WHERE id=$1 AND owner_id=$2',[job.repository_id,job.owner_id])).rows[0];
+  if (!identity?.github_repository_id) throw Object.assign(new Error('仓库身份尚未核对'), { code: 'GITHUB_REPOSITORY_IDENTITY_REQUIRED' });
+  try { await assertGithubPrivateRepoAccess(client,job.owner_id,identity.full_name,identity.github_repository_id); }
   catch (error) { throw Object.assign(new Error('GitHub 私有仓库授权不可用'), { code: error instanceof GithubAuthorizationError ? 'GITHUB_AUTH_REQUIRED' : 'GITHUB_ACCESS_CHECK_FAILED' }); }
   let destination;
   try { destination = modelDestination((await resolveModelConnection(client,job.provider,job.connection_id)).baseUrl); }
@@ -225,11 +227,12 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
   try {
     await db.query("INSERT INTO project_analysis_attempts(analysis_id,attempt,estimated_max_cost_usd,status) VALUES($1,$2,$3,'analyzing') ON CONFLICT(analysis_id,attempt) DO UPDATE SET status='analyzing',started_at=CASE WHEN project_analysis_attempts.status='queued' THEN now() ELSE project_analysis_attempts.started_at END WHERE project_analysis_attempts.status IN ('queued','analyzing')", [id,job.attempts,job.estimated_max_cost_usd]);
     if ((await db.query('SELECT status FROM project_analyses WHERE id=$1', [id])).rows[0]?.status !== 'analyzing') return;
-    const repositoryAccess = (await db.query('SELECT is_private FROM project_repositories WHERE id=$1 AND owner_id=$2',[job.repository_id,job.owner_id])).rows[0];
+    const repositoryAccess = (await db.query('SELECT is_private,github_repository_id FROM project_repositories WHERE id=$1 AND owner_id=$2',[job.repository_id,job.owner_id])).rows[0];
     if (!repositoryAccess) throw Object.assign(new Error('仓库不存在'), { code: 'GITHUB_AUTH_REQUIRED' });
-    if (repositoryAccess.is_private) await verifyPrivateAnalysisAccess(db,job);
-    const scan = (await db.query('SELECT coverage_complete FROM project_scans WHERE id=$1', [job.scan_id])).rows[0];
+    const scan = (await db.query('SELECT coverage_complete,github_repository_id FROM project_scans WHERE id=$1', [job.scan_id])).rows[0];
     if (!scan) throw Object.assign(new Error('扫描记录不存在'), { code: 'SCAN_MISSING' });
+    if (!repositoryAccess.github_repository_id || !scan.github_repository_id || repositoryAccess.github_repository_id !== scan.github_repository_id) throw Object.assign(new Error('扫描缺少可信仓库身份'), { code: 'GITHUB_REPOSITORY_IDENTITY_REQUIRED' });
+    if (repositoryAccess.is_private) await verifyPrivateAnalysisAccess(db,job);
     const files = (await db.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1', [job.scan_id])).rows;
     if (job.baseline_version_id) job.requirement_document = (await db.query('SELECT content FROM project_requirement_baselines WHERE id=$1',[job.baseline_version_id])).rows[0]?.content || null;
     if (hasSensitiveMetadata(job)) throw Object.assign(new Error('分析输入包含凭据'), { code: 'SENSITIVE_INPUT' });
@@ -283,7 +286,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     if (repositoryAccess.is_private) await verifyPrivateAnalysisAccess(db,job);
     await saveReport(db, job, report, { selectedCount: selected.length, availableCount, coverageComplete, modules, technologies, results });
   } catch (error) {
-    const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE','CALL_OUTCOME_UNKNOWN','SENSITIVE_INPUT','ANALYSIS_BUDGET_EXCEEDED','MODEL_CONNECTION_CHANGED','PRIVATE_CONSENT_REQUIRED','GITHUB_AUTH_REQUIRED','GITHUB_ACCESS_CHECK_FAILED','MODEL_DESTINATION_CHANGED'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
+    const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE','CALL_OUTCOME_UNKNOWN','SENSITIVE_INPUT','ANALYSIS_BUDGET_EXCEEDED','MODEL_CONNECTION_CHANGED','PRIVATE_CONSENT_REQUIRED','GITHUB_AUTH_REQUIRED','GITHUB_ACCESS_CHECK_FAILED','GITHUB_REPOSITORY_IDENTITY_REQUIRED','MODEL_DESTINATION_CHANGED'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
     await db.query("UPDATE project_analyses SET status='failed',error_code=$2,summary=NULL,finished_at=now() WHERE id=$1 AND status='analyzing'", [id,errorCode]);
     await db.query("UPDATE project_analysis_attempts SET status=(SELECT status FROM project_analyses WHERE id=$1) WHERE analysis_id=$1 AND attempt=$2", [id,job.attempts]);
   } finally { clearInterval(cancellationPoll); if (running.get(id) === controller) running.delete(id); }
@@ -311,9 +314,10 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     const body = await readBody();
     if (!UUID.test(body?.scanId || '') || typeof body?.modelId !== 'string') return fail(400,'请选择扫描记录和模型');
     const scan = (await client.query("SELECT * FROM project_scans WHERE id=$1 AND repository_id=$2 AND status IN ('completed','partial')",[body.scanId,repositoryId])).rows[0];
+    if (repository.github_repository_id === null || scan?.github_repository_id !== repository.github_repository_id) return fail(409,'此扫描缺少已核对的 GitHub 仓库身份，请重新扫描');
     const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1',[body.modelId])).rows[0];
     if (!scan || !modelUsable(model,me) || !supportedProvider.has(model.provider) || !model.capabilities?.output?.includes('text') || !await connectionAvailable(client,model)) return fail(409,'扫描记录或模型不可用');
-    try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name); }
+    try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name,repository.github_repository_id); }
     catch (error) { return fail(error instanceof GithubAuthorizationError ? 403 : 502,error instanceof GithubAuthorizationError ? error.message : '暂时无法核验私有仓库授权'); }
     if (repository.baseline_version_id) repository.requirement_document = (await client.query('SELECT content FROM project_requirement_baselines WHERE id=$1',[repository.baseline_version_id])).rows[0]?.content || null;
     if (hasSensitiveMetadata({ ...repository, full_name: scan.full_name, branch: scan.branch })) return fail(422,'分析输入包含凭据');
@@ -330,7 +334,9 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     const repository = (await client.query('SELECT id,owner_id FROM project_repositories WHERE id=$1 AND owner_id=$2', [repositoryId,me.id])).rows[0];
     if (!repository) return fail(404,'项目不存在');
     if (!canAccess(me,'project_analyses','read',{ownerId:repository.owner_id})) return fail(403,'无权查看项目分析');
-    const rows = (await client.query("SELECT * FROM project_analyses WHERE repository_id=$1 AND id=ANY($2::uuid[]) AND status='completed'", [repositoryId,[olderId,newerId]])).rows;
+    const rows = (await client.query(`SELECT a.*,s.github_repository_id FROM project_analyses a
+      JOIN project_scans s ON s.id=a.scan_id
+      WHERE a.repository_id=$1 AND a.id=ANY($2::uuid[]) AND a.status='completed'`, [repositoryId,[olderId,newerId]])).rows;
     if (rows.length !== 2) return fail(404,'已完成报告不存在');
     const olderRow = rows.find(item => item.id === olderId), newerRow = rows.find(item => item.id === newerId);
     if (new Date(olderRow.finished_at).getTime() >= new Date(newerRow.finished_at).getTime()) return fail(400,'请按完成时间选择较早和较新的报告');
@@ -339,7 +345,8 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     const report = id => {
       const row = rows.find(item => item.id === id);
       return {
-        meta: { ...view(row), fullName: row.full_name }, branch: row.branch, baselineVersionId: row.baseline_version_id,
+        meta: { ...view(row), fullName: row.full_name }, branch: row.branch,
+        githubRepositoryId: row.github_repository_id, baselineVersionId: row.baseline_version_id,
         goal: row.goal, analysisCoverageComplete: row.analysis_coverage_complete,
         selectedFileCount: row.selected_file_count, availableFileCount: row.available_file_count,
         findings: findings.filter(item => item.analysis_id === id).map(item => ({ requirementId: item.requirement_id, title: item.title, status: item.status, detail: item.detail, evidence: item.evidence_path ? { type: item.evidence_type, path: item.evidence_path, line: item.evidence_line, excerpt: item.evidence_excerpt, gitSha: item.evidence_git_sha?.trim() || null } : null })),
@@ -461,6 +468,8 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (method === 'POST' && analysisId && action === 'retry') {
     const previous = (await client.query('SELECT * FROM project_analyses WHERE id=$1 AND repository_id=$2', [analysisId,repositoryId])).rows[0];
     if (!previous || previous.status !== 'failed' || previous.attempts >= previous.max_attempts) return fail(409,'分析不可重试或已达到次数上限');
+    const retryScan = (await client.query('SELECT github_repository_id FROM project_scans WHERE id=$1',[previous.scan_id])).rows[0];
+    if (!repository.github_repository_id || retryScan?.github_repository_id !== repository.github_repository_id) return fail(409,'原扫描缺少已核对的 GitHub 仓库身份，请重新扫描');
     const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1', [previous.model_id])).rows[0];
     if (!modelUsable(model,me) || !supportedProvider.has(previous.provider) || !model.capabilities?.output?.includes('text') || !await connectionAvailable(client,{ ...model, provider: previous.provider, connection_id: previous.connection_id })) return fail(409,'模型不可用或原连接未配置');
     const files = (await client.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1', [previous.scan_id])).rows;
@@ -529,6 +538,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (tokenBudget !== null && !TOKEN_BUDGETS.includes(tokenBudget) || costBudgetUsd !== null && !COST_BUDGETS.includes(costBudgetUsd)) return fail(400,'分析预算选项无效');
   const scan = (await client.query("SELECT * FROM project_scans WHERE id=$1 AND repository_id=$2 AND status IN ('completed','partial')", [body.scanId,repositoryId])).rows[0];
   if (!scan) return fail(404,'已完成的扫描记录不存在');
+  if (!repository.github_repository_id || scan.github_repository_id !== repository.github_repository_id) return fail(409,'此扫描缺少已核对的 GitHub 仓库身份，请重新扫描');
   if (autoApproval && (!repository.is_private || scan.auto_analysis_state !== 'approval_required')) return fail(409,'本次私有分析不在待审核状态');
   if (source === 'webhook' && (scan.trigger_source !== 'webhook' || repository.is_private !== autoApproval || !repository.webhook_scan_enabled || !repository.auto_analysis_enabled || repository.auto_analysis_model_id !== body.modelId || repository.auto_analysis_token_budget !== tokenBudget || Number(repository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) return fail(409,'自动分析设置或扫描来源已变化');
   const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1', [body.modelId])).rows[0];
@@ -542,13 +552,13 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (!selected.length) return fail(422,'扫描没有可分析的文本，请重新扫描');
   let disclosure = null;
   if (repository.is_private) {
-    try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name); }
+    try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name,repository.github_repository_id); }
     catch (error) { return fail(error instanceof GithubAuthorizationError ? 403 : 502,error instanceof GithubAuthorizationError ? error.message : '暂时无法核验私有仓库授权'); }
     try { disclosure = await privateDisclosure(client,repository,scan,model,selected); }
     catch { return fail(409,'模型数据目的地暂不可用'); }
     if (body.privateConsent !== true || body.disclosureDigest !== disclosure.digest) return fail(409,'私有代码范围或模型目的地已变化，请重新预览并确认');
   }
-  const jobInput = { repository_id: repositoryId, full_name: scan.full_name, branch: scan.branch, commit_sha: scan.commit_sha, goal: repository.goal, requirement_baseline: repository.requirement_baseline, requirement_document: repository.requirement_document, baseline_version_id: repository.baseline_version_id, analysis_plan_version: CURRENT_ANALYSIS_PLAN_VERSION, model_id: model.id, provider: model.provider, api_model: model.api_model, connection_id: modelConnection?.id || null, connection_version: modelConnection?.version || null };
+  const jobInput = { repository_id: repositoryId, github_repository_id: scan.github_repository_id, full_name: scan.full_name, branch: scan.branch, commit_sha: scan.commit_sha, goal: repository.goal, requirement_baseline: repository.requirement_baseline, requirement_document: repository.requirement_document, baseline_version_id: repository.baseline_version_id, analysis_plan_version: CURRENT_ANALYSIS_PLAN_VERSION, model_id: model.id, provider: model.provider, api_model: model.api_model, connection_id: modelConnection?.id || null, connection_version: modelConnection?.version || null };
   const plan = modelPlan(jobInput,selected);
   const reusable = !repository.is_private && modelConnection && !scan.force_full ? await findReusableProjectCalls(client,jobInput,plan,impactedModules) : new Map();
   const pendingPlan = plan.filter(group => !reusable.has(group.moduleKey));

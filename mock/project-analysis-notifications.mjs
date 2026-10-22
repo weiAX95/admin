@@ -3,6 +3,7 @@ import { notifyUser } from './app-notifications.mjs';
 
 const reportView = (row, findings, suggestions) => ({
   meta: { id: row.id }, branch: row.branch,
+  githubRepositoryId: row.github_repository_id,
   baselineVersionId: row.baseline_version_id, goal: row.goal,
   analysisCoverageComplete: row.analysis_coverage_complete,
   selectedFileCount: row.selected_file_count,
@@ -21,16 +22,19 @@ export async function processProjectAnalysisNotifications(pool) {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
-      const current = (await client.query(`SELECT * FROM project_analyses
-        WHERE change_notification_state='pending' AND status='completed'
-        ORDER BY finished_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`)).rows[0];
+      const current = (await client.query(`SELECT a.*,s.github_repository_id FROM project_analyses a
+        JOIN project_scans s ON s.id=a.scan_id
+        WHERE a.change_notification_state='pending' AND a.status='completed'
+        ORDER BY a.finished_at,a.id LIMIT 1 FOR UPDATE OF a SKIP LOCKED`)).rows[0];
       if (!current) { await client.query('COMMIT'); break; }
-      const previous = (await client.query(`SELECT * FROM project_analyses
-        WHERE repository_id=$1 AND status='completed' AND id<>$2
-          AND finished_at<$3 AND branch=$4 AND baseline_version_id=$5
-          AND goal=$6 AND analysis_coverage_complete=true
-          AND selected_file_count=$7 AND available_file_count=$8
-        ORDER BY finished_at DESC,id DESC LIMIT 1`, [current.repository_id,current.id,current.finished_at,current.branch,current.baseline_version_id,current.goal,current.selected_file_count,current.available_file_count])).rows[0];
+      const previous = (await client.query(`SELECT a.*,s.github_repository_id FROM project_analyses a
+        JOIN project_scans s ON s.id=a.scan_id
+        WHERE a.repository_id=$1 AND a.status='completed' AND a.id<>$2
+          AND a.finished_at<$3 AND a.branch=$4 AND a.baseline_version_id=$5
+          AND a.goal=$6 AND a.analysis_coverage_complete=true
+          AND a.selected_file_count=$7 AND a.available_file_count=$8
+          AND s.github_repository_id=$9
+        ORDER BY a.finished_at DESC,a.id DESC LIMIT 1`, [current.repository_id,current.id,current.finished_at,current.branch,current.baseline_version_id,current.goal,current.selected_file_count,current.available_file_count,current.github_repository_id])).rows[0];
       let notificationState = 'skipped';
       if (previous && current.analysis_coverage_complete) {
         const ids = [previous.id,current.id];

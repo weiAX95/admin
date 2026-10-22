@@ -121,7 +121,7 @@ export async function githubUserFetch(client, ownerId, url) {
   return response;
 }
 
-export async function assertGithubPrivateRepoAccess(client, ownerId, fullName) {
+export async function assertGithubPrivateRepoAccess(client, ownerId, fullName, expectedRepositoryId = null) {
   if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(fullName || '')) throw new GithubAuthorizationError('仓库名称无效');
   const response = await githubUserFetch(client, ownerId, `https://api.github.com/repos/${fullName}`);
   if ([403,429].includes(response.status) && (response.status === 429 || response.headers.get('x-ratelimit-remaining') === '0' || response.headers.get('retry-after'))) {
@@ -131,7 +131,9 @@ export async function assertGithubPrivateRepoAccess(client, ownerId, fullName) {
   if ([403,404].includes(response.status)) throw new GithubAuthorizationError('GitHub App 当前无权访问该私有仓库');
   if (!response.ok) throw new Error('暂时无法核验 GitHub 仓库权限');
   const info = await response.json();
-  if (info.private !== true || info.full_name?.toLowerCase() !== fullName.toLowerCase()) throw new GithubAuthorizationError('该仓库已不属于当前私有授权范围');
+  if (info.private !== true || (expectedRepositoryId === null
+    ? info.full_name?.toLowerCase() !== fullName.toLowerCase()
+    : info.id !== Number(expectedRepositoryId))) throw new GithubAuthorizationError('该仓库已不属于当前私有授权范围');
   return info;
 }
 
@@ -242,8 +244,8 @@ export async function handleProjectGithubAuth({ pathname, method, client, me, re
     try {
       await connection.query('BEGIN');
       await connection.query('DELETE FROM project_github_oauth_states WHERE owner_id=$1', [me.id]);
-      await connection.query('DELETE FROM project_github_connections WHERE owner_id=$1', [me.id]);
       await connection.query('UPDATE project_repositories SET webhook_scan_enabled=false,auto_analysis_enabled=false,updated_at=now() WHERE owner_id=$1 AND is_private=true AND webhook_scan_enabled=true', [me.id]);
+      await connection.query('DELETE FROM project_github_connections WHERE owner_id=$1', [me.id]);
       if (req) await appendSecurityAudit(connection,req,me,'github_authorization.disconnected','project_github_connections',me.id);
       await connection.query('COMMIT');
     } catch (error) { await connection.query('ROLLBACK'); throw error; }

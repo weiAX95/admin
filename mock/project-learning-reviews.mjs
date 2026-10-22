@@ -8,7 +8,8 @@ const fail = (status, error) => ({ status, data: { error } });
 
 async function privateAccess(client, me, repository) {
   if (!repository.is_private) return null;
-  try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name); return null; }
+  if (repository.github_repository_id === null) return fail(409,'项目仓库身份尚未核对，请所属账号先完成核对');
+  try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name,repository.github_repository_id); return null; }
   catch (error) {
     return error instanceof GithubAuthorizationError
       ? fail(403,'请先授权此私有仓库的 GitHub 读取权限')
@@ -27,7 +28,7 @@ export async function handleProjectLearningReviews({ pathname, method, client, m
     const page = Number(url.searchParams.get('page') || 1);
     if (!Number.isInteger(page) || page < 1 || page > 1000) return fail(400,'页码无效');
     if (repositoryId) {
-      const repository = (await client.query('SELECT id,full_name,is_private FROM project_repositories WHERE id=$1',[repositoryId])).rows[0];
+      const repository = (await client.query('SELECT id,full_name,is_private,github_repository_id FROM project_repositories WHERE id=$1',[repositoryId])).rows[0];
       if (!repository) return fail(404,'项目不存在');
       const denied = await privateAccess(client,me,repository);
       if (denied) return denied;
@@ -59,7 +60,7 @@ export async function handleProjectLearningReviews({ pathname, method, client, m
     || Array.from(body.rationale.trim()).length < 20 || Array.from(body.rationale.trim()).length > 2000) {
     return fail(400,'请按两项标准核验并填写 20–2000 字理由');
   }
-  const evidence = (await client.query(`SELECT e.id,e.owner_id,e.repository_id,r.full_name,r.is_private
+  const evidence = (await client.query(`SELECT e.id,e.owner_id,e.repository_id,r.full_name,r.is_private,r.github_repository_id
     FROM project_learning_evidence e JOIN project_repositories r ON r.id=e.repository_id
     WHERE e.id=$1`,[evidenceId])).rows[0];
   if (!evidence) return fail(404,'学习记录不存在');
@@ -71,6 +72,14 @@ export async function handleProjectLearningReviews({ pathname, method, client, m
   const connection = pooled ? await client.connect() : client;
   try {
     await connection.query('BEGIN');
+    if (evidence.is_private) {
+      const currentRepository = (await connection.query('SELECT github_repository_id FROM project_repositories WHERE id=$1 FOR SHARE',[evidence.repository_id])).rows[0];
+      if (!currentRepository?.github_repository_id || currentRepository.github_repository_id !== evidence.github_repository_id
+        || !(await connection.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 FOR SHARE',[me.id])).rowCount) {
+        await connection.query('ROLLBACK');
+        return fail(403,'私有仓库身份或授权已变化，请刷新后重试');
+      }
+    }
     const reviewed = (await connection.query(`UPDATE project_learning_evidence_reviews
       SET state=$2,reviewer_id=$3,core_correct=$4,boundary_verified=$5,rationale=$6,reviewed_at=now()
       WHERE evidence_id=$1 AND owner_id<>$3 AND state='pending'

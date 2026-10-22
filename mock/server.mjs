@@ -78,7 +78,7 @@ import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
 import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, handleProjectGithubAuth } from './project-github-auth.mjs';
-import { handleProjectGithubWebhook } from './project-github-webhooks.mjs';
+import { handleProjectGithubWebhook, processProjectGithubDeliveries } from './project-github-webhooks.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
 import { processProjectAutoAnalyses } from './project-auto-analyses.mjs';
@@ -2368,11 +2368,11 @@ function routeHttpRequest(req, res, pathname, method) {
       const pathname = url.pathname;
       const projectId = pathname.match(/^\/api\/project-repositories\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\/|$)/i)?.[1];
       if (projectId) {
-        const privateRepository = (await pool.query('SELECT full_name FROM project_repositories WHERE id=$1 AND owner_id=$2 AND is_private=true', [projectId,me.id])).rows[0];
+        const privateRepository = (await pool.query('SELECT full_name,github_repository_id FROM project_repositories WHERE id=$1 AND owner_id=$2 AND is_private=true', [projectId,me.id])).rows[0];
         const authCleanup = req.method === 'POST' && /^\/api\/project-repositories\/[0-9a-f-]{36}\/analyses\/[0-9a-f-]{36}\/cancel$/i.test(pathname)
           || req.method === 'PATCH' && /^\/api\/project-repositories\/[0-9a-f-]{36}\/(?:webhook-scan|auto-analysis)$/i.test(pathname);
         if (privateRepository && !authCleanup) {
-          try { await assertGithubPrivateRepoAccess(pool,me.id,privateRepository.full_name); }
+          try { await assertGithubPrivateRepoAccess(pool,me.id,privateRepository.full_name,privateRepository.github_repository_id); }
           catch (error) { return sendImmediate(res,error instanceof GithubAuthorizationError ? 403 : 502,{ error: error instanceof GithubAuthorizationError ? error.message : '暂时无法核验 GitHub 私有仓库权限' }); }
         }
       }
@@ -2571,6 +2571,8 @@ try {
   });
   server.listen(PORT, "127.0.0.1", () => {
     console.log(`[mock] PostgreSQL API listening on http://127.0.0.1:${PORT}`);
+    void processProjectGithubDeliveries(pool).catch(error => console.error('[project-github] delivery processing failed:',error));
+    setInterval(() => { void processProjectGithubDeliveries(pool).catch(error => console.error('[project-github] delivery processing failed:',error)); }, 5000).unref();
     setInterval(() => { void resumeProjectScans(pool, undefined, false).catch(error => console.error('[project-scans] resume failed:',error)); }, 5000).unref();
     setInterval(() => { void resumeProjectAnalyses(pool).catch(error => console.error('[project-analyses] resume failed:',error)); }, 5000).unref();
     setInterval(() => { void processProjectAutoAnalyses(pool).catch(error => console.error('[project-auto-analyses] processing failed:',error)); }, 5000).unref();

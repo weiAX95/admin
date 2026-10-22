@@ -4,7 +4,7 @@ import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, 
 import { Link } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
-import { createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, updateProjectWebhookScan, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
+import { confirmProjectGithubIdentity, createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, previewProjectGithubIdentity, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, updateProjectWebhookScan, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectGithubIdentityPreview, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
@@ -22,6 +22,10 @@ export default function ProjectAnalysis() {
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState('');
   const [refreshing, setRefreshing] = useState('');
+  const [identityLoading, setIdentityLoading] = useState('');
+  const [identitySaving, setIdentitySaving] = useState(false);
+  const [identityPreview, setIdentityPreview] = useState<{ item: ProjectRepository; preview: ProjectGithubIdentityPreview } | null>(null);
+  const [identityConfirmed, setIdentityConfirmed] = useState(false);
   const [webhookSaving, setWebhookSaving] = useState('');
   const [selectedRepositoryId, setSelectedRepositoryId] = useState(() => new URLSearchParams(window.location.search).get('repositoryId') || '');
   const [baselineRepositoryId, setBaselineRepositoryId] = useState('');
@@ -97,6 +101,23 @@ export default function ProjectAnalysis() {
     try { await refreshProjectRepository(id); await load(); message.success('分支 commit 已更新'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '读取分支失败'); }
     finally { setRefreshing(''); }
+  };
+  const previewIdentity = async (item: ProjectRepository) => {
+    setIdentityLoading(item.id);
+    try { setIdentityPreview({ item, preview: await previewProjectGithubIdentity(item.id) }); setIdentityConfirmed(false); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '仓库身份核对失败'); }
+    finally { setIdentityLoading(''); }
+  };
+  const confirmIdentity = async () => {
+    if (!identityPreview || !identityConfirmed) return;
+    setIdentitySaving(true);
+    try {
+      await confirmProjectGithubIdentity(identityPreview.item.id,identityPreview.preview.candidate);
+      setIdentityPreview(null);
+      await load();
+      message.success('仓库身份已核对；自动扫描仍需单独开启');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '仓库身份确认失败，请重新预览'); }
+    finally { setIdentitySaving(false); }
   };
   const changeWebhookScan = async (item: ProjectRepository, enabled: boolean) => {
     setWebhookSaving(item.id);
@@ -230,16 +251,24 @@ export default function ProjectAnalysis() {
     <Card title="已接入项目">
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
       <Table rowKey="id" loading={loading} dataSource={items} scroll={{ x: 1100 }} pagination={{ pageSize: 10 }} columns={[
-        { title: '仓库', render: (_, item: ProjectRepository) => <Space><a href={item.url} target="_blank" rel="noopener noreferrer">{item.fullName}</a>{item.private && <Tag color="purple">私有</Tag>}</Space> },
+        { title: '仓库', render: (_, item: ProjectRepository) => <Space><a href={item.url} target="_blank" rel="noopener noreferrer">{item.fullName}</a>{item.private && <Tag color="purple">私有</Tag>}{item.githubRepositoryId === null && <Tag color="warning">身份待核对</Tag>}</Space> },
         { title: '分支', dataIndex: 'branch', render: value => <Tag>{value}</Tag> },
         { title: '当前 commit', dataIndex: 'commitSha', render: (value: string, item: ProjectRepository) => <a href={`${item.url}/commit/${value}`} target="_blank" rel="noopener noreferrer" title={value}><code>{value.slice(0, 10)}</code></a> },
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
         { title: '最近完成分析', render: (_, item: ProjectRepository) => item.lastAnalysisAt && item.lastAnalyzedCommitSha ? <Space direction="vertical" size={0}><span>{new Date(item.lastAnalysisAt).toLocaleString('zh-CN')}</span><a href={`${item.url}/commit/${item.lastAnalyzedCommitSha}`} target="_blank" rel="noopener noreferrer" title={item.lastAnalyzedCommitSha}><code>{item.lastAnalyzedCommitSha.slice(0, 10)}</code></a>{item.commitSha !== item.lastAnalyzedCommitSha && <Tag color="warning">有新提交待分析</Tag>}</Space> : '尚无完成的分析' },
-        { title: '提交后扫描', render: (_, item: ProjectRepository) => <Tooltip title="收到已验证的 GitHub 分支提交事件后自动创建扫描；公开仓库可另行开启自动模型分析"><Switch aria-label={`${item.fullName} 提交后自动扫描`} checked={item.webhookScanEnabled} loading={webhookSaving === item.id} onChange={enabled => void changeWebhookScan(item,enabled)} /></Tooltip> },
-        { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button><Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
+        { title: '提交后扫描', render: (_, item: ProjectRepository) => <Tooltip title={item.githubRepositoryId === null ? '先核对 GitHub 仓库身份，再开启自动扫描' : '收到已验证的 GitHub 分支提交事件后自动创建扫描；公开仓库可另行开启自动模型分析'}><span><Switch aria-label={`${item.fullName} 提交后自动扫描`} checked={item.webhookScanEnabled} disabled={item.githubRepositoryId === null} loading={webhookSaving === item.id} onChange={enabled => void changeWebhookScan(item,enabled)} /></span></Tooltip> },
+        { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button>{item.githubRepositoryId === null ? <Button type="link" loading={identityLoading === item.id} onClick={() => void previewIdentity(item)}>核对仓库身份</Button> : <Button type="link" loading={refreshing === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button>}<Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />
     </Card>
+    <Modal title="核对 GitHub 仓库身份" open={Boolean(identityPreview)} onCancel={() => { if (!identitySaving) setIdentityPreview(null); }} onOk={() => void confirmIdentity()} okText="确认绑定" okButtonProps={{ loading: identitySaving, disabled: !identityConfirmed }} cancelButtonProps={{ disabled: identitySaving }}>
+      {identityPreview && <Space direction="vertical" style={{ width: '100%' }}>
+        <Alert type="warning" showIcon message="旧项目缺少 GitHub 仓库 ID" description="仓库名称可能被改名或重新占用。请在 GitHub 核对下方仓库确实是原项目；确认前不会恢复自动扫描。" />
+        <Typography.Paragraph>原记录：{identityPreview.preview.current.fullName} · {identityPreview.preview.current.commitSha.slice(0, 10)}</Typography.Paragraph>
+        <Typography.Paragraph>当前 GitHub 仓库：<a href={`https://github.com/${identityPreview.preview.candidate.fullName}`} target="_blank" rel="noopener noreferrer">{identityPreview.preview.candidate.fullName}</a> · ID {identityPreview.preview.candidate.githubRepositoryId} · 分支 {identityPreview.preview.candidate.branch} · {identityPreview.preview.candidate.commitSha.slice(0, 10)}</Typography.Paragraph>
+        <Checkbox checked={identityConfirmed} onChange={event => setIdentityConfirmed(event.target.checked)}>我已核对这是原项目对应的 GitHub 仓库</Checkbox>
+      </Space>}
+    </Modal>
     <Modal title={editing ? `编辑项目 · ${editing.fullName}` : '编辑项目'} open={Boolean(editing)} forceRender onCancel={() => { if (!editSaving) setEditing(null); }} onOk={() => editForm.submit()} okText="保存修改" okButtonProps={{ loading: editSaving }} cancelButtonProps={{ disabled: editSaving }}>
       {editError && <Alert type="error" showIcon message={editError} style={{ marginBottom: 16 }} />}
       <Typography.Paragraph type="secondary">修改后只影响后续分析；已有报告保留创建时的目标与需求快照。</Typography.Paragraph>

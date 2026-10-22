@@ -52,9 +52,15 @@ async function getJson(fetchGithub, url) {
   return response.json();
 }
 
-export async function scanPublicRepository({ fullName, commitSha, fetchGithub = githubFetch, cachedBlobs = new Map(), maxFiles = 200, maxFileBytes = 262144, maxTotalBytes = 5 * 1024 * 1024, maxTreeRequests = 100, maxIndexEntries = 5000 }) {
+export async function scanPublicRepository({ fullName, commitSha, expectedRepositoryId = null, fetchGithub = githubFetch, cachedBlobs = new Map(), maxFiles = 200, maxFileBytes = 262144, maxTotalBytes = 5 * 1024 * 1024, maxTreeRequests = 100, maxIndexEntries = 5000 }) {
   if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(fullName || '') || !SHA.test(commitSha || '')) throw new Error('仓库或 commit SHA 无效');
-  const base = `https://api.github.com/repos/${fullName}/git`;
+  let resolvedFullName = fullName;
+  if (expectedRepositoryId !== null) {
+    const repository = await getJson(fetchGithub,`https://api.github.com/repos/${fullName}`);
+    if (repository?.id !== Number(expectedRepositoryId)) throw Object.assign(new Error('GitHub 仓库身份已变化'),{ code: 'GITHUB_REPOSITORY_IDENTITY_CHANGED' });
+    if (typeof repository.full_name === 'string' && /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(repository.full_name)) resolvedFullName = repository.full_name;
+  }
+  const base = `https://api.github.com/repos/${resolvedFullName}/git`;
   const commit = await getJson(fetchGithub, `${base}/commits/${commitSha}`);
   const treeSha = commit?.tree?.sha;
   if (!SHA.test(treeSha || '')) throw new Error('commit 没有可用的树对象');

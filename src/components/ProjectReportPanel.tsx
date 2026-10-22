@@ -97,8 +97,9 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const loadedMore = useRef(false);
 
   useEffect(() => {
-    setScanId(current => scans.some(scan => scan.id === current && ['completed', 'partial'].includes(scan.status)) ? current : scans.find(scan => ['completed', 'partial'].includes(scan.status))?.id || '');
-  }, [scans]);
+    const eligible = scans.filter(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && ['completed', 'partial'].includes(scan.status));
+    setScanId(current => eligible.some(scan => scan.id === current) ? current : eligible[0]?.id || '');
+  }, [scans, repository.githubRepositoryId]);
   useEffect(() => {
     const analysisId = new URLSearchParams(window.location.search).get('analysisId');
     if (!analysisId) return;
@@ -334,7 +335,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     catch (cause) { setError(cause instanceof Error ? cause.message : '需求文档读取失败'); }
     finally { setRequirementLoading(false); }
   };
-  const reviewScan = report && scans.find(scan => scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status));
+  const reviewScan = report && scans.find(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status));
   const reviewModelAvailable = report && models.some(model => model.id === report.modelId);
   const suggestionOrder = report ? orderProjectSuggestions(report.suggestions) : null;
   const renderSnapshotTask = (task: ProjectAnalysisReport['linkedTasks'][number]) => <Space key={task.id} size="small" wrap><Tag>{taskStates[task.status] || task.status} · {task.progress === null ? '进度未知' : `${Math.round(task.progress)}%`}</Tag>{task.currentlyAvailable ? <Link to={`/tasks/${task.id}`}>{task.title}</Link> : <Typography.Text type="secondary">{task.title}（当前不可访问）</Typography.Text>}</Space>;
@@ -345,15 +346,16 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <Select aria-label="自动分析模型" placeholder="选择模型" value={autoModelId || undefined} onChange={setAutoModelId} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
         <Select aria-label="自动分析 token 上限" value={autoTokenBudget} onChange={setAutoTokenBudget} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 170 }} options={[30000,60000,120000].map(value => ({ value, label: `${value.toLocaleString()} token` }))} />
         <Select aria-label="自动分析单次费用上限" value={autoCostBudgetUsd} onChange={setAutoCostBudgetUsd} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 170 }} options={[0.1,0.5,1,5].map(value => ({ value, label: `最多 $${value.toFixed(2)}` }))} />
-        <Switch aria-label="提交后自动模型分析" checked={repository.autoAnalysisEnabled} loading={autoSaving} disabled={!repository.autoAnalysisEnabled && (!repository.webhookScanEnabled || !autoModelId)} onChange={value => void setAutoAnalysis(value)} />
+        <Switch aria-label="提交后自动模型分析" checked={repository.autoAnalysisEnabled} loading={autoSaving} disabled={!repository.autoAnalysisEnabled && (repository.githubRepositoryId === null || !repository.webhookScanEnabled || !autoModelId)} onChange={value => void setAutoAnalysis(value)} />
         <Typography.Text>{repository.autoAnalysisEnabled ? '已开启' : '未开启'}</Typography.Text>
       </Space>
       <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>{repository.private ? '先开启“提交后扫描”。每次扫描结束后仍需查看私有代码发送范围，并由你确认本次模型调用。' : '先开启“提交后扫描”，再单独确认持续模型调用。'}已开启时如需更换模型或费用上限，请先关闭后重新配置。</Typography.Paragraph>
-      {repository.private && repository.autoAnalysisEnabled && scans.filter(item => item.autoAnalysisState === 'approval_required').map(item => <div key={item.id} style={{ marginTop: 8 }}><Button loading={starting} onClick={() => void start(item.id, repository.autoAnalysisModelId || '', { tokenBudget: repository.autoAnalysisTokenBudget, costBudgetUsd: repository.autoAnalysisCostBudgetUsd }, true)}>审核 {item.commitSha.slice(0,10)} 的发送范围并分析</Button></div>)}
+      {repository.private && repository.autoAnalysisEnabled && scans.filter(item => item.githubRepositoryId !== null && item.githubRepositoryId === repository.githubRepositoryId && item.autoAnalysisState === 'approval_required').map(item => <div key={item.id} style={{ marginTop: 8 }}><Button loading={starting} onClick={() => void start(item.id, repository.autoAnalysisModelId || '', { tokenBudget: repository.autoAnalysisTokenBudget, costBudgetUsd: repository.autoAnalysisCostBudgetUsd }, true)}>审核 {item.commitSha.slice(0,10)} 的发送范围并分析</Button></div>)}
     </Card>
+    {scans.some(scan => scan.githubRepositoryId === null) && <Alert type="info" showIcon message="旧扫描仅供查看" description="仓库身份绑定前的扫描无法证明来源，不能用于新报告；请核对仓库后重新扫描。" style={{ marginBottom: 16 }} />}
     <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
     <Space wrap style={{ marginBottom: 16 }}>
-      <Select aria-label="扫描记录" placeholder="选择扫描记录" value={scanId || undefined} onChange={setScanId} style={{ minWidth: 230 }} options={scans.filter(scan => ['completed', 'partial'].includes(scan.status)).map(scan => ({ value: scan.id, label: `${scan.commitSha.slice(0, 10)} · ${scan.status === 'partial' ? '部分覆盖' : '完整覆盖'}${scan.forceFull ? ' · 全量重扫' : ''}` }))} />
+      <Select aria-label="扫描记录" placeholder="选择扫描记录" value={scanId || undefined} onChange={setScanId} style={{ minWidth: 230 }} options={scans.filter(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && ['completed', 'partial'].includes(scan.status)).map(scan => ({ value: scan.id, label: `${scan.commitSha.slice(0, 10)} · ${scan.status === 'partial' ? '部分覆盖' : '完整覆盖'}${scan.forceFull ? ' · 全量重扫' : ''}` }))} />
       <Select aria-label="分析模型" placeholder="选择分析模型" value={modelId || undefined} onChange={setModelId} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
       <Select aria-label="分析 token 上限" value={tokenBudget} onChange={setTokenBudget} style={{ minWidth: 170 }} options={[{ value: null, label: 'token：仅系统配额' }, ...[30000,60000,120000].map(value => ({ value, label: `${value.toLocaleString()} token` }))]} />
       <Select aria-label="单次分析费用上限" value={costBudgetUsd} onChange={setCostBudgetUsd} style={{ minWidth: 170 }} options={[{ value: null, label: '费用：仅每日预算' }, ...[0.1,0.5,1,5].map(value => ({ value, label: `最多 $${value.toFixed(2)}` }))]} />

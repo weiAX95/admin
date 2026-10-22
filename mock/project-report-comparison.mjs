@@ -2,6 +2,9 @@ const key = value => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
 
 export function compareProjectReports(older, newer) {
   const limitations = [];
+  const sameRepositoryIdentity = Boolean(older.githubRepositoryId && newer.githubRepositoryId
+    && older.githubRepositoryId === newer.githubRepositoryId);
+  if (!sameRepositoryIdentity) limitations.push('仓库身份不同或旧扫描缺少可信仓库身份');
   if (older.branch !== newer.branch) limitations.push('分支不同');
   if (!older.baselineVersionId || older.baselineVersionId !== newer.baselineVersionId) limitations.push('需求基线版本不同或缺失');
   if (older.goal !== newer.goal) limitations.push('项目目标不同');
@@ -9,7 +12,7 @@ export function compareProjectReports(older, newer) {
   if (older.selectedFileCount !== newer.selectedFileCount || older.availableFileCount !== newer.availableFileCount) limitations.push('进入分析的文件数量或可用文件数量不同');
 
   const changes = [];
-  if (older.baselineVersionId && older.baselineVersionId === newer.baselineVersionId && older.branch === newer.branch && older.goal === newer.goal) {
+  if (sameRepositoryIdentity && older.baselineVersionId && older.baselineVersionId === newer.baselineVersionId && older.branch === newer.branch && older.goal === newer.goal) {
     const group = report => {
       const result = new Map();
       for (const finding of report.findings) {

@@ -36,9 +36,11 @@ export async function findReusableProjectCalls(client, job, plan, impactedModule
     const fingerprint = projectCallFingerprint(job,group);
     const rows = (await client.query(`SELECT c.response_output,a.id AS source_analysis_id,a.commit_sha AS source_commit_sha
       FROM project_analysis_module_calls c JOIN project_analyses a ON a.id=c.analysis_id
+      JOIN project_scans s ON s.id=a.scan_id
       WHERE a.repository_id=$1 AND a.status='completed' AND c.module_key=$2 AND c.input_fingerprint=$3
+        AND s.github_repository_id=$4
         AND c.status='completed' AND c.response_output IS NOT NULL
-      ORDER BY a.created_at DESC,c.completed_at DESC LIMIT 3`,[job.repository_id,group.moduleKey,fingerprint])).rows;
+      ORDER BY a.created_at DESC,c.completed_at DESC LIMIT 3`,[job.repository_id,group.moduleKey,fingerprint,job.github_repository_id])).rows;
     const match = rows.find(row => cachedProjectCallValid(job,group,row.response_output));
     if (match) reusable.set(group.moduleKey,{ fingerprint, output: match.response_output, sourceAnalysisId: match.source_analysis_id, sourceCommitSha: match.source_commit_sha.trim() });
   }

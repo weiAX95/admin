@@ -5,6 +5,7 @@ export interface ProjectRepository {
   ownerId: string;
   fullName: string;
   private: boolean;
+  githubRepositoryId: number | null;
   webhookScanEnabled: boolean;
   autoAnalysisEnabled: boolean;
   autoAnalysisModelId: string | null;
@@ -35,6 +36,16 @@ export const updateProjectRepository = (item: ProjectRepository, body: { goal: s
   ...body, expectedGoal: item.goal, expectedRequirementBaseline: item.requirementBaseline, expectedBaselineVersionId: item.baselineVersionId,
 });
 export const refreshProjectRepository = (id: string) => http.post<ProjectRepository>(`/project-repositories/${id}/refresh`, {});
+export interface ProjectGithubIdentityPreview {
+  current: { fullName: string; commitSha: string };
+  candidate: { githubRepositoryId: number; fullName: string; branch: string; commitSha: string };
+}
+export const previewProjectGithubIdentity = (id: string) => http.get<ProjectGithubIdentityPreview>(`/project-repositories/${id}/identity-preview`);
+export const confirmProjectGithubIdentity = (id: string, candidate: ProjectGithubIdentityPreview['candidate']) => http.post<ProjectRepository>(`/project-repositories/${id}/identity-confirm`, {
+  expectedGithubRepositoryId: candidate.githubRepositoryId,
+  expectedFullName: candidate.fullName,
+  expectedCommitSha: candidate.commitSha,
+});
 export const updateProjectWebhookScan = (item: ProjectRepository, enabled: boolean) => http.patch<ProjectRepository>(`/project-repositories/${item.id}/webhook-scan`, { enabled, expectedEnabled: item.webhookScanEnabled });
 export const updateProjectAutoAnalysis = (item: ProjectRepository, config: { enabled: boolean; modelId?: string; tokenBudget?: number; costBudgetUsd?: number; confirmRecurringCost?: boolean }) => http.patch<ProjectRepository>(`/project-repositories/${item.id}/auto-analysis`, { ...config, expectedEnabled: item.autoAnalysisEnabled });
 export interface ProjectLinkedTask { id: string; title: string; status: string; progress: number | null; ownerId?: string; requirementId: string | null }
@@ -50,6 +61,7 @@ export const createProjectRequirementBaseline = (repositoryId: string, content: 
 export interface ProjectScan {
   id: string;
   repositoryId: string;
+  githubRepositoryId: number | null;
   commitSha: string;
   treeSha: string | null;
   status: 'queued' | 'scanning' | 'completed' | 'partial' | 'failed';
