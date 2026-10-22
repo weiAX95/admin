@@ -24,15 +24,92 @@ function orderByDependencies(tasks, edges) {
     .sort((a,b) => a.dependencyLevel-b.dependencyLevel || (priority[a.priority] ?? 3)-(priority[b.priority] ?? 3) || a.title.localeCompare(b.title,'zh-CN') || a.id.localeCompare(b.id));
 }
 
+async function setPrerequisiteTaskMapping({ repositoryId, analysisId, suggestionId, indexText, client, me, readBody, req }) {
+  if (!UUID.test(suggestionId) || !/^(0|[1-4])$/.test(indexText)) return fail(400,'前置知识位置无效');
+  const body = await readBody();
+  if (!body || typeof body !== 'object' || Array.isArray(body)
+    || Object.keys(body).length !== 2 || !Object.hasOwn(body,'taskId') || !Object.hasOwn(body,'expectedVersion')
+    || body.taskId !== null && (typeof body.taskId !== 'string' || !body.taskId || body.taskId.length > 200 || body.taskId.trim() !== body.taskId)
+    || !Number.isInteger(body.expectedVersion) || body.expectedVersion < 0) return fail(400,'前置任务映射或版本无效');
+  const prerequisiteIndex = Number(indexText);
+  const pooled = client instanceof pg.Pool;
+  const connection = pooled ? await client.connect() : client;
+  try {
+    await connection.query('BEGIN');
+    const row = (await connection.query(`SELECT s.prerequisites,a.status AS analysis_status,a.goal AS report_goal,
+        a.requirement_baseline AS report_baseline,a.baseline_version_id AS report_baseline_version_id,
+        a.commit_sha AS report_commit,a.branch AS report_branch,r.goal AS current_goal,
+        r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,
+        r.commit_sha AS current_commit,r.branch AS current_branch
+      FROM project_analysis_suggestions s JOIN project_analyses a ON a.id=s.analysis_id
+      JOIN project_repositories r ON r.id=a.repository_id
+      WHERE s.id=$1 AND a.id=$2 AND r.id=$3 AND r.owner_id=$4
+      FOR UPDATE OF s FOR SHARE OF r`,[suggestionId,analysisId,repositoryId,me.id])).rows[0];
+    if (!row) { await connection.query('ROLLBACK'); return fail(404,'学习建议不存在'); }
+    if (row.analysis_status !== 'completed') { await connection.query('ROLLBACK'); return fail(409,'报告尚未完成'); }
+    if (prerequisiteIndex >= (row.prerequisites || []).length) { await connection.query('ROLLBACK'); return fail(404,'前置知识不存在'); }
+    if (row.report_goal !== row.current_goal || row.report_baseline !== row.current_baseline
+      || row.report_baseline_version_id !== row.current_baseline_version_id
+      || row.report_commit.trim() !== row.current_commit.trim() || row.report_branch !== row.current_branch) {
+      await connection.query('ROLLBACK'); return fail(409,'项目目标、需求基线或 commit 已变化，请重新分析后调整路线');
+    }
+    if (body.taskId !== null) {
+      const task = (await connection.query(`SELECT t.id FROM project_repository_tasks l JOIN tasks t ON t.id=l.task_id
+        WHERE l.repository_id=$1 AND l.task_id=$2 AND t.owner_id=$3 AND t.deleted_at IS NULL
+        FOR SHARE OF l,t`,[repositoryId,body.taskId,me.id])).rows[0];
+      if (!task) { await connection.query('ROLLBACK'); return fail(404,'仅能映射本人已关联且未删除的任务'); }
+    }
+    const previous = (await connection.query(`SELECT task_id,version,updated_at FROM project_prerequisite_task_links
+      WHERE suggestion_id=$1 AND prerequisite_index=$2 FOR UPDATE`,[suggestionId,prerequisiteIndex])).rows[0];
+    if (!previous && body.expectedVersion !== 0) {
+      await connection.query('ROLLBACK'); return fail(409,'前置任务映射已变化，请刷新学习路线');
+    }
+    if ((previous?.version || 0) !== body.expectedVersion) {
+      await connection.query('ROLLBACK'); return fail(409,'前置任务映射已变化，请刷新学习路线');
+    }
+    if ((!previous && body.taskId === null) || (previous?.task_id === body.taskId && body.taskId !== null)) {
+      await connection.query('COMMIT');
+      return { status: 200, data: { suggestionId, prerequisiteIndex, mappedTaskId: body.taskId,
+        source: body.taskId ? 'manual' : 'auto', version: previous?.version || 0, updatedAt: previous?.updated_at || null } };
+    }
+    const saved = body.taskId === null ? (await connection.query(`DELETE FROM project_prerequisite_task_links
+      WHERE suggestion_id=$1 AND prerequisite_index=$2 AND version=$3 RETURNING version,updated_at`,
+    [suggestionId,prerequisiteIndex,body.expectedVersion])).rows[0]
+      : previous ? (await connection.query(`UPDATE project_prerequisite_task_links
+        SET task_id=$3,version=version+1 WHERE suggestion_id=$1 AND prerequisite_index=$2 AND version=$4
+        RETURNING version,updated_at`,[suggestionId,prerequisiteIndex,body.taskId,body.expectedVersion])).rows[0]
+        : (await connection.query(`INSERT INTO project_prerequisite_task_links
+        (suggestion_id,prerequisite_index,analysis_id,repository_id,owner_id,task_id)
+        VALUES($1,$2,$3,$4,$5,$6) RETURNING version,updated_at`,
+      [suggestionId,prerequisiteIndex,analysisId,repositoryId,me.id,body.taskId])).rows[0];
+    if (!saved) { await connection.query('ROLLBACK'); return fail(409,'前置任务映射已变化，请刷新学习路线'); }
+    if (req) await appendSecurityAudit(connection,req,me,body.taskId ? 'link' : 'unlink',
+      'project_prerequisite_task_links',`${suggestionId}:${prerequisiteIndex}`,
+      { repositoryId, analysisId, taskId: body.taskId, version: saved.version });
+    await connection.query('COMMIT');
+    return { status: 200, data: { suggestionId, prerequisiteIndex, mappedTaskId: body.taskId,
+      source: body.taskId ? 'manual' : 'auto', version: body.taskId ? saved.version : 0,
+      updatedAt: body.taskId ? saved.updated_at : null } };
+  } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
+  finally { if (pooled) connection.release(); }
+}
+
 export async function handleProjectLearningRoadmap({ pathname, method, client, me, readBody, req }) {
+  const mappingMatch = pathname.match(/^\/api\/project-repositories\/([^/]+)\/roadmap\/([^/]+)\/prerequisites\/([^/]+)\/([^/]+)$/);
   const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/roadmap\/([^/]+)(?:\/(evidence))?$/);
-  if (!match) return null;
+  if (!match && !mappingMatch) return null;
+  if (mappingMatch) {
+    if (method !== 'PUT') return fail(405,'不支持该操作');
+    const [,repositoryId,analysisId,suggestionId,indexText] = mappingMatch;
+    if (!UUID.test(repositoryId) || !UUID.test(analysisId)) return fail(404,'学习路线不存在');
+    return setPrerequisiteTaskMapping({ repositoryId,analysisId,suggestionId,indexText,client,me,readBody,req });
+  }
   const [,repositoryId,analysisId,action] = match;
   if (method !== (action ? 'POST' : 'GET')) return fail(405,'不支持该操作');
   if (!UUID.test(repositoryId) || !UUID.test(analysisId)) return fail(404,'学习路线不存在');
-  const repository = (await client.query('SELECT id,owner_id,goal,baseline_version_id,commit_sha FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
+  const repository = (await client.query('SELECT id,owner_id,goal,requirement_baseline,baseline_version_id,commit_sha,branch FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
-  const analysis = (await client.query("SELECT id,repository_id,commit_sha,branch,goal,baseline_version_id,finished_at,analysis_coverage_complete,selected_file_count,available_file_count FROM project_analyses WHERE id=$1 AND repository_id=$2 AND owner_id=$3 AND status='completed'",[analysisId,repositoryId,me.id])).rows[0];
+  const analysis = (await client.query("SELECT id,repository_id,commit_sha,branch,goal,requirement_baseline,baseline_version_id,finished_at,analysis_coverage_complete,selected_file_count,available_file_count FROM project_analyses WHERE id=$1 AND repository_id=$2 AND owner_id=$3 AND status='completed'",[analysisId,repositoryId,me.id])).rows[0];
   if (!analysis) return fail(404,'已完成报告不存在');
   if (action === 'evidence') {
     const body = await readBody();
@@ -80,7 +157,7 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
   ]);
   const taskIds = taskRows.rows.map(row => row.id);
   const previousId = previousRows.rows[0]?.id || null;
-  const [edgeRows,noteRows,experimentRows,oldSuggestionRows,evidenceRows] = await Promise.all([
+  const [edgeRows,noteRows,experimentRows,oldSuggestionRows,evidenceRows,mappingRows] = await Promise.all([
     taskIds.length ? client.query('SELECT d.task_id,d.dependency_id,dependency.status AS dependency_status,dependency.deleted_at AS dependency_deleted_at FROM task_dependencies d JOIN tasks dependency ON dependency.id=d.dependency_id WHERE d.task_id=ANY($1::text[])',[taskIds]) : Promise.resolve({ rows: [] }),
     taskIds.length ? client.query(`SELECT n.id,n.title,n.task_id,s.id AS session_id
       FROM notes n LEFT JOIN sessions s ON s.id=n.source_session_id AND s.ingested_by=$2
@@ -96,6 +173,8 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
         count(*) OVER (PARTITION BY suggestion_id) AS total_count
       FROM project_learning_evidence WHERE analysis_id=$1 AND owner_id=$2
     ) recent WHERE position<=3 ORDER BY suggestion_id,created_at DESC,id DESC`,[analysisId,me.id]),
+    client.query(`SELECT suggestion_id,prerequisite_index,task_id,version
+      FROM project_prerequisite_task_links WHERE analysis_id=$1 AND owner_id=$2`,[analysisId,me.id]),
   ]);
   const oldKeys = new Set(oldSuggestionRows.rows.map(key));
   const linkedIds = new Set(taskIds);
@@ -122,18 +201,30 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
     if (normalized) topicMatches.set(normalized,[...(topicMatches.get(normalized) || []),item]);
   }
   const taskById = new Map(tasks.map(task => [task.id,task]));
+  const manualMappings = new Map(mappingRows.rows.map(row => [`${row.suggestion_id}:${row.prerequisite_index}`,row]));
   for (const item of suggestions) {
-    item.prerequisiteMappings = item.prerequisites.map(name => {
+    item.prerequisiteMappings = item.prerequisites.map((name,index) => {
+      const manual = manualMappings.get(`${item.id}:${index}`);
+      const mappedTask = manual?.task_id ? taskById.get(manual.task_id) : null;
+      if (manual) return { name, suggestionId: null, taskIds: mappedTask ? [mappedTask.id] : [],
+        state: mappedTask ? mappedTask.status === 'done' ? 'done' : 'pending' : 'unmapped',
+        source: mappedTask ? 'manual' : 'manual_stale',
+        version: manual.version, mappedTaskId: mappedTask?.id || null };
       const matches = (topicMatches.get(topicKey(name)) || []).filter(match => match.id !== item.id);
-      if (matches.length !== 1) return { name, suggestionId: null, taskIds: [], state: matches.length ? 'ambiguous' : 'unmapped' };
+      if (matches.length !== 1) return { name, suggestionId: null, taskIds: [], state: matches.length ? 'ambiguous' : 'unmapped',
+        source: 'auto', version: 0, mappedTaskId: null };
       const matched = matches[0];
       const taskIds = matched.status === 'ignored' ? [] : matched.linkedTaskIds;
-      return { name, suggestionId: matched.id, taskIds, state: taskIds.length ? taskIds.every(id => taskById.get(id)?.status === 'done') ? 'done' : 'pending' : 'unmapped' };
+      return { name, suggestionId: matched.id, taskIds,
+        state: taskIds.length ? taskIds.every(id => taskById.get(id)?.status === 'done') ? 'done' : 'pending' : 'unmapped',
+        source: 'auto', version: 0, mappedTaskId: null };
     });
   }
   const impactRank = { high: 0, medium: 1, low: 2 };
   const suggestionOrder = new Map(suggestionRows.rows.map((row,index) => [row.id,index]));
-  const stale = analysis.goal !== repository.goal || analysis.baseline_version_id !== repository.baseline_version_id || analysis.commit_sha.trim() !== repository.commit_sha.trim();
+  const stale = analysis.goal !== repository.goal || analysis.requirement_baseline !== repository.requirement_baseline
+    || analysis.baseline_version_id !== repository.baseline_version_id
+    || analysis.commit_sha.trim() !== repository.commit_sha.trim() || analysis.branch !== repository.branch;
   const nextSuggestion = stale ? null : suggestions
     .filter(item => item.status === 'pending' && item.prerequisiteMappings.every(mapping => mapping.state === 'done'))
     .sort((a,b) => (impactRank[a.impact] ?? 3)-(impactRank[b.impact] ?? 3) || suggestionOrder.get(a.id)-suggestionOrder.get(b.id))[0];

@@ -114,14 +114,25 @@ export interface ProjectAnalysisReport extends ProjectAnalysisJob {
 export interface ProjectModuleFile { path: string; gitSha: string; category: string; status: ProjectScanFile['status']; reason: string | null }
 export const listProjectAnalyses = (repositoryId: string, before?: string) => http.get<{ items: ProjectAnalysisJob[]; nextCursor: string | null }>(`/project-repositories/${repositoryId}/analyses`, { before });
 export const listProjectModuleFiles = (repositoryId: string, analysisId: string, moduleKey: string, after?: string) => http.get<{ items: ProjectModuleFile[]; nextCursor: string | null }>(`/project-repositories/${repositoryId}/analyses/${analysisId}/module-files`, { moduleKey, after });
+export interface ProjectPrerequisiteMapping {
+  name: string;
+  suggestionId: string | null;
+  taskIds: string[];
+  state: 'done' | 'pending' | 'unmapped' | 'ambiguous';
+  source: 'auto' | 'manual' | 'manual_stale';
+  version: number;
+  mappedTaskId: string | null;
+}
 export interface ProjectLearningRoadmap {
   repositoryId: string; analysisId: string; commitSha: string; previousAnalysisId: string | null; stale: boolean; nextTaskId: string | null; nextSuggestionId: string | null; nextSuggestionReason: string | null; evidenceScope: string; evidenceTruncated: boolean;
   tasks: { id: string; title: string; status: string; progress: number | null; priority: string | null; phase: string | null; requirementId: string | null; dependencyIds: string[]; dependencyLevel: number; externalBlockingCount: number; notes: { id: string; title: string; sourceSessionId: string | null }[]; experiments: { id: string; title: string; recordKind: string }[] }[];
-  suggestions: { id: string; topic: string; reason: string; practice: string; acceptance: string; adjustment: null | { practice: string; acceptance: string; rationale: string }; impact: 'high' | 'medium' | 'low' | null; prerequisites: string[]; prerequisiteMappings: { name: string; suggestionId: string | null; taskIds: string[]; state: 'done' | 'pending' | 'unmapped' | 'ambiguous' }[]; status: 'pending' | 'accepted' | 'ignored'; requirementId: string | null; newSincePrevious: boolean | null; linkedTaskIds: string[]; evidence: ProjectLearningEvidence[]; evidenceCount: number }[];
+  suggestions: { id: string; topic: string; reason: string; practice: string; acceptance: string; adjustment: null | { practice: string; acceptance: string; rationale: string }; impact: 'high' | 'medium' | 'low' | null; prerequisites: string[]; prerequisiteMappings: ProjectPrerequisiteMapping[]; status: 'pending' | 'accepted' | 'ignored'; requirementId: string | null; newSincePrevious: boolean | null; linkedTaskIds: string[]; evidence: ProjectLearningEvidence[]; evidenceCount: number }[];
 }
 export const getProjectLearningRoadmap = (repositoryId: string, analysisId: string) => http.get<ProjectLearningRoadmap>(`/project-repositories/${repositoryId}/roadmap/${analysisId}`);
 export interface ProjectLearningEvidence { id: string; kind: 'understanding' | 'practice'; response: string; artifactUrl: string | null; createdAt: string }
 export const addProjectLearningEvidence = (repositoryId: string, analysisId: string, body: { suggestionId: string; kind: ProjectLearningEvidence['kind']; response: string; artifactUrl?: string }) => http.post<ProjectLearningEvidence>(`/project-repositories/${repositoryId}/roadmap/${analysisId}/evidence`, body);
+export const setProjectPrerequisiteTask = (repositoryId: string, analysisId: string, suggestionId: string, index: number, body: { taskId: string | null; expectedVersion: number }) =>
+  http.put<{ suggestionId: string; prerequisiteIndex: number; mappedTaskId: string | null; source: 'auto' | 'manual'; version: number; updatedAt: string | null }>(`/project-repositories/${repositoryId}/roadmap/${analysisId}/prerequisites/${suggestionId}/${index}`, body);
 export const adjustProjectSuggestion = (repositoryId: string, analysisId: string, suggestionId: string, body: { practice: string; acceptance: string; rationale: string; expectedVersion: number }) => http.patch<ProjectAnalysisReport['suggestions'][number]['adjustment']>(`/project-repositories/${repositoryId}/analyses/${analysisId}/suggestions/${suggestionId}/adjust`, body);
 export interface ProjectReportComparison {
   older: ProjectAnalysisJob & { fullName: string }; newer: ProjectAnalysisJob & { fullName: string };
