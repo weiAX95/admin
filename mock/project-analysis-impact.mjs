@@ -130,30 +130,47 @@ function javascriptAliasedImports(file, indexed, aliasConfigs, includeSameDepth 
   return [...found];
 }
 
-function pythonTargets(file, moduleName, indexed) {
+function pythonSourceBoundaries(files) {
+  return files.filter(file => /(?:^|\/)pyproject\.toml$/.test(file.path)).map(file => {
+    const directory = path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path);
+    let section = '', hasSrcLayout = false;
+    if (file.status === 'read' && typeof file.content === 'string') for (const line of file.content.split(/\r?\n/)) {
+      const heading = line.trim().match(/^\[([^\]]+)\](?:\s*#.*)?$/);
+      if (heading) { section = heading[1]; continue; }
+      if (section === 'tool.setuptools.packages.find' && /^\s*where\s*=\s*\[\s*["']src["']\s*\]\s*(?:#.*)?$/.test(line)) hasSrcLayout = true;
+      if (section === 'tool.setuptools' && /^\s*package-dir\s*=\s*\{\s*""\s*=\s*"src"\s*\}\s*(?:#.*)?$/.test(line)) hasSrcLayout = true;
+    }
+    return { directory, sourceRoot: hasSrcLayout ? path.posix.join(directory,'src') : null };
+  }).sort((a,b) => b.directory.length - a.directory.length);
+}
+
+function pythonTargets(file, moduleName, indexed, sourceRoot = null) {
   const dots = moduleName.match(/^\.+/)?.[0].length || 0;
   const name = moduleName.slice(dots).replaceAll('.', '/');
   const parent = dots ? path.posix.join(path.posix.dirname(file.path),...Array(dots - 1).fill('..')) : '';
   const base = path.posix.normalize(path.posix.join(parent,name));
   if (!base || base === '.' || base.startsWith('../') || base.startsWith('/')) return [];
-  return [`${base}.py`,`${base}/__init__.py`].filter(candidate => indexed.has(candidate));
+  const roots = dots || !sourceRoot ? [base] : [base,path.posix.join(sourceRoot,base)];
+  return roots.flatMap(root => [`${root}.py`,`${root}/__init__.py`]).filter(candidate => indexed.has(candidate));
 }
 
-function pythonImports(file, indexed) {
+function pythonImports(file, indexed, sourceBoundaries = null) {
   if (!file.path.endsWith('.py')) return [];
+  const boundary = sourceBoundaries?.find(item => !item.directory || file.path.startsWith(`${item.directory}/`));
+  const sourceRoot = boundary?.sourceRoot || null;
   const found = new Set();
   const pattern = /^\s*(?:from\s+([.\w]+)\s+import\s+([^#\n]+)|import\s+([^#\n]+))/gm;
   let match, count = 0;
   while ((match = pattern.exec(file.content)) && count++ < 200) {
     if (match[1]) {
-      for (const target of pythonTargets(file,match[1],indexed)) found.add(target);
+      for (const target of pythonTargets(file,match[1],indexed,sourceRoot)) found.add(target);
       for (const name of match[2].split(',')) {
         const imported = name.trim().split(/\s+as\s+/)[0];
-        if (/^[A-Za-z_]\w*$/.test(imported)) for (const target of pythonTargets(file,`${match[1]}${match[1].endsWith('.') ? '' : '.'}${imported}`,indexed)) found.add(target);
+        if (/^[A-Za-z_]\w*$/.test(imported)) for (const target of pythonTargets(file,`${match[1]}${match[1].endsWith('.') ? '' : '.'}${imported}`,indexed,sourceRoot)) found.add(target);
       }
     } else for (const name of match[3].split(',')) {
       const imported = name.trim().split(/\s+as\s+/)[0];
-      if (/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(imported)) for (const target of pythonTargets(file,imported,indexed)) found.add(target);
+      if (/^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$/.test(imported)) for (const target of pythonTargets(file,imported,indexed,sourceRoot)) found.add(target);
     }
   }
   return [...found];
@@ -238,9 +255,9 @@ function goImportsV8(file, indexed, boundaries, packages) {
   return [...found];
 }
 
-function importedPaths(file, indexed, goModules, aliasConfigs = [], includeSameDepth = false, goBoundaries = null, goPackages = null) {
+function importedPaths(file, indexed, goModules, aliasConfigs = [], includeSameDepth = false, goBoundaries = null, goPackages = null, pythonBoundaries = null) {
   if (typeof file.content !== 'string') return [];
-  return [...new Set([...javascriptImports(file,indexed,true),...javascriptAliasedImports(file,indexed,aliasConfigs,includeSameDepth),...pythonImports(file,indexed),...(goBoundaries ? goImportsV8(file,indexed,goBoundaries,goPackages) : goImports(file,indexed,goModules))])];
+  return [...new Set([...javascriptImports(file,indexed,true),...javascriptAliasedImports(file,indexed,aliasConfigs,includeSameDepth),...pythonImports(file,indexed,pythonBoundaries),...(goBoundaries ? goImportsV8(file,indexed,goBoundaries,goPackages) : goImports(file,indexed,goModules))])];
 }
 
 export function selectProjectImpactEvidenceV3(files, changes) {
@@ -276,7 +293,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -294,13 +311,14 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const goModules = files.filter(file => file.path.endsWith('go.mod') && file.status === 'read' && typeof file.content === 'string').map(file => ({ directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.content.match(/^module\s+([^\s]+)\s*$/m)?.[1] })).filter(item => item.name).sort((a,b) => b.directory.length - a.directory.length);
   const goPackages = includeNestedConfigs ? new Map(files.filter(file => file.path.endsWith('.go') && file.status === 'read' && typeof file.content === 'string').map(file => [file.path,goPackageName(file.content)]).filter(([,name]) => name)) : null;
   const goBoundaries = includeNestedConfigs ? files.filter(file => /(?:^|\/)go\.mod$/.test(file.path)).map(file => ({ path: file.path, directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.status === 'read' && typeof file.content === 'string' ? goModuleName(file.content) : null })).sort((a,b) => b.directory.length - a.directory.length) : null;
+  const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files) : null;
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
   const aliasConfigs = includeAliases ? javascriptAliasConfigs(files,includeExtends) : [];
   const reverse = new Map();
   const importsByPath = new Map();
   for (const file of files) {
     if (file.status !== 'read') continue;
-    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages),...(apiEdges.get(file.path) || [])])];
+    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages,pythonBoundaries),...(apiEdges.get(file.path) || [])])];
     importsByPath.set(file.path,imports);
     for (const target of imports) {
       if (!reverse.has(target)) reverse.set(target,new Set());
@@ -335,3 +353,4 @@ export const selectProjectImpactEvidenceV5 = (files, changes) => selectImpactEvi
 export const selectProjectImpactEvidenceV6 = (files, changes) => selectImpactEvidence(files,changes,true,true);
 export const selectProjectImpactEvidenceV7 = (files, changes) => selectImpactEvidence(files,changes,true,true,true);
 export const selectProjectImpactEvidenceV8 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true);
+export const selectProjectImpactEvidenceV9 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true);
