@@ -1,14 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Empty, Input, Modal, Select, Space, Tag, Typography } from 'antd';
 import { Link } from 'react-router-dom';
-import { addProjectLearningEvidence, getProjectLearningRoadmap, setProjectPrerequisiteTask, type ProjectLearningEvidence, type ProjectLearningRoadmap as Roadmap, type ProjectPrerequisiteMapping } from '../api/projectRepositories';
+import { addProjectLearningEvidence, getProjectLearningRoadmap, listProjectLearningEvidence, requestProjectLearningReview, setProjectPrerequisiteTask, type ProjectLearningEvidence, type ProjectLearningRoadmap as Roadmap, type ProjectPrerequisiteMapping } from '../api/projectRepositories';
 
 const taskStatus: Record<string,string> = { todo: '待办', in_progress: '进行中', blocked: '阻塞', done: '已完成' };
 const suggestionStatus: Record<string,string> = { pending: '待决定', accepted: '已接受', ignored: '已忽略' };
 const prerequisiteState: Record<ProjectPrerequisiteMapping['state'], string> = { done: '关联任务已完成', pending: '关联任务未完成', unmapped: '未找到明确任务', ambiguous: '同名建议不唯一' };
 
 export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { repositoryId: string; analysisId: string }) {
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const [data, setData] = useState<Roadmap | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -19,6 +19,13 @@ export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { r
   const [checkArtifactUrl, setCheckArtifactUrl] = useState('');
   const [savingCheck, setSavingCheck] = useState(false);
   const [savingMappingKey, setSavingMappingKey] = useState('');
+  const [requestingReviewId, setRequestingReviewId] = useState('');
+  const [allEvidenceSuggestionId, setAllEvidenceSuggestionId] = useState('');
+  const [allEvidenceItems, setAllEvidenceItems] = useState<ProjectLearningEvidence[]>([]);
+  const [allEvidenceCursor, setAllEvidenceCursor] = useState<string | null>(null);
+  const [allEvidenceLoading, setAllEvidenceLoading] = useState(false);
+  const [allEvidenceError, setAllEvidenceError] = useState('');
+  const evidenceRequest = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -57,6 +64,56 @@ export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { r
       setRevision(value => value + 1);
     } finally { setSavingMappingKey(''); }
   };
+
+  const requestReview = async (evidenceId: string) => {
+    if (requestingReviewId) return;
+    setRequestingReviewId(evidenceId);
+    try {
+      const result = await requestProjectLearningReview(repositoryId,analysisId,evidenceId);
+      setAllEvidenceItems(items => items.map(item => item.id === evidenceId ? { ...item, review: {
+        state: result.state, coreCorrect: null, boundaryVerified: null, rationale: null,
+        requestedAt: result.requestedAt, reviewedAt: result.reviewedAt, reviewerName: null,
+      } } : item));
+      message.success('已提交独立核验请求');
+      setRevision(value => value + 1);
+    } catch (cause) { message.error(cause instanceof Error ? cause.message : '核验请求提交失败'); }
+    finally { setRequestingReviewId(''); }
+  };
+
+  const copyReviewEntry = async () => {
+    const link = `${window.location.origin}/project-learning-reviews?repositoryId=${encodeURIComponent(repositoryId)}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      message.success('审核入口已复制，请交给另一名管理员；私有仓库还需其 GitHub 读取授权');
+    } catch { modal.info({ title: '复制审核入口', content: <Input aria-label="审核入口链接" readOnly value={link} onFocus={event => event.target.select()} /> }); }
+  };
+
+  const loadAllEvidence = async (suggestionId: string, before?: string) => {
+    const request = ++evidenceRequest.current;
+    setAllEvidenceLoading(true);
+    setAllEvidenceError('');
+    try {
+      const result = await listProjectLearningEvidence(repositoryId,analysisId,suggestionId,before);
+      if (request !== evidenceRequest.current) return;
+      setAllEvidenceItems(items => before ? [...items,...result.items] : result.items);
+      setAllEvidenceCursor(result.nextCursor);
+    } catch (cause) {
+      if (request === evidenceRequest.current) setAllEvidenceError(cause instanceof Error ? cause.message : '学习记录读取失败');
+    } finally { if (request === evidenceRequest.current) setAllEvidenceLoading(false); }
+  };
+
+  const renderEvidence = (entry: ProjectLearningEvidence, full: boolean) => <div key={entry.id} style={{ marginBottom: 8 }}>
+    <Space wrap size="small"><Typography.Text type="secondary">{entry.kind === 'understanding' ? '理解回答' : '实践记录'} · {new Date(entry.createdAt).toLocaleString('zh-CN')} · {full ? entry.response : `${entry.response.slice(0,150)}${entry.response.length > 150 ? '…' : ''}`}</Typography.Text>
+      {entry.artifactUrl && <a href={entry.artifactUrl} target="_blank" rel="noopener noreferrer">查看本人提供的材料</a>}
+      {!entry.review && <Button size="small" loading={requestingReviewId === entry.id} disabled={Boolean(requestingReviewId)} onClick={() => void requestReview(entry.id)}>提交独立核验</Button>}
+      {entry.review?.state === 'pending' && <><Tag color="processing">待另一名管理员核验</Tag><Button size="small" onClick={() => void copyReviewEntry()}>复制审核入口</Button></>}
+      {entry.review?.state === 'verified' && <Tag color="success">两项标准已核验</Tag>}
+      {entry.review?.state === 'needs_revision' && <Tag color="warning">需补充材料</Tag>}
+    </Space>
+    {entry.review?.reviewedAt && <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+      {entry.review.reviewerName || '原审核账号'} · {new Date(entry.review.reviewedAt).toLocaleString('zh-CN')}：{entry.review.rationale}
+    </Typography.Paragraph>}
+  </div>;
 
   return <Card size="small" title="学习路线与个人记录" loading={loading} extra={<Button size="small" onClick={() => setRevision(value => value + 1)}>刷新</Button>} style={{ marginBottom: 16 }}>
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
@@ -99,9 +156,12 @@ export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { r
         </Space> : <Typography.Text type="secondary">；前置知识：报告未给出</Typography.Text>}
         {item.id === data.nextSuggestionId && <Typography.Paragraph type="secondary" style={{ marginTop: 8 }}>{data.nextSuggestionReason}</Typography.Paragraph>}
         <div style={{ marginTop: 8 }}><Button size="small" onClick={() => { setCheckSuggestionId(item.id); setCheckKind('understanding'); setCheckResponse(''); setCheckArtifactUrl(''); }}>记录理解或实践</Button></div>
-        {item.evidence.length > 0 && <Space direction="vertical" style={{ width: '100%', marginTop: 8 }}>{item.evidence.map(entry => <Typography.Text key={entry.id} type="secondary">{entry.kind === 'understanding' ? '理解回答' : '实践记录'} · {new Date(entry.createdAt).toLocaleString('zh-CN')} · 已提交待核验：{entry.response.slice(0,150)}{entry.response.length > 150 ? '…' : ''}{entry.artifactUrl && <> · <a href={entry.artifactUrl} target="_blank" rel="noopener noreferrer">查看本人提供的材料</a></>}</Typography.Text>)}{item.evidenceCount > item.evidence.length && <Typography.Text type="secondary">另有 {item.evidenceCount - item.evidence.length} 条历史记录</Typography.Text>}</Space>}
+        {item.evidence.length > 0 && <Space direction="vertical" style={{ width: '100%', marginTop: 8 }}>
+          {item.evidence.map(entry => renderEvidence(entry,false))}
+          {item.evidenceCount > item.evidence.length && <Button size="small" onClick={() => { setAllEvidenceSuggestionId(item.id); setAllEvidenceItems([]); setAllEvidenceCursor(null); void loadAllEvidence(item.id); }}>查看全部 {item.evidenceCount} 条学习记录</Button>}
+        </Space>}
       </Card>)}</Space> : <Empty description="本报告没有学习建议" />}
-      <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>接受或忽略建议请使用本报告下方的处理入口。本人提交的理解回答或实践记录尚需核验；系统不据此推断个人掌握程度。</Typography.Paragraph>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>接受或忽略建议请使用本报告下方的处理入口。本人记录需由另一名管理员按两项标准独立核验；单条记录通过也不会自动推断整体掌握程度。</Typography.Paragraph>
     </>}
     <Modal title="记录个人理解或实践" open={Boolean(checkSuggestionId)} onCancel={() => { if (!savingCheck) setCheckSuggestionId(''); }} onOk={() => void saveCheck()} okText="保存记录" okButtonProps={{ loading: savingCheck, disabled: Array.from(checkResponse.trim()).length < 20 || Array.from(checkResponse.trim()).length > 4000 }}>
       <Alert type="info" showIcon message="此记录是本人提交的学习证据，保存后仍标为待核验，不会自动判定掌握" style={{ marginBottom: 12 }} />
@@ -109,6 +169,12 @@ export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { r
       <Typography.Paragraph>{checkKind === 'understanding' ? `请用自己的话解释“${data?.suggestions.find(item => item.id === checkSuggestionId)?.topic || '本主题'}”的关键概念，并举出一个容易出错的边界。` : `请说明你如何完成实践，以及如何核对验收标准：${data?.suggestions.find(item => item.id === checkSuggestionId)?.acceptance || '按报告要求验证'}`}</Typography.Paragraph>
       <Input.TextArea aria-label="理解回答或实践记录" value={checkResponse} onChange={event => setCheckResponse(event.target.value)} rows={6} maxLength={4000} showCount placeholder="至少 20 字，请写出自己的理解或实践过程" />
       <Input aria-label="实践材料链接" value={checkArtifactUrl} onChange={event => setCheckArtifactUrl(event.target.value)} maxLength={2048} placeholder="可选：HTTPS 证据链接" style={{ marginTop: 12 }} />
+    </Modal>
+    <Modal title={`全部学习记录 · ${data?.suggestions.find(item => item.id === allEvidenceSuggestionId)?.topic || ''}`} open={Boolean(allEvidenceSuggestionId)} onCancel={() => { evidenceRequest.current += 1; setAllEvidenceSuggestionId(''); }} footer={<Button onClick={() => { evidenceRequest.current += 1; setAllEvidenceSuggestionId(''); }}>关闭</Button>} width={760}>
+      {allEvidenceError && <Alert type="error" showIcon message={allEvidenceError} style={{ marginBottom: 12 }} />}
+      {allEvidenceItems.length ? <div style={{ maxHeight: '60vh', overflowY: 'auto' }}>{allEvidenceItems.map(entry => renderEvidence(entry,true))}</div> : !allEvidenceLoading && !allEvidenceError && <Empty description="暂无学习记录" />}
+      {allEvidenceCursor && <Button loading={allEvidenceLoading} onClick={() => void loadAllEvidence(allEvidenceSuggestionId,allEvidenceCursor)}>加载更多</Button>}
+      {allEvidenceLoading && !allEvidenceCursor && <Typography.Text type="secondary">正在读取学习记录…</Typography.Text>}
     </Modal>
   </Card>;
 }

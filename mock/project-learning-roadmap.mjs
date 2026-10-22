@@ -94,23 +94,86 @@ async function setPrerequisiteTaskMapping({ repositoryId, analysisId, suggestion
   finally { if (pooled) connection.release(); }
 }
 
-export async function handleProjectLearningRoadmap({ pathname, method, client, me, readBody, req }) {
+async function requestLearningReview({ repositoryId, analysisId, evidenceId, client, me, req }) {
+  if (!UUID.test(repositoryId) || !UUID.test(analysisId) || !UUID.test(evidenceId)) return fail(404,'学习记录不存在');
+  const pooled = client instanceof pg.Pool;
+  const connection = pooled ? await client.connect() : client;
+  try {
+    await connection.query('BEGIN');
+    const evidence = (await connection.query(`SELECT e.id FROM project_learning_evidence e
+      JOIN project_repositories r ON r.id=e.repository_id AND r.owner_id=e.owner_id
+      WHERE e.id=$1 AND e.analysis_id=$2 AND e.repository_id=$3 AND e.owner_id=$4
+      FOR SHARE OF e,r`,[evidenceId,analysisId,repositoryId,me.id])).rows[0];
+    if (!evidence) { await connection.query('ROLLBACK'); return fail(404,'学习记录不存在'); }
+    const inserted = (await connection.query(`INSERT INTO project_learning_evidence_reviews(evidence_id,owner_id)
+      VALUES($1,$2) ON CONFLICT(evidence_id) DO NOTHING RETURNING requested_at`,[evidenceId,me.id])).rows[0];
+    const review = inserted || (await connection.query(`SELECT state,requested_at,reviewed_at
+      FROM project_learning_evidence_reviews WHERE evidence_id=$1`,[evidenceId])).rows[0];
+    if (inserted && req) await appendSecurityAudit(connection,req,me,'create',
+      'project_learning_evidence_reviews',evidenceId,{ repositoryId,analysisId });
+    await connection.query('COMMIT');
+    return { status: inserted ? 201 : 200, data: {
+      evidenceId, state: review.state || 'pending', requestedAt: review.requested_at, reviewedAt: review.reviewed_at || null,
+    } };
+  } catch (error) { await connection.query('ROLLBACK').catch(() => undefined); throw error; }
+  finally { if (pooled) connection.release(); }
+}
+
+export async function handleProjectLearningRoadmap({ pathname, method, client, me, url, readBody, req }) {
   const mappingMatch = pathname.match(/^\/api\/project-repositories\/([^/]+)\/roadmap\/([^/]+)\/prerequisites\/([^/]+)\/([^/]+)$/);
+  const reviewRequestMatch = pathname.match(/^\/api\/project-repositories\/([^/]+)\/roadmap\/([^/]+)\/evidence\/([^/]+)\/review-request$/);
   const match = pathname.match(/^\/api\/project-repositories\/([^/]+)\/roadmap\/([^/]+)(?:\/(evidence))?$/);
-  if (!match && !mappingMatch) return null;
+  if (!match && !mappingMatch && !reviewRequestMatch) return null;
   if (mappingMatch) {
     if (method !== 'PUT') return fail(405,'不支持该操作');
     const [,repositoryId,analysisId,suggestionId,indexText] = mappingMatch;
     if (!UUID.test(repositoryId) || !UUID.test(analysisId)) return fail(404,'学习路线不存在');
     return setPrerequisiteTaskMapping({ repositoryId,analysisId,suggestionId,indexText,client,me,readBody,req });
   }
+  if (reviewRequestMatch) {
+    if (method !== 'POST') return fail(405,'不支持该操作');
+    const [,repositoryId,analysisId,evidenceId] = reviewRequestMatch;
+    return requestLearningReview({ repositoryId,analysisId,evidenceId,client,me,req });
+  }
   const [,repositoryId,analysisId,action] = match;
-  if (method !== (action ? 'POST' : 'GET')) return fail(405,'不支持该操作');
+  if (action ? !['POST','GET'].includes(method) : method !== 'GET') return fail(405,'不支持该操作');
   if (!UUID.test(repositoryId) || !UUID.test(analysisId)) return fail(404,'学习路线不存在');
   const repository = (await client.query('SELECT id,owner_id,goal,requirement_baseline,baseline_version_id,commit_sha,branch FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
   const analysis = (await client.query("SELECT id,repository_id,commit_sha,branch,goal,requirement_baseline,baseline_version_id,finished_at,analysis_coverage_complete,selected_file_count,available_file_count FROM project_analyses WHERE id=$1 AND repository_id=$2 AND owner_id=$3 AND status='completed'",[analysisId,repositoryId,me.id])).rows[0];
   if (!analysis) return fail(404,'已完成报告不存在');
+  if (action === 'evidence' && method === 'GET') {
+    const suggestionId = url.searchParams.get('suggestionId');
+    const before = url.searchParams.get('before');
+    if (!UUID.test(suggestionId || '') || before && !UUID.test(before)) return fail(400,'学习记录查询条件无效');
+    const suggestion = (await client.query('SELECT id FROM project_analysis_suggestions WHERE id=$1 AND analysis_id=$2',[suggestionId,analysisId])).rows[0];
+    if (!suggestion) return fail(404,'学习建议不存在');
+    let cursor = null;
+    if (before) {
+      cursor = (await client.query(`SELECT created_at,id FROM project_learning_evidence
+        WHERE id=$1 AND analysis_id=$2 AND suggestion_id=$3 AND owner_id=$4`,[before,analysisId,suggestionId,me.id])).rows[0];
+      if (!cursor) return fail(400,'学习记录游标无效');
+    }
+    const rows = (await client.query(`SELECT e.id,e.kind,e.response,e.artifact_url,e.created_at,
+      review.state AS review_state,review.core_correct,review.boundary_verified,
+      review.rationale AS review_rationale,review.requested_at,review.reviewed_at,
+      coalesce(reviewer.name,reviewer.username) AS reviewer_name
+      FROM project_learning_evidence e
+      LEFT JOIN project_learning_evidence_reviews review ON review.evidence_id=e.id
+      LEFT JOIN users reviewer ON reviewer.id=review.reviewer_id
+      WHERE e.analysis_id=$1 AND e.suggestion_id=$2 AND e.owner_id=$3
+        AND ($4::timestamptz IS NULL OR (e.created_at,e.id)<($4::timestamptz,$5::uuid))
+      ORDER BY e.created_at DESC,e.id DESC LIMIT 21`,
+    [analysisId,suggestionId,me.id,cursor?.created_at || null,cursor?.id || null])).rows;
+    return { status: 200, data: { items: rows.slice(0,20).map(row => ({
+      id: row.id, kind: row.kind, response: row.response, artifactUrl: row.artifact_url,
+      createdAt: row.created_at, review: row.review_state ? {
+        state: row.review_state, coreCorrect: row.core_correct, boundaryVerified: row.boundary_verified,
+        rationale: row.review_rationale, requestedAt: row.requested_at,
+        reviewedAt: row.reviewed_at, reviewerName: row.reviewer_name || null,
+      } : null,
+    })), nextCursor: rows.length > 20 ? rows[19].id : null } };
+  }
   if (action === 'evidence') {
     const body = await readBody();
     const response = typeof body?.response === 'string' ? body.response.trim() : '';
@@ -167,11 +230,18 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
       WHERE task_id=ANY($1::text[]) AND owner_id=$2 AND deleted_at IS NULL
       ORDER BY updated_at DESC LIMIT 501`,[taskIds,me.id]) : Promise.resolve({ rows: [] }),
     previousId ? client.query('SELECT topic,practice FROM project_analysis_suggestions WHERE analysis_id=$1',[previousId]) : Promise.resolve({ rows: [] }),
-    client.query(`SELECT id,suggestion_id,kind,response,artifact_url,created_at,total_count FROM (
-      SELECT id,suggestion_id,kind,response,artifact_url,created_at,
-        row_number() OVER (PARTITION BY suggestion_id ORDER BY created_at DESC,id DESC) AS position,
-        count(*) OVER (PARTITION BY suggestion_id) AS total_count
-      FROM project_learning_evidence WHERE analysis_id=$1 AND owner_id=$2
+    client.query(`SELECT id,suggestion_id,kind,response,artifact_url,created_at,
+      review_state,core_correct,boundary_verified,review_rationale,requested_at,reviewed_at,reviewer_name,total_count FROM (
+      SELECT e.id,e.suggestion_id,e.kind,e.response,e.artifact_url,e.created_at,
+        review.state AS review_state,review.core_correct,review.boundary_verified,
+        review.rationale AS review_rationale,review.requested_at,review.reviewed_at,
+        coalesce(reviewer.name,reviewer.username) AS reviewer_name,
+        row_number() OVER (PARTITION BY e.suggestion_id ORDER BY e.created_at DESC,e.id DESC) AS position,
+        count(*) OVER (PARTITION BY e.suggestion_id) AS total_count
+      FROM project_learning_evidence e
+      LEFT JOIN project_learning_evidence_reviews review ON review.evidence_id=e.id
+      LEFT JOIN users reviewer ON reviewer.id=review.reviewer_id
+      WHERE e.analysis_id=$1 AND e.owner_id=$2
     ) recent WHERE position<=3 ORDER BY suggestion_id,created_at DESC,id DESC`,[analysisId,me.id]),
     client.query(`SELECT suggestion_id,prerequisite_index,task_id,version
       FROM project_prerequisite_task_links WHERE analysis_id=$1 AND owner_id=$2`,[analysisId,me.id]),
@@ -192,7 +262,12 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
     impact: item.impact, prerequisites: item.prerequisites || [], status: item.decision_state || 'pending',
     requirementId: item.requirement_id, newSincePrevious: previousId ? !oldKeys.has(key(item)) : null,
     linkedTaskIds: tasks.filter(task => task.id === item.decision_task_id || item.requirement_id && task.requirementId === item.requirement_id).map(task => task.id),
-    evidence: evidenceRows.rows.filter(row => row.suggestion_id === item.id).map(row => ({ id: row.id, kind: row.kind, response: row.response, artifactUrl: row.artifact_url, createdAt: row.created_at })),
+    evidence: evidenceRows.rows.filter(row => row.suggestion_id === item.id).map(row => ({
+      id: row.id, kind: row.kind, response: row.response, artifactUrl: row.artifact_url, createdAt: row.created_at,
+      review: row.review_state ? { state: row.review_state, coreCorrect: row.core_correct,
+        boundaryVerified: row.boundary_verified, rationale: row.review_rationale,
+        requestedAt: row.requested_at, reviewedAt: row.reviewed_at, reviewerName: row.reviewer_name || null } : null,
+    })),
     evidenceCount: Number(evidenceRows.rows.find(row => row.suggestion_id === item.id)?.total_count || 0),
   }));
   const topicMatches = new Map();

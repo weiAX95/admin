@@ -39,6 +39,7 @@ const PERMISSIONS_ITEM = { key: "/permissions", icon: <TeamOutlined />, label: "
 const ACCOUNT_ACTIVITY_ITEM = { key: "/account-activity", icon: <DashboardOutlined />, label: "账号活跃度" };
 const SETTINGS_ITEM = { key: "/settings", icon: <SettingOutlined />, label: "系统设置" };
 const EVALUATION_ADMIN_ITEM = { key: "/evaluation/candidates", icon: <ExperimentOutlined />, label: "评测候选池" };
+const PROJECT_LEARNING_REVIEW_ITEM = { key: "/project-learning-reviews", icon: <ProfileOutlined />, label: "项目学习核验" };
 const EVALUATION_ALERTS_ITEM = { key: "/evaluation/alerts", icon: <BellOutlined />, label: "退化告警" };
 const MODEL_COSTS_ITEM = { key: "/model-costs", icon: <ExperimentOutlined />, label: "模型成本" };
 const MODEL_AUDIT_ITEM = { key: "/model-call-audit", icon: <ProfileOutlined />, label: "模型调用审计" };
@@ -59,6 +60,7 @@ const PAGE_META: Record<string, { title: string; description: string; section: s
   "/evaluation/alerts": { title: "退化告警", description: "查看可比用例的逐指标下降并导出退化列表。", section: "评测中心" },
   "/prompts": { title: "提示词库", description: "管理版本、变量与提示词结构。", section: "学习工作台" },
   "/project-analysis": { title: "项目分析", description: "接入 GitHub 仓库，建立可追溯的项目进度与学习建议。", section: "学习工作台" },
+  "/project-learning-reviews": { title: "项目学习核验", description: "独立核对本人提交的理解回答和实践记录。", section: "学习工作台" },
   "/accounts": { title: "账号管理", description: "维护成员账号、角色与访问状态。", section: "系统管理" },
   "/account-audit": { title: "操作审计", description: "核对登录、退出和资源操作记录。", section: "系统管理" },
   "/permissions": { title: "权限矩阵", description: "查看当前后端角色权限及归属范围。", section: "系统管理" },
@@ -119,7 +121,7 @@ export default function AdminLayout() {
     return () => socket.close();
   }, [refreshNotifications, refresh]);
   const user = getStoredUser<AuthUser>();
-  const menuItems = isAdministrator(user) ? [...MENU_ITEMS, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, MODEL_COSTS_ITEM, MODEL_AUDIT_ITEM, MODEL_HEALTH_ITEM, ALERTS_ITEM, ACCOUNTS_ITEM, PERMISSIONS_ITEM, ACCOUNT_AUDIT_ITEM, ACCOUNT_ACTIVITY_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, PERMISSIONS_ITEM, ACCOUNT_AUDIT_ITEM, SETTINGS_ITEM];
+  const menuItems = isAdministrator(user) ? [...MENU_ITEMS, PROJECT_LEARNING_REVIEW_ITEM, EVALUATION_ADMIN_ITEM, EVALUATION_ALERTS_ITEM, MODEL_COSTS_ITEM, MODEL_AUDIT_ITEM, MODEL_HEALTH_ITEM, ALERTS_ITEM, ACCOUNTS_ITEM, PERMISSIONS_ITEM, ACCOUNT_AUDIT_ITEM, ACCOUNT_ACTIVITY_ITEM, SETTINGS_ITEM] : [...MENU_ITEMS, PERMISSIONS_ITEM, ACCOUNT_AUDIT_ITEM, SETTINGS_ITEM];
   const selected = menuItems.map((m) => m.key)
     .filter((k) => k === "/" ? location.pathname === "/" : location.pathname.startsWith(k))
     .sort((a, b) => b.length - a.length)[0] || "/";

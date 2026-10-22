@@ -48,6 +48,7 @@ const ModelCallAudit = lazy(() => import("./pages/ModelCallAudit"));
 const ModelHealth = lazy(() => import("./pages/ModelHealth"));
 const Alerts = lazy(() => import("./pages/Alerts"));
 const ProjectAnalysis = lazy(() => import("./pages/ProjectAnalysis"));
+const ProjectLearningReviews = lazy(() => import("./pages/ProjectLearningReviews"));
 
 export default function App() {
   return (
@@ -82,6 +83,7 @@ export default function App() {
                 <Route path="/evaluation/reviews" element={<EvaluationReviews />} />
                 <Route element={<RequireAdmin />}>
                   <Route path="/evaluation/candidates" element={<EvaluationCandidates />} />
+                  <Route path="/project-learning-reviews" element={<ProjectLearningReviews />} />
                   <Route path="/evaluation/alerts" element={<EvaluationAlerts />} />
                   <Route path="/accounts" element={<Accounts />} />
                   <Route path="/account-activity" element={<AccountActivity />} />

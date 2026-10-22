@@ -85,6 +85,7 @@ import { processProjectAutoAnalyses } from './project-auto-analyses.mjs';
 import { processProjectAnalysisNotifications } from './project-analysis-notifications.mjs';
 import { handleProjectSuggestionAction } from './project-suggestion-actions.mjs';
 import { handleProjectLearningRoadmap } from './project-learning-roadmap.mjs';
+import { handleProjectLearningReviews } from './project-learning-reviews.mjs';
 import { handleProjectFindingFeedback } from './project-finding-feedback.mjs';
 import { handleProjectRequirementBaselines } from './project-requirement-baselines.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
@@ -2341,6 +2342,22 @@ function routeHttpRequest(req, res, pathname, method) {
     });
     return;
   }
+  if (new URL(req.url, 'http://localhost').pathname.startsWith('/api/project-learning-reviews')) {
+    if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
+    void (async () => {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      const me = await lookupSession(token);
+      if (!me) return sendImmediate(res, 401, { error: '未登录或登录已过期' });
+      const url = new URL(req.url, 'http://localhost');
+      const response = await handleProjectLearningReviews({ pathname: url.pathname, method: req.method,
+        client: pool, me, url, readBody: () => readProjectBody(req), req });
+      sendImmediate(res, response?.status || 404, response?.data || { error: '学习核验接口不存在' });
+    })().catch(error => {
+      if (!error.status) console.error('[project-learning-reviews] request failed:', error.message);
+      if (!res.headersSent) sendImmediate(res, error.status || 500, { error: error.status ? error.message : '学习核验服务不可用' });
+    });
+    return;
+  }
   if (new URL(req.url, 'http://localhost').pathname.startsWith('/api/project-repositories')) {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
@@ -2360,7 +2377,7 @@ function routeHttpRequest(req, res, pathname, method) {
         }
       }
       const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
-        || await handleProjectLearningRoadmap({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
+        || await handleProjectLearningRoadmap({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
         || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
