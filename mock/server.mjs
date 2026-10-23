@@ -84,6 +84,7 @@ import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses
 import { processProjectAutoAnalyses } from './project-auto-analyses.mjs';
 import { processProjectAnalysisNotifications } from './project-analysis-notifications.mjs';
 import { handleProjectSuggestionAction } from './project-suggestion-actions.mjs';
+import { handleProjectSuggestionRechecks } from './project-suggestion-rechecks.mjs';
 import { handleProjectLearningRoadmap } from './project-learning-roadmap.mjs';
 import { handleProjectLearningReviews } from './project-learning-reviews.mjs';
 import { handleProjectFindingFeedback } from './project-finding-feedback.mjs';
@@ -2378,6 +2379,7 @@ function routeHttpRequest(req, res, pathname, method) {
       }
       const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
         || await handleProjectLearningRoadmap({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
+        || await handleProjectSuggestionRechecks({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
         || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })

@@ -160,10 +160,29 @@ export const adjustProjectSuggestion = (repositoryId: string, analysisId: string
 export interface ProjectReportComparison {
   older: ProjectAnalysisJob & { fullName: string }; newer: ProjectAnalysisJob & { fullName: string };
   comparable: boolean; limitations: string[];
+  suggestionReviewEligible: boolean; suggestionReviewUnavailableReason: string | null;
   changes: { requirementId: string; kind: 'completion_signal' | 'possible_regression' | 'new_gap' | 'improved_gap' | 'changed'; before: Pick<ProjectAnalysisReport['findings'][number], 'requirementId' | 'title' | 'status' | 'detail' | 'evidence'>; after: Pick<ProjectAnalysisReport['findings'][number], 'requirementId' | 'title' | 'status' | 'detail' | 'evidence'> }[];
   suggestions: { added: { topic: string; practice: string }[]; removed: { topic: string; practice: string }[] };
 }
 export const compareProjectAnalyses = (repositoryId: string, olderId: string, newerId: string) => http.get<ProjectReportComparison>(`/project-repositories/${repositoryId}/analyses/compare/${olderId}/${newerId}`);
+export type ProjectSuggestionReviewOutcome = 'matched' | 'follow_up' | 'no_longer_relevant';
+export interface ProjectSuggestionReviewPair {
+  olderAnalysisId: string;
+  newerAnalysisId: string;
+  olderCommitSha: string;
+  newerCommitSha: string;
+  limitations: string[];
+  stale: boolean;
+  items: {
+    older: { id: string; topic: string; practice: string; acceptance: string; status: string; requirementId: string | null; taskId: string | null };
+    candidates: { id: string; topic: string; practice: string; acceptance: string; requirementId: string | null; similarity: number; sameRequirement: boolean }[];
+    review: { newerSuggestionId: string | null; outcome: ProjectSuggestionReviewOutcome; note: string; version: number; reviewedAt: string } | null;
+  }[];
+}
+export const getProjectSuggestionReviews = (repositoryId: string, olderAnalysisId: string, newerAnalysisId: string) =>
+  http.get<ProjectSuggestionReviewPair>(`/project-repositories/${repositoryId}/analyses/${newerAnalysisId}/suggestion-reviews`, { olderAnalysisId });
+export const saveProjectSuggestionReview = (repositoryId: string, olderAnalysisId: string, newerAnalysisId: string, olderSuggestionId: string, body: { newerSuggestionId: string | null; outcome: ProjectSuggestionReviewOutcome; note: string; expectedVersion: number }) =>
+  http.post<NonNullable<ProjectSuggestionReviewPair['items'][number]['review']>>(`/project-repositories/${repositoryId}/analyses/${newerAnalysisId}/suggestion-reviews/${olderSuggestionId}`, { olderAnalysisId, ...body });
 export interface PrivateProjectDisclosure { digest: string; provider: string; model: string; destination: string; fileCount: number; paths: string[]; truncatedCount: number; scanFileLimit: number; scanByteLimit: number; scanCoverageComplete: boolean }
 export const previewPrivateProjectAnalysis = (repositoryId: string, scanId: string, modelId: string) => http.post<PrivateProjectDisclosure>(`/project-repositories/${repositoryId}/analyses/disclosure`, { scanId, modelId });
 export const startProjectAnalysis = (repositoryId: string, scanId: string, modelId: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }, privateConsent?: { disclosureDigest: string }, autoApproval = false) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses`, { scanId, modelId, ...budget, ...(privateConsent ? { privateConsent: true, disclosureDigest: privateConsent.disclosureDigest } : {}), ...(autoApproval ? { autoApproval: true } : {}) });

@@ -1,6 +1,7 @@
 import { Alert, Button, Card, Empty, Space, Table, Tag, Typography } from 'antd';
 import type { ProjectReportComparison as Comparison } from '../api/projectRepositories';
 import { projectFindingBasis } from '../utils/projectEvidence';
+import ProjectSuggestionReview from './ProjectSuggestionReview';
 
 const statusLabels: Record<string, string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '模型未发现实现线索', unverified: '待验证' };
 const kindLabels: Record<Comparison['changes'][number]['kind'], string> = {
@@ -29,5 +30,8 @@ export default function ProjectReportComparison({ comparison, onOpenReport, onCl
       <div><strong>新建议：</strong>{comparison.suggestions.added.length ? comparison.suggestions.added.map(item => <Tag key={`${item.topic}-${item.practice}`} color="blue">{item.topic}</Tag>) : '无'}</div>
       <div><strong>不再出现：</strong>{comparison.suggestions.removed.length ? comparison.suggestions.removed.map(item => <Tag key={`${item.topic}-${item.practice}`}>{item.topic}</Tag>) : '无'}</div>
     </Space>
+    {comparison.suggestionReviewEligible
+      ? <ProjectSuggestionReview key={`${comparison.older.id}:${comparison.newer.id}`} repositoryId={comparison.newer.repositoryId} olderAnalysisId={comparison.older.id} newerAnalysisId={comparison.newer.id} />
+      : <Alert type="info" showIcon message="逐条建议复核暂不可用" description={comparison.suggestionReviewUnavailableReason} style={{ marginTop: 16 }} />}
   </Card>;
 }

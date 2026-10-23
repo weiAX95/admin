@@ -334,7 +334,8 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     const repository = (await client.query('SELECT id,owner_id FROM project_repositories WHERE id=$1 AND owner_id=$2', [repositoryId,me.id])).rows[0];
     if (!repository) return fail(404,'项目不存在');
     if (!canAccess(me,'project_analyses','read',{ownerId:repository.owner_id})) return fail(403,'无权查看项目分析');
-    const rows = (await client.query(`SELECT a.*,s.github_repository_id FROM project_analyses a
+    const rows = (await client.query(`SELECT a.*,s.github_repository_id,
+      s.branch AS scan_branch,s.commit_sha AS scan_commit_sha FROM project_analyses a
       JOIN project_scans s ON s.id=a.scan_id
       WHERE a.repository_id=$1 AND a.id=ANY($2::uuid[]) AND a.status='completed'`, [repositoryId,[olderId,newerId]])).rows;
     if (rows.length !== 2) return fail(404,'已完成报告不存在');
@@ -353,7 +354,17 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
         suggestions: suggestions.filter(item => item.analysis_id === id).map(item => ({ topic: item.topic, practice: item.practice })),
       };
     };
-    return { status: 200, data: compareProjectReports(report(olderId),report(newerId)) };
+    const suggestionReviewEligible = Boolean(olderRow.github_repository_id
+      && olderRow.github_repository_id === newerRow.github_repository_id
+      && olderRow.branch === newerRow.branch
+      && [olderRow,newerRow].every(row => row.branch === row.scan_branch
+        && String(row.commit_sha || '').trim() === String(row.scan_commit_sha || '').trim()));
+    return { status: 200, data: {
+      ...compareProjectReports(report(olderId),report(newerId)),
+      suggestionReviewEligible,
+      suggestionReviewUnavailableReason: suggestionReviewEligible ? null
+        : '两份报告需来自同一可信 GitHub 仓库和分支，且与各自扫描的提交一致，才能逐条复核建议',
+    } };
   }
   const moduleFilesRoute = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/([^/]+)\/module-files$/);
   if (moduleFilesRoute && method === 'GET') {

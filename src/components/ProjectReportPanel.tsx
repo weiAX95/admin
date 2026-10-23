@@ -70,6 +70,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [newerId, setNewerId] = useState('');
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [comparing, setComparing] = useState(false);
+  const comparisonRequest = useRef(0);
   const [starting, setStarting] = useState(false);
   const [privatePreview, setPrivatePreview] = useState<{ disclosure: PrivateProjectDisclosure; scanId: string; modelId: string; tokenBudget: number | null; costBudgetUsd: number | null; autoApproval: boolean } | null>(null);
   const [actingId, setActingId] = useState('');
@@ -114,7 +115,9 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     setNextCursor(null);
     setReport(null);
     setScopeJob(null);
+    comparisonRequest.current += 1;
     setComparison(null);
+    setComparing(false);
     setOlderId('');
     setNewerId('');
     setAttachSuggestionId('');
@@ -215,10 +218,14 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   };
   const compareReports = async () => {
     if (!olderId || !newerId || olderId === newerId) return;
+    const request = ++comparisonRequest.current;
     setComparing(true);
-    try { setComparison(await compareProjectAnalyses(repository.id,olderId,newerId)); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : '报告对照失败'); }
-    finally { setComparing(false); }
+    try {
+      const result = await compareProjectAnalyses(repository.id,olderId,newerId);
+      if (comparisonRequest.current === request) setComparison(result);
+    }
+    catch (cause) { if (comparisonRequest.current === request) setError(cause instanceof Error ? cause.message : '报告对照失败'); }
+    finally { if (comparisonRequest.current === request) setComparing(false); }
   };
   const act = async (item: ProjectAnalysisJob, action: 'cancel' | 'retry') => {
     setActingId(item.id);
@@ -400,8 +407,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     ]} />
     {nextCursor && <Button loading={loadingMore} onClick={() => void loadMore()} style={{ marginBottom: 16 }}>加载更早的分析记录</Button>}
     <Space wrap style={{ marginBottom: 16 }}>
-      <Select aria-label="较早的报告" placeholder="较早的报告" value={olderId || undefined} onChange={value => { setOlderId(value); setComparison(null); }} style={{ minWidth: 260 }} options={items.filter(item => item.status === 'completed').map(item => ({ value: item.id, label: `${new Date(item.finishedAt || item.createdAt).toLocaleString('zh-CN')} · ${item.commitSha.slice(0, 10)}` }))} />
-      <Select aria-label="较新的报告" placeholder="较新的报告" value={newerId || undefined} onChange={value => { setNewerId(value); setComparison(null); }} style={{ minWidth: 260 }} options={items.filter(item => item.status === 'completed').map(item => ({ value: item.id, label: `${new Date(item.finishedAt || item.createdAt).toLocaleString('zh-CN')} · ${item.commitSha.slice(0, 10)}` }))} />
+      <Select aria-label="较早的报告" placeholder="较早的报告" value={olderId || undefined} onChange={value => { comparisonRequest.current += 1; setOlderId(value); setComparison(null); setComparing(false); }} style={{ minWidth: 260 }} options={items.filter(item => item.status === 'completed').map(item => ({ value: item.id, label: `${new Date(item.finishedAt || item.createdAt).toLocaleString('zh-CN')} · ${item.commitSha.slice(0, 10)}` }))} />
+      <Select aria-label="较新的报告" placeholder="较新的报告" value={newerId || undefined} onChange={value => { comparisonRequest.current += 1; setNewerId(value); setComparison(null); setComparing(false); }} style={{ minWidth: 260 }} options={items.filter(item => item.status === 'completed').map(item => ({ value: item.id, label: `${new Date(item.finishedAt || item.createdAt).toLocaleString('zh-CN')} · ${item.commitSha.slice(0, 10)}` }))} />
       <Button disabled={!olderId || !newerId || olderId === newerId || new Date(items.find(item => item.id === olderId)?.finishedAt || 0).getTime() >= new Date(items.find(item => item.id === newerId)?.finishedAt || 0).getTime()} loading={comparing} onClick={() => void compareReports()}>对照两次报告</Button>
     </Space>
     {comparison && <ProjectReportComparison comparison={comparison} onOpenReport={id => void show(id)} onClose={() => setComparison(null)} />}
