@@ -6,6 +6,10 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
 const key = item => `${item.topic.trim().replace(/\s+/g,' ').toLocaleLowerCase()}\n${item.practice.trim().replace(/\s+/g,' ').toLocaleLowerCase()}`;
 const topicKey = value => String(value || '').normalize('NFKC').trim().replace(/\s+/g,' ').toLocaleLowerCase();
+const capabilityKey = item => JSON.stringify([
+  item.goal, item.baseline_version_id, item.requirement_id,
+  topicKey(item.topic), topicKey(item.acceptance),
+]);
 
 function orderByDependencies(tasks, edges) {
   const byId = new Map(tasks.map(task => [task.id,task]));
@@ -40,15 +44,18 @@ async function setPrerequisiteTaskMapping({ repositoryId, analysisId, suggestion
         a.requirement_baseline AS report_baseline,a.baseline_version_id AS report_baseline_version_id,
         a.commit_sha AS report_commit,a.branch AS report_branch,r.goal AS current_goal,
         r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,
-        r.commit_sha AS current_commit,r.branch AS current_branch
+        r.commit_sha AS current_commit,r.branch AS current_branch,
+        r.github_repository_id AS current_repository_identity,scan.github_repository_id AS report_repository_identity
       FROM project_analysis_suggestions s JOIN project_analyses a ON a.id=s.analysis_id
       JOIN project_repositories r ON r.id=a.repository_id
+      JOIN project_scans scan ON scan.id=a.scan_id
       WHERE s.id=$1 AND a.id=$2 AND r.id=$3 AND r.owner_id=$4
       FOR UPDATE OF s FOR SHARE OF r`,[suggestionId,analysisId,repositoryId,me.id])).rows[0];
     if (!row) { await connection.query('ROLLBACK'); return fail(404,'学习建议不存在'); }
     if (row.analysis_status !== 'completed') { await connection.query('ROLLBACK'); return fail(409,'报告尚未完成'); }
     if (prerequisiteIndex >= (row.prerequisites || []).length) { await connection.query('ROLLBACK'); return fail(404,'前置知识不存在'); }
-    if (row.report_goal !== row.current_goal || row.report_baseline !== row.current_baseline
+    if (!row.current_repository_identity || row.report_repository_identity !== row.current_repository_identity
+      || row.report_goal !== row.current_goal || row.report_baseline !== row.current_baseline
       || row.report_baseline_version_id !== row.current_baseline_version_id
       || row.report_commit.trim() !== row.current_commit.trim() || row.report_branch !== row.current_branch) {
       await connection.query('ROLLBACK'); return fail(409,'项目目标、需求基线或 commit 已变化，请重新分析后调整路线');
@@ -138,9 +145,12 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
   const [,repositoryId,analysisId,action] = match;
   if (action ? !['POST','GET'].includes(method) : method !== 'GET') return fail(405,'不支持该操作');
   if (!UUID.test(repositoryId) || !UUID.test(analysisId)) return fail(404,'学习路线不存在');
-  const repository = (await client.query('SELECT id,owner_id,goal,requirement_baseline,baseline_version_id,commit_sha,branch FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
+  const repository = (await client.query('SELECT id,owner_id,goal,requirement_baseline,baseline_version_id,commit_sha,branch,github_repository_id FROM project_repositories WHERE id=$1 AND owner_id=$2',[repositoryId,me.id])).rows[0];
   if (!repository) return fail(404,'项目不存在');
-  const analysis = (await client.query("SELECT id,repository_id,commit_sha,branch,goal,requirement_baseline,baseline_version_id,finished_at,analysis_coverage_complete,selected_file_count,available_file_count FROM project_analyses WHERE id=$1 AND repository_id=$2 AND owner_id=$3 AND status='completed'",[analysisId,repositoryId,me.id])).rows[0];
+  const analysis = (await client.query(`SELECT a.id,a.repository_id,a.commit_sha,a.branch,a.goal,a.requirement_baseline,a.baseline_version_id,
+    a.finished_at,a.analysis_coverage_complete,a.selected_file_count,a.available_file_count,s.github_repository_id
+    FROM project_analyses a JOIN project_scans s ON s.id=a.scan_id
+    WHERE a.id=$1 AND a.repository_id=$2 AND a.owner_id=$3 AND a.status='completed'`,[analysisId,repositoryId,me.id])).rows[0];
   if (!analysis) return fail(404,'已完成报告不存在');
   if (action === 'evidence' && method === 'GET') {
     const suggestionId = url.searchParams.get('suggestionId');
@@ -212,15 +222,16 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
       LEFT JOIN project_suggestion_decisions d ON d.suggestion_id=s.id
       LEFT JOIN project_suggestion_adjustments adj ON adj.suggestion_id=s.id
       WHERE s.analysis_id=$1 ORDER BY s.position`,[analysisId]),
-    analysis.baseline_version_id && analysis.analysis_coverage_complete ? client.query(`SELECT id FROM project_analyses
-      WHERE repository_id=$1 AND owner_id=$2 AND status='completed' AND id<>$3 AND finished_at<$4
-        AND branch=$5 AND goal=$6 AND baseline_version_id=$7 AND analysis_coverage_complete=true
-        AND selected_file_count=$8 AND available_file_count=$9
-      ORDER BY finished_at DESC,id DESC LIMIT 1`,[repositoryId,me.id,analysis.id,analysis.finished_at,analysis.branch,analysis.goal,analysis.baseline_version_id,analysis.selected_file_count,analysis.available_file_count]) : Promise.resolve({ rows: [] }),
+    analysis.github_repository_id && analysis.baseline_version_id && analysis.analysis_coverage_complete ? client.query(`SELECT a.id FROM project_analyses a
+      JOIN project_scans s ON s.id=a.scan_id
+      WHERE a.repository_id=$1 AND a.owner_id=$2 AND a.status='completed' AND a.id<>$3 AND a.finished_at<$4
+        AND a.branch=$5 AND a.goal=$6 AND a.baseline_version_id=$7 AND a.analysis_coverage_complete=true
+        AND a.selected_file_count=$8 AND a.available_file_count=$9 AND s.github_repository_id=$10
+      ORDER BY a.finished_at DESC,a.id DESC LIMIT 1`,[repositoryId,me.id,analysis.id,analysis.finished_at,analysis.branch,analysis.goal,analysis.baseline_version_id,analysis.selected_file_count,analysis.available_file_count,analysis.github_repository_id]) : Promise.resolve({ rows: [] }),
   ]);
   const taskIds = taskRows.rows.map(row => row.id);
   const previousId = previousRows.rows[0]?.id || null;
-  const [edgeRows,noteRows,experimentRows,oldSuggestionRows,evidenceRows,mappingRows] = await Promise.all([
+  const [edgeRows,noteRows,experimentRows,oldSuggestionRows,evidenceRows,mappingRows,verifiedRows] = await Promise.all([
     taskIds.length ? client.query('SELECT d.task_id,d.dependency_id,dependency.status AS dependency_status,dependency.deleted_at AS dependency_deleted_at FROM task_dependencies d JOIN tasks dependency ON dependency.id=d.dependency_id WHERE d.task_id=ANY($1::text[])',[taskIds]) : Promise.resolve({ rows: [] }),
     taskIds.length ? client.query(`SELECT n.id,n.title,n.task_id,s.id AS session_id
       FROM notes n LEFT JOIN sessions s ON s.id=n.source_session_id AND s.ingested_by=$2
@@ -245,6 +256,21 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
     ) recent WHERE position<=3 ORDER BY suggestion_id,created_at DESC,id DESC`,[analysisId,me.id]),
     client.query(`SELECT suggestion_id,prerequisite_index,task_id,version
       FROM project_prerequisite_task_links WHERE analysis_id=$1 AND owner_id=$2`,[analysisId,me.id]),
+    analysis.github_repository_id && analysis.github_repository_id === repository.github_repository_id
+      ? client.query(`SELECT e.id AS evidence_id,e.analysis_id,e.suggestion_id,e.kind,s.topic,s.acceptance,
+          f.requirement_id,a.goal,a.baseline_version_id,a.commit_sha,
+          review.reviewed_at
+        FROM project_learning_evidence e
+        JOIN project_learning_evidence_reviews review ON review.evidence_id=e.id AND review.state='verified'
+        JOIN project_analysis_suggestions s ON s.id=e.suggestion_id
+        LEFT JOIN project_analysis_findings f ON f.id=s.finding_id
+        JOIN project_analyses a ON a.id=e.analysis_id
+        JOIN project_scans scan ON scan.id=a.scan_id
+        WHERE e.repository_id=$1 AND e.owner_id=$2 AND scan.github_repository_id=$3
+          AND a.goal=$4 AND a.baseline_version_id IS NOT DISTINCT FROM $5::uuid AND a.branch=$6
+        ORDER BY review.reviewed_at DESC,e.id DESC LIMIT 5001`,
+      [repositoryId,me.id,analysis.github_repository_id,analysis.goal,analysis.baseline_version_id,analysis.branch])
+      : Promise.resolve({ rows: [] }),
   ]);
   const oldKeys = new Set(oldSuggestionRows.rows.map(key));
   const linkedIds = new Set(taskIds);
@@ -275,41 +301,102 @@ export async function handleProjectLearningRoadmap({ pathname, method, client, m
     const normalized = topicKey(item.topic);
     if (normalized) topicMatches.set(normalized,[...(topicMatches.get(normalized) || []),item]);
   }
+  const sourceAnalysisIds = [...new Set(verifiedRows.rows.filter(row => row.requirement_id).map(row => row.analysis_id))];
+  const sourceSuggestionRows = sourceAnalysisIds.length && verifiedRows.rows.length <= 5000
+    ? (await client.query(`SELECT s.id,s.analysis_id,s.topic,s.acceptance,f.requirement_id,a.goal,a.baseline_version_id
+      FROM project_analysis_suggestions s
+      LEFT JOIN project_analysis_findings f ON f.id=s.finding_id
+      JOIN project_analyses a ON a.id=s.analysis_id
+      WHERE s.analysis_id=ANY($1::uuid[]) ORDER BY s.analysis_id,s.position LIMIT 50001`,
+    [sourceAnalysisIds])).rows : [];
+  const capabilitySignalsTruncated = verifiedRows.rows.length > 5000 || sourceSuggestionRows.length > 50000;
+  const sourceTopics = new Map();
+  const sourceKeys = new Map();
+  if (!capabilitySignalsTruncated) for (const row of sourceSuggestionRows) {
+    const topic = JSON.stringify([row.analysis_id,topicKey(row.topic)]);
+    const full = JSON.stringify([row.analysis_id,capabilityKey(row)]);
+    sourceTopics.set(topic,(sourceTopics.get(topic) || 0) + 1);
+    sourceKeys.set(full,(sourceKeys.get(full) || 0) + 1);
+  }
+  const capabilityBySuggestion = new Map();
+  const capabilityByRequirement = new Map();
+  if (!capabilitySignalsTruncated) for (const row of verifiedRows.rows) {
+    const normalized = topicKey(row.topic);
+    if (!normalized || !['understanding','practice'].includes(row.kind)) continue;
+    const source = {
+      evidenceId: row.evidence_id, analysisId: row.analysis_id,
+      commitSha: row.commit_sha.trim(), reviewedAt: row.reviewed_at,
+    };
+    const direct = capabilityBySuggestion.get(row.suggestion_id) || { understanding: null, practice: null };
+    if (!direct[row.kind]) direct[row.kind] = source;
+    capabilityBySuggestion.set(row.suggestion_id,direct);
+    if (row.baseline_version_id && row.requirement_id
+      && sourceTopics.get(JSON.stringify([row.analysis_id,normalized])) === 1
+      && sourceKeys.get(JSON.stringify([row.analysis_id,capabilityKey(row)])) === 1) {
+      const reusableKey = capabilityKey(row);
+      const reusable = capabilityByRequirement.get(reusableKey) || { understanding: null, practice: null };
+      if (!reusable[row.kind]) reusable[row.kind] = source;
+      capabilityByRequirement.set(reusableKey,reusable);
+    }
+  }
+  for (const item of suggestions) {
+    const normalized = topicKey(item.topic);
+    const reusableKey = analysis.baseline_version_id && item.requirementId
+      ? capabilityKey({ goal: analysis.goal, baseline_version_id: analysis.baseline_version_id,
+        requirement_id: item.requirementId, topic: item.topic, acceptance: item.acceptance }) : null;
+    const signal = (topicMatches.get(normalized) || []).length === 1 && reusableKey
+      ? capabilityByRequirement.get(reusableKey) || capabilityBySuggestion.get(item.id)
+      : capabilityBySuggestion.get(item.id);
+    item.verifiedCapability = signal ? {
+      level: signal.understanding && signal.practice ? 'both' : signal.understanding ? 'understanding' : 'practice',
+      understanding: signal.understanding, practice: signal.practice,
+    } : null;
+  }
   const taskById = new Map(tasks.map(task => [task.id,task]));
   const manualMappings = new Map(mappingRows.rows.map(row => [`${row.suggestion_id}:${row.prerequisite_index}`,row]));
   for (const item of suggestions) {
     item.prerequisiteMappings = item.prerequisites.map((name,index) => {
       const manual = manualMappings.get(`${item.id}:${index}`);
       const mappedTask = manual?.task_id ? taskById.get(manual.task_id) : null;
+      const matches = (topicMatches.get(topicKey(name)) || []).filter(match => match.id !== item.id);
+      const matched = matches.length === 1 ? matches[0] : null;
       if (manual) return { name, suggestionId: null, taskIds: mappedTask ? [mappedTask.id] : [],
         state: mappedTask ? mappedTask.status === 'done' ? 'done' : 'pending' : 'unmapped',
         source: mappedTask ? 'manual' : 'manual_stale',
-        version: manual.version, mappedTaskId: mappedTask?.id || null };
-      const matches = (topicMatches.get(topicKey(name)) || []).filter(match => match.id !== item.id);
+        version: manual.version, mappedTaskId: mappedTask?.id || null,
+        verifiedCapabilityLevel: matched?.verifiedCapability?.level || null };
       if (matches.length !== 1) return { name, suggestionId: null, taskIds: [], state: matches.length ? 'ambiguous' : 'unmapped',
-        source: 'auto', version: 0, mappedTaskId: null };
-      const matched = matches[0];
+        source: 'auto', version: 0, mappedTaskId: null, verifiedCapabilityLevel: null };
       const taskIds = matched.status === 'ignored' ? [] : matched.linkedTaskIds;
       return { name, suggestionId: matched.id, taskIds,
         state: taskIds.length ? taskIds.every(id => taskById.get(id)?.status === 'done') ? 'done' : 'pending' : 'unmapped',
-        source: 'auto', version: 0, mappedTaskId: null };
+        source: 'auto', version: 0, mappedTaskId: null,
+        verifiedCapabilityLevel: matched.verifiedCapability?.level || null };
     });
   }
   const impactRank = { high: 0, medium: 1, low: 2 };
   const suggestionOrder = new Map(suggestionRows.rows.map((row,index) => [row.id,index]));
-  const stale = analysis.goal !== repository.goal || analysis.requirement_baseline !== repository.requirement_baseline
+  const stale = !analysis.github_repository_id || analysis.github_repository_id !== repository.github_repository_id
+    || analysis.goal !== repository.goal || analysis.requirement_baseline !== repository.requirement_baseline
     || analysis.baseline_version_id !== repository.baseline_version_id
     || analysis.commit_sha.trim() !== repository.commit_sha.trim() || analysis.branch !== repository.branch;
   const nextSuggestion = stale ? null : suggestions
     .filter(item => item.status === 'pending' && item.prerequisiteMappings.every(mapping => mapping.state === 'done'))
-    .sort((a,b) => (impactRank[a.impact] ?? 3)-(impactRank[b.impact] ?? 3) || suggestionOrder.get(a.id)-suggestionOrder.get(b.id))[0];
+    .sort((a,b) => (impactRank[a.impact] ?? 3)-(impactRank[b.impact] ?? 3)
+      || (b.prerequisiteMappings.filter(mapping => mapping.verifiedCapabilityLevel === 'both').length / (b.prerequisiteMappings.length || Infinity))
+        - (a.prerequisiteMappings.filter(mapping => mapping.verifiedCapabilityLevel === 'both').length / (a.prerequisiteMappings.length || Infinity))
+      || suggestionOrder.get(a.id)-suggestionOrder.get(b.id))[0];
   const nextTask = tasks.find(task => ['todo','in_progress'].includes(task.status) && task.externalBlockingCount === 0 && task.dependencyIds.every(id => tasks.find(item => item.id === id)?.status === 'done'));
   return { status: 200, data: {
     repositoryId, analysisId, commitSha: analysis.commit_sha.trim(), previousAnalysisId: previousId,
     stale,
     nextTaskId: nextTask?.id || null, nextSuggestionId: nextSuggestion?.id || null,
-    nextSuggestionReason: nextSuggestion ? nextSuggestion.prerequisites.length ? '已明确关联的前置任务均标为完成；仍需自行核验掌握程度' : '报告未列前置知识，按建议影响程度优先；仍需自行核验掌握程度' : null,
+    nextSuggestionReason: nextSuggestion ? nextSuggestion.prerequisites.length
+      ? capabilitySignalsTruncated ? '已明确关联的前置任务均标为完成；核验记录超出本次读取范围，没有用能力线索排序。'
+        : `已明确关联的前置任务均标为完成；其中 ${nextSuggestion.prerequisiteMappings.filter(mapping => mapping.verifiedCapabilityLevel === 'both').length}/${nextSuggestion.prerequisiteMappings.length} 项前置主题可追溯到理解与实践两类独立核验记录，其余仍待核对。此信号只用于同影响等级内排序。`
+      : '报告未列前置知识，按建议影响程度优先；仍需自行核验掌握程度' : null,
     tasks, suggestions,
+    capabilitySignalsTruncated,
     evidenceTruncated: noteRows.rows.length > 500 || experimentRows.rows.length > 500,
     evidenceScope: '仅关联当前账号可见的任务、本人笔记、本人会话来源和本人实验；学习记录不等于能力证明',
   } };

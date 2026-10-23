@@ -134,11 +134,17 @@ export interface ProjectPrerequisiteMapping {
   source: 'auto' | 'manual' | 'manual_stale';
   version: number;
   mappedTaskId: string | null;
+  verifiedCapabilityLevel: 'understanding' | 'practice' | 'both' | null;
+}
+export interface ProjectVerifiedCapability {
+  level: 'understanding' | 'practice' | 'both';
+  understanding: { evidenceId: string; analysisId: string; commitSha: string; reviewedAt: string } | null;
+  practice: { evidenceId: string; analysisId: string; commitSha: string; reviewedAt: string } | null;
 }
 export interface ProjectLearningRoadmap {
-  repositoryId: string; analysisId: string; commitSha: string; previousAnalysisId: string | null; stale: boolean; nextTaskId: string | null; nextSuggestionId: string | null; nextSuggestionReason: string | null; evidenceScope: string; evidenceTruncated: boolean;
+  repositoryId: string; analysisId: string; commitSha: string; previousAnalysisId: string | null; stale: boolean; nextTaskId: string | null; nextSuggestionId: string | null; nextSuggestionReason: string | null; evidenceScope: string; evidenceTruncated: boolean; capabilitySignalsTruncated: boolean;
   tasks: { id: string; title: string; status: string; progress: number | null; priority: string | null; phase: string | null; requirementId: string | null; dependencyIds: string[]; dependencyLevel: number; externalBlockingCount: number; notes: { id: string; title: string; sourceSessionId: string | null }[]; experiments: { id: string; title: string; recordKind: string }[] }[];
-  suggestions: { id: string; topic: string; reason: string; practice: string; acceptance: string; adjustment: null | { practice: string; acceptance: string; rationale: string }; impact: 'high' | 'medium' | 'low' | null; prerequisites: string[]; prerequisiteMappings: ProjectPrerequisiteMapping[]; status: 'pending' | 'accepted' | 'ignored'; requirementId: string | null; newSincePrevious: boolean | null; linkedTaskIds: string[]; evidence: ProjectLearningEvidence[]; evidenceCount: number }[];
+  suggestions: { id: string; topic: string; reason: string; practice: string; acceptance: string; adjustment: null | { practice: string; acceptance: string; rationale: string }; impact: 'high' | 'medium' | 'low' | null; prerequisites: string[]; prerequisiteMappings: ProjectPrerequisiteMapping[]; verifiedCapability: ProjectVerifiedCapability | null; status: 'pending' | 'accepted' | 'ignored'; requirementId: string | null; newSincePrevious: boolean | null; linkedTaskIds: string[]; evidence: ProjectLearningEvidence[]; evidenceCount: number }[];
 }
 export const getProjectLearningRoadmap = (repositoryId: string, analysisId: string) => http.get<ProjectLearningRoadmap>(`/project-repositories/${repositoryId}/roadmap/${analysisId}`);
 export interface ProjectLearningReview { state: 'pending' | 'verified' | 'needs_revision'; coreCorrect: boolean | null; boundaryVerified: boolean | null; rationale: string | null; requestedAt: string; reviewedAt: string | null; reviewerName: string | null }

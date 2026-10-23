@@ -120,6 +120,7 @@ export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { r
     {data && <>
       <Alert type={data.stale ? 'warning' : 'info'} showIcon message={data.stale ? '报告与当前项目基线不同，路线需重新核对' : '项目进度与个人学习证据分开显示'} description={data.evidenceScope} style={{ marginBottom: 12 }} />
       {data.evidenceTruncated && <Alert type="warning" showIcon message="关联记录较多，仅展示最近 500 条笔记和实验；当前证据列表不完整" style={{ marginBottom: 12 }} />}
+      {data.capabilitySignalsTruncated && <Alert type="warning" showIcon message="独立核验来源超出本次读取上限，本次不据此推断主题能力或调整推荐顺序" style={{ marginBottom: 12 }} />}
       <Typography.Paragraph type="secondary">{data.previousAnalysisId ? '建议与上一份同目标、同需求基线的报告比较；“新增”只表示建议文字首次出现。' : '没有可比的上一份报告，建议变化暂不判断。'}前置知识先按本报告的唯一同名建议自动匹配；你可手动关联本人已加入项目的任务，人工映射只改变学习路线，不改写固定报告或推断掌握程度。</Typography.Paragraph>
       <Typography.Title level={5}>关联任务 · 按依赖顺序</Typography.Title>
       {data.tasks.length ? <ol style={{ paddingLeft: 22, maxHeight: 440, overflowY: 'auto' }}>{data.tasks.map(task => <li key={task.id} style={{ marginBottom: 12 }}>
@@ -133,6 +134,11 @@ export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { r
       <Typography.Title level={5}>报告中的学习建议</Typography.Title>
       {data.suggestions.length ? <Space direction="vertical" style={{ width: '100%', maxHeight: 420, overflowY: 'auto' }}>{data.suggestions.map(item => <Card key={item.id} size="small" style={{ width: '100%' }} title={<Space wrap><span>{item.topic}</span><Tag>{suggestionStatus[item.status]}</Tag>{item.id === data.nextSuggestionId && <Tag color="blue">可考虑先处理</Tag>}{item.newSincePrevious && <Tag color="blue">相较上次新增</Tag>}{item.impact === 'high' && <Tag color="orange">高影响</Tag>}</Space>}>
         <Typography.Paragraph>{item.reason}</Typography.Paragraph>
+        {item.verifiedCapability && <Alert type="success" showIcon message={item.verifiedCapability.level === 'both' ? '本主题已有理解与实践两类独立核验记录' : `本主题已有${item.verifiedCapability.level === 'understanding' ? '理解' : '实践'}独立核验记录`}
+          description={<Space direction="vertical" size={0}>
+            {([['理解',item.verifiedCapability.understanding],['实践',item.verifiedCapability.practice]] as const).filter(([,source]) => Boolean(source)).map(([label,source]) => source && <span key={label}>{label}：{new Date(source.reviewedAt).toLocaleString('zh-CN')} · <Link to={`/project-analysis?repositoryId=${repositoryId}&analysisId=${source.analysisId}`}>来源报告 {source.commitSha.slice(0,10)}</Link></span>)}
+            <span>此信号只对应已核验的具体记录，不自动认定整体掌握，也不修改任务状态。</span>
+          </Space>} style={{ marginBottom: 8 }} />}
         <Typography.Paragraph><strong>实践：</strong>{item.practice}</Typography.Paragraph>
         <Typography.Paragraph><strong>验收：</strong>{item.acceptance}</Typography.Paragraph>
         {item.adjustment && <Alert type="info" showIcon message="个人调整稿" description={<><div><strong>实践：</strong>{item.adjustment.practice}</div><div><strong>验收：</strong>{item.adjustment.acceptance}</div><div><strong>理由：</strong>{item.adjustment.rationale}</div></>} style={{ marginBottom: 8 }} />}
@@ -144,6 +150,7 @@ export default function ProjectLearningRoadmap({ repositoryId, analysisId }: { r
             return <Space key={key} wrap align="center">
               <Typography.Text strong>{mapping.name}</Typography.Text>
               <Tag color={mapping.source === 'manual_stale' ? 'error' : mapping.state === 'done' ? 'success' : 'default'}>{mapping.source === 'manual' ? '人工映射' : mapping.source === 'manual_stale' ? '映射已失效' : '自动匹配'} · {status}</Tag>
+              {mapping.verifiedCapabilityLevel && <Tag color={mapping.verifiedCapabilityLevel === 'both' ? 'green' : 'blue'}>{mapping.verifiedCapabilityLevel === 'both' ? '理解与实践均有独立核验' : `${mapping.verifiedCapabilityLevel === 'understanding' ? '理解' : '实践'}有独立核验`}</Tag>}
               {mapping.source === 'auto' && mapping.taskIds.length > 0 && <Typography.Text type="secondary">{mapping.taskIds.map(id => data.tasks.find(task => task.id === id)?.title || '已关联任务').join('、')}</Typography.Text>}
               <Select aria-label={`前置知识 ${mapping.name} 关联任务`} showSearch optionFilterProp="label" style={{ minWidth: 240, maxWidth: '100%' }}
                 placeholder="手动选择关联任务" value={mapping.source === 'manual' ? mapping.mappedTaskId || undefined : undefined}
