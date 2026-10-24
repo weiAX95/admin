@@ -157,11 +157,19 @@ export const requestProjectLearningReview = (repositoryId: string, analysisId: s
 export const setProjectPrerequisiteTask = (repositoryId: string, analysisId: string, suggestionId: string, index: number, body: { taskId: string | null; expectedVersion: number }) =>
   http.put<{ suggestionId: string; prerequisiteIndex: number; mappedTaskId: string | null; source: 'auto' | 'manual'; version: number; updatedAt: string | null }>(`/project-repositories/${repositoryId}/roadmap/${analysisId}/prerequisites/${suggestionId}/${index}`, body);
 export const adjustProjectSuggestion = (repositoryId: string, analysisId: string, suggestionId: string, body: { practice: string; acceptance: string; rationale: string; expectedVersion: number }) => http.patch<ProjectAnalysisReport['suggestions'][number]['adjustment']>(`/project-repositories/${repositoryId}/analyses/${analysisId}/suggestions/${suggestionId}/adjust`, body);
+export type ProjectComparedFinding = Pick<ProjectAnalysisReport['findings'][number], 'requirementId' | 'title' | 'status' | 'detail' | 'evidence'>;
 export interface ProjectReportComparison {
   older: ProjectAnalysisJob & { fullName: string }; newer: ProjectAnalysisJob & { fullName: string };
   comparable: boolean; limitations: string[];
   suggestionReviewEligible: boolean; suggestionReviewUnavailableReason: string | null;
-  changes: { requirementId: string; kind: 'completion_signal' | 'possible_regression' | 'new_gap' | 'improved_gap' | 'changed'; before: Pick<ProjectAnalysisReport['findings'][number], 'requirementId' | 'title' | 'status' | 'detail' | 'evidence'>; after: Pick<ProjectAnalysisReport['findings'][number], 'requirementId' | 'title' | 'status' | 'detail' | 'evidence'> }[];
+  changes: { requirementId: string; kind: 'completion_signal' | 'possible_regression' | 'new_gap' | 'improved_gap' | 'changed'; before: ProjectComparedFinding; after: ProjectComparedFinding }[];
+  findingReview: {
+    sameStatusChanges: { requirementId: string; changedFields: ('title' | 'detail' | 'evidence')[]; before: ProjectComparedFinding; after: ProjectComparedFinding }[];
+    unmatchedGroups: {
+      reason: 'new_only' | 'old_only' | 'ambiguous_multiple' | 'missing_requirement_id' | 'incomparable_scope';
+      requirementId: string | null; before: ProjectComparedFinding[]; after: ProjectComparedFinding[];
+    }[];
+  };
   suggestions: { added: { topic: string; practice: string }[]; removed: { topic: string; practice: string }[] };
 }
 export const compareProjectAnalyses = (repositoryId: string, olderId: string, newerId: string) => http.get<ProjectReportComparison>(`/project-repositories/${repositoryId}/analyses/compare/${olderId}/${newerId}`);
