@@ -9,6 +9,7 @@ const namedImport = /\b(?:from\s*|import\s*\(|require\s*\()\s*['"]([^.'"\n/][^'"
 const namedSideEffectImport = /\bimport\s*['"]([^.'"\n/][^'"\n]*)['"]/g;
 const rootConfig = /^(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|tsconfig(?:\.[^/]*)?\.json|vite\.config\.[^/]+|pyproject\.toml|requirements\.txt|go\.mod|Cargo\.toml)$/;
 const aliasConfigPath = /(?:^|\/)(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json$/;
+const viteConfigPath = /(?:^|\/)vite\.config\.(?:[cm]?[jt]s)$/;
 const nestedConfigPath = /(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json|vite\.config\.[^/]+|pyproject\.toml|requirements\.txt|go\.(?:mod|work)|Cargo\.toml)$/;
 
 function javascriptImports(file, indexed, resolveEmittedNames = false) {
@@ -98,6 +99,265 @@ function javascriptAliasConfigs(files, includeExtends = false) {
     return result;
   };
   return [...readable.keys()].filter(name => aliasConfigPath.test(name)).map(name => parse(name)).filter(config => config?.paths.length).sort((a,b) => b.directory.length - a.directory.length);
+}
+
+// Only a direct literal Vite config is evidence: do not execute repository code or
+// infer aliases from variables, spreads, functions, regexes, or computed properties.
+function viteTokens(content) {
+  if (content.length > 100_000) return null;
+  const tokens = [];
+  for (let index = 0; index < content.length;) {
+    const char = content[index], next = content[index + 1];
+    if (/\s/.test(char)) { index++; continue; }
+    if (char === '/' && next === '/') { index = content.indexOf('\n',index + 2); if (index < 0) break; continue; }
+    if (char === '/' && next === '*') { index = content.indexOf('*/',index + 2); if (index < 0) return null; index += 2; continue; }
+    if (char === '/' || char === '`') return null;
+    if (char === '"' || char === "'") {
+      const quote = char;
+      let end = index + 1;
+      while (end < content.length && content[end] !== quote) {
+        if (content[end] === '\\') end++;
+        end++;
+      }
+      if (end >= content.length) return null;
+      tokens.push({ type: 'string', value: content.slice(index + 1,end) });
+      index = end + 1;
+    } else if (/[A-Za-z_$]/.test(char)) {
+      let end = index + 1;
+      while (end < content.length && /[\w$]/.test(content[end])) end++;
+      tokens.push({ type: 'identifier', value: content.slice(index,end) });
+      index = end;
+    } else {
+      const value = content.startsWith('...',index) ? '...' : char;
+      tokens.push({ type: 'punctuation', value });
+      index += value.length;
+    }
+    if (tokens.length > 12_000) return null;
+  }
+  return tokens;
+}
+
+function literalSegments(tokens, start, end, opening, closing) {
+  if (tokens[start]?.value !== opening || tokens[end]?.value !== closing) return null;
+  const matching = { '}': '{', ']': '[', ')': '(' };
+  const stack = [];
+  const segments = [];
+  let first = start + 1;
+  for (let index = first; index < end; index++) {
+    const value = tokens[index].value;
+    if (value === '{' || value === '[' || value === '(') stack.push(value);
+    else if (Object.hasOwn(matching,value)) { if (stack.pop() !== matching[value]) return null; }
+    else if (value === ',' && !stack.length) {
+      if (first < index) segments.push(tokens.slice(first,index));
+      first = index + 1;
+    }
+  }
+  if (stack.length) return null;
+  if (first < end) segments.push(tokens.slice(first,end));
+  return segments;
+}
+
+function literalProperties(tokens) {
+  const segments = literalSegments(tokens,0,tokens.length - 1,'{','}');
+  if (!segments) return null;
+  const properties = new Map();
+  for (const segment of segments) {
+    const key = segment[0];
+    if (!key || !['identifier','string'].includes(key.type) || segment[1]?.value !== ':' || segment.length < 3 || properties.has(key.value)) return null;
+    properties.set(key.value,segment.slice(2));
+  }
+  return properties;
+}
+
+function literalString(tokens) {
+  return tokens?.length === 1 && tokens[0].type === 'string' && !tokens[0].value.includes('\\') ? tokens[0].value : null;
+}
+
+function literalViteAliases(tokens) {
+  const root = literalProperties(tokens);
+  if (!root) return null;
+  const resolve = root.get('resolve');
+  if (!resolve) return [];
+  const options = literalProperties(resolve);
+  if (!options) return null;
+  const alias = options.get('alias');
+  if (!alias) return [];
+  let entries;
+  if (alias[0]?.value === '{') {
+    const properties = literalProperties(alias);
+    if (!properties) return null;
+    entries = [...properties].map(([find,value]) => ({ find, replacement: literalString(value) }));
+  } else {
+    const items = literalSegments(alias,0,alias.length - 1,'[',']');
+    if (!items) return null;
+    entries = items.map(item => {
+      const properties = literalProperties(item);
+      if (!properties || properties.size !== 2 || !properties.has('find') || !properties.has('replacement')) return null;
+      return { find: literalString(properties.get('find')), replacement: literalString(properties.get('replacement')) };
+    });
+  }
+  if (entries.some(item => !item?.find || item.find.includes('\\') || !item.replacement)) return null;
+  return entries;
+}
+
+function viteAliasConfig(content) {
+  const tokens = viteTokens(content);
+  if (!tokens) return null;
+  const roots = [];
+  for (let index = 0; index < tokens.length; index++) {
+    const exported = tokens[index]?.type === 'identifier' && tokens[index].value === 'export' && tokens[index + 1]?.type === 'identifier' && tokens[index + 1].value === 'default';
+    const commonjs = tokens[index]?.type === 'identifier' && tokens[index].value === 'module' && tokens[index + 1]?.value === '.' && tokens[index + 2]?.type === 'identifier' && tokens[index + 2].value === 'exports' && tokens[index + 3]?.value === '=';
+    if (!exported && !commonjs) continue;
+    const value = exported ? index + 2 : index + 4;
+    const opening = tokens[value]?.type === 'identifier' && tokens[value].value === 'defineConfig' && tokens[value + 1]?.value === '(' ? value + 2 : value;
+    if (tokens[opening]?.value !== '{') return null;
+    const stack = [];
+    let closing = -1;
+    for (let cursor = opening; cursor < tokens.length; cursor++) {
+      const token = tokens[cursor].value;
+      if (token === '{') stack.push(token);
+      else if (token === '}') { if (stack.pop() !== '{') return null; if (!stack.length) { closing = cursor; break; } }
+    }
+    if (closing < 0 || opening !== value && tokens[closing + 1]?.value !== ')') return null;
+    const after = opening === value ? closing + 1 : closing + 2;
+    if (tokens[after] && tokens[after].value !== ';') return null;
+    roots.push(tokens.slice(opening,closing + 1));
+  }
+  return roots.length === 1 ? literalViteAliases(roots[0]) : null;
+}
+
+function viteAliasConfigs(files) {
+  return files.filter(file => viteConfigPath.test(file.path)).map(file => ({
+    directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path),
+    aliases: file.status === 'read' && typeof file.content === 'string' ? viteAliasConfig(file.content) : null,
+  })).sort((a,b) => b.directory.length - a.directory.length);
+}
+
+function javascriptSourceTokens(content) {
+  if (content.length > 262_144) return null;
+  const tokens = [];
+  const quoted = start => {
+    let end = start + 1;
+    while (end < content.length && content[end] !== content[start]) {
+      if (content[end] === '\\') end++;
+      end++;
+    }
+    return end < content.length ? end + 1 : null;
+  };
+  const template = (start, nesting = 0) => {
+    if (nesting >= 32) return null;
+    let index = start + 1;
+    while (index < content.length) {
+      if (content[index] === '\\') { index += 2; continue; }
+      if (content[index] === '`') return index + 1;
+      if (content[index] === '$' && content[index + 1] === '{') {
+        let depth = 1;
+        index += 2;
+        while (index < content.length && depth) {
+          if (content[index] === '"' || content[index] === "'") { index = quoted(index); if (index === null) return null; continue; }
+          if (content[index] === '`') { index = template(index,nesting + 1); if (index === null) return null; continue; }
+          if (content[index] === '/' && content[index + 1] === '/') { index = content.indexOf('\n',index + 2); if (index < 0) return null; continue; }
+          if (content[index] === '/' && content[index + 1] === '*') { index = content.indexOf('*/',index + 2); if (index < 0) return null; index += 2; continue; }
+          if (content[index] === '/') return null;
+          if (content[index] === '{') depth++;
+          else if (content[index] === '}') depth--;
+          index++;
+        }
+        if (depth) return null;
+        continue;
+      }
+      index++;
+    }
+    return null;
+  };
+  for (let index = 0; index < content.length;) {
+    const char = content[index], next = content[index + 1];
+    if (/\s/.test(char)) { index++; continue; }
+    if (char === '/' && next === '/') { index = content.indexOf('\n',index + 2); if (index < 0) break; continue; }
+    if (char === '/' && next === '*') { index = content.indexOf('*/',index + 2); if (index < 0) return null; index += 2; continue; }
+    if (char === '"' || char === "'") {
+      const end = quoted(index);
+      if (end === null) return null;
+      tokens.push({ type: 'string', value: content.slice(index + 1,end - 1) });
+      index = end;
+    } else if (char === '`') {
+      index = template(index);
+      if (index === null) return null;
+    } else if (char === '/' && (/^(?:=|\(|\[|\{|:|,|!|\?|return|case)$/.test(tokens.at(-1)?.value || '') || tokens.at(-1)?.value === '>' && tokens.at(-2)?.value === '=')) {
+      let end = index + 1, characterClass = false;
+      while (end < content.length) {
+        if (content[end] === '\\') { end += 2; continue; }
+        if (content[end] === '[') characterClass = true;
+        else if (content[end] === ']') characterClass = false;
+        else if (content[end] === '/' && !characterClass) break;
+        end++;
+      }
+      if (end >= content.length) return null;
+      index = end + 1;
+      while (/[A-Za-z]/.test(content[index] || '')) index++;
+    } else if (/[A-Za-z_$]/.test(char)) {
+      let end = index + 1;
+      while (end < content.length && /[\w$]/.test(content[end])) end++;
+      tokens.push({ type: 'identifier', value: content.slice(index,end) });
+      index = end;
+    } else {
+      tokens.push({ type: 'punctuation', value: char });
+      index++;
+    }
+    if (tokens.length > 20_000) return null;
+  }
+  return tokens;
+}
+
+function literalImportNames(tokens) {
+  const names = [];
+  const afterBindings = (start, allowDefault) => {
+    let cursor = start;
+    if (tokens[cursor]?.value === 'type') cursor++;
+    if (allowDefault && tokens[cursor]?.type === 'identifier') {
+      cursor++;
+      if (tokens[cursor]?.value === ',') cursor++;
+      else return cursor;
+    }
+    if (tokens[cursor]?.value === '{') {
+      let depth = 1;
+      for (cursor++; cursor < tokens.length && depth; cursor++) {
+        if (tokens[cursor].value === '{') depth++;
+        else if (tokens[cursor].value === '}') depth--;
+      }
+      return depth ? null : cursor;
+    }
+    if (tokens[cursor]?.value === '*' && tokens[cursor + 1]?.value === 'as' && tokens[cursor + 2]?.type === 'identifier') return cursor + 3;
+    if (tokens[cursor]?.value === '*' && !allowDefault) return cursor + 1;
+    return null;
+  };
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token.type !== 'identifier' || tokens[index - 1]?.value === '.') continue;
+    if ((token.value === 'import' || token.value === 'require') && tokens[index + 1]?.value === '(' && tokens[index + 2]?.type === 'string') names.push(tokens[index + 2].value);
+    else if (token.value === 'import' && tokens[index + 1]?.type === 'string') names.push(tokens[index + 1].value);
+    else if (token.value === 'import' || token.value === 'export') {
+      const cursor = afterBindings(index + 1,token.value === 'import');
+      if (cursor !== null && tokens[cursor]?.value === 'from' && tokens[cursor + 1]?.type === 'string') names.push(tokens[cursor + 1].value);
+    }
+  }
+  return names;
+}
+
+function hasLiteralViteAliasImport(file, viteConfigs) {
+  if (!/\.(?:[cm]?[jt]sx?)$/.test(file.path)) return false;
+  const candidates = viteConfigs.filter(item => !item.directory || file.path.startsWith(`${item.directory}/`));
+  const nearest = candidates.filter(item => item.directory.length === candidates[0]?.directory.length);
+  const aliases = nearest.flatMap(item => item.aliases || []);
+  if (!aliases.length) return false;
+  const tokens = javascriptSourceTokens(file.content);
+  if (!tokens) return false; // Unsupported syntax is not evidence of an alias import.
+  for (const name of literalImportNames(tokens)) {
+    if (name.includes('\\')) return true;
+    // TypeScript paths do not prove Vite resolves the same target.
+    if (aliases.some(alias => name === alias.find || alias.find.endsWith('/') && name.startsWith(alias.find) || name.startsWith(`${alias.find}/`))) return true;
+  }
+  return false;
 }
 
 function javascriptAliasedImports(file, indexed, aliasConfigs, includeSameDepth = false) {
@@ -293,7 +553,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -314,11 +574,14 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files) : null;
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
   const aliasConfigs = includeAliases ? javascriptAliasConfigs(files,includeExtends) : [];
+  const viteConfigs = includeViteAliases ? viteAliasConfigs(files) : null;
   const reverse = new Map();
   const importsByPath = new Map();
+  const uncertainViteImporters = new Set();
   for (const file of files) {
     if (file.status !== 'read') continue;
     const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages,pythonBoundaries),...(apiEdges.get(file.path) || [])])];
+    if (viteConfigs && typeof file.content === 'string' && hasLiteralViteAliasImport(file,viteConfigs)) uncertainViteImporters.add(file.path);
     importsByPath.set(file.path,imports);
     for (const target of imports) {
       if (!reverse.has(target)) reverse.set(target,new Set());
@@ -343,8 +606,25 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
     dependencies.add(target);
     impactedModules.add(projectModuleKey(target));
   }
+  // The unknown Vite target may be any changed file. Invalidate each importer
+  // and its known transitive callers; unrelated modules remain reusable.
+  const uncertainLayers = [];
+  if (changedPaths.size && uncertainViteImporters.size) {
+    let pending = [...uncertainViteImporters].filter(name => !visited.has(name));
+    for (const name of uncertainViteImporters) impactedModules.add(projectModuleKey(name));
+    while (pending.length) {
+      uncertainLayers.push(pending.sort());
+      for (const name of pending) visited.add(name);
+      const next = new Set();
+      for (const name of pending) for (const caller of reverse.get(name) || []) if (!visited.has(caller)) {
+        impactedModules.add(projectModuleKey(caller));
+        next.add(caller);
+      }
+      pending = [...next];
+    }
+  }
   if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath) || includeAliases && (aliasConfigPath.test(change.path) || change.oldPath && aliasConfigPath.test(change.oldPath)) || includeNestedConfigs && (nestedConfigPath.test(change.path) || change.oldPath && nestedConfigPath.test(change.oldPath)))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
-  const priorityPaths = [...currentChanged].sort().concat(...layers,[...dependencies].sort());
+  const priorityPaths = [...currentChanged].sort().concat(...layers,[...dependencies].sort(),...uncertainLayers);
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
@@ -354,3 +634,4 @@ export const selectProjectImpactEvidenceV6 = (files, changes) => selectImpactEvi
 export const selectProjectImpactEvidenceV7 = (files, changes) => selectImpactEvidence(files,changes,true,true,true);
 export const selectProjectImpactEvidenceV8 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true);
 export const selectProjectImpactEvidenceV9 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true);
+export const selectProjectImpactEvidenceV10 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true);
