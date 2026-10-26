@@ -372,12 +372,14 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     <Typography.Paragraph type="secondary">可选上限会固定到分析任务，重试累计计算已用量。提交前按输入字符保守预留 token 和费用；每次继续调用前重新核对，已发出的单次模型调用仍可能产生超出预估的用量。</Typography.Paragraph>
     <Modal title="确认私有代码分析范围" open={Boolean(privatePreview)} onCancel={() => { if (!starting) setPrivatePreview(null); }} footer={<Space><Button disabled={starting} onClick={() => setPrivatePreview(null)}>取消</Button><Button type="primary" loading={starting} onClick={() => { if (privatePreview) void submit(privatePreview.scanId,privatePreview.modelId,{ tokenBudget:privatePreview.tokenBudget,costBudgetUsd:privatePreview.costBudgetUsd },privatePreview.disclosure,privatePreview.autoApproval); }}>确认发送并生成报告</Button></Space>} width={700}>
       {privatePreview && <Space direction="vertical" style={{ width:'100%' }}>
-        <Alert type="warning" showIcon message="以下内容将发送给模型提供方" description="本次扫描中选出的代码／文档摘录、项目目标和需求文档会作为模型输入。仓库正文与注释只作为待分析材料，不会执行仓库脚本。" />
+        <Alert type="warning" showIcon message="以下内容将发送给模型提供方" description="本次扫描中选出的代码／文档摘录、项目目标、需求文档和下列既有建议摘要会作为模型输入。仓库正文与注释只作为待分析材料，不会执行仓库脚本。" />
         <Typography.Text>提供方：{privatePreview.disclosure.provider} · 模型：{privatePreview.disclosure.model}</Typography.Text>
         <Typography.Text>数据目的地：<code>{privatePreview.disclosure.destination}</code></Typography.Text>
         <Typography.Text>固定 commit：{scans.find(item => item.id === privatePreview.scanId)?.commitSha.slice(0,10)}</Typography.Text>
         {privatePreview.autoApproval && <Typography.Text>本次上限：{privatePreview.tokenBudget?.toLocaleString()} token、最多 ${privatePreview.costBudgetUsd?.toFixed(2)}</Typography.Text>}
         <Typography.Text>扫描预算：{privatePreview.disclosure.scanFileLimit} 个文件、{Math.round(privatePreview.disclosure.scanByteLimit / 1024 / 1024)} MiB；本次选中 {privatePreview.disclosure.fileCount} 个文件摘录，{privatePreview.disclosure.truncatedCount} 个摘录已截短。</Typography.Text>
+        <Typography.Text>既有建议候选：{privatePreview.disclosure.duplicateCandidateCount} 条。以下文字也会发送给模型：</Typography.Text>
+        {privatePreview.disclosure.duplicateCandidates.length > 0 && <div style={{ maxHeight:180,overflow:'auto',background:'rgba(127,127,127,0.06)',borderRadius:6,padding:8 }}>{privatePreview.disclosure.duplicateCandidates.map(item => <div key={item.taskId} style={{ marginBottom:8 }}><strong>{item.title}</strong><div>主题：{item.topic}</div><div>实践：{item.practice}</div><div>验收：{item.acceptance}</div></div>)}</div>}
         {!privatePreview.disclosure.scanCoverageComplete && <Alert type="warning" showIcon message="本次扫描为部分覆盖，未读文件不会送入模型" />}
         <div style={{ maxHeight:180,overflow:'auto',background:'rgba(127,127,127,0.06)',borderRadius:6,padding:8 }}>{privatePreview.disclosure.paths.map(path => <div key={path}><code>{path}</code></div>)}</div>
       </Space>}
@@ -484,6 +486,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <Typography.Paragraph><strong>实践：</strong>{suggestion.practice}</Typography.Paragraph>
         <Typography.Paragraph><strong>验收：</strong>{suggestion.acceptance}</Typography.Paragraph>
         {suggestion.adjustment && <Alert type="info" showIcon style={{ marginBottom: 12 }} message="个人调整稿（接受时使用）" description={<><div><strong>实践：</strong>{suggestion.adjustment.practice}</div><div><strong>验收：</strong>{suggestion.adjustment.acceptance}</div><div><strong>调整理由：</strong>{suggestion.adjustment.rationale}</div></>} />}
+        {suggestion.semanticDuplicate && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message="模型判断可能与既有任务目标相同，请人工核对" description={<><div>{suggestion.semanticDuplicate.reason}</div>{suggestion.semanticDuplicate.available ? <Link to={`/tasks/${suggestion.semanticDuplicate.taskId}`}>{suggestion.semanticDuplicate.title}</Link> : <Typography.Text type="secondary">原任务已不可访问</Typography.Text>}</>} />}
         {!suggestion.decision && suggestion.possibleDuplicates.length > 0 && <Alert type="warning" showIcon style={{ marginBottom: 12 }} message={suggestion.possibleDuplicates.some(item => item.exact) ? '相同建议已创建任务' : '可能已有相关学习任务，请先核对'} description={<Space wrap>{suggestion.possibleDuplicates.map(item => <Space key={item.taskId} size={4}><Link to={`/tasks/${item.taskId}`}>{item.title}</Link>{item.sourceMatch && <Tag color="warning">同一文件证据</Tag>}</Space>)}</Space>} />}
         {suggestion.decision?.status === 'accepted' && <Space><Tag color="success">{suggestion.decision.targetMode === 'existing' ? '已关联已有任务' : '已创建学习任务'}</Tag>{suggestion.decision.taskId && <Link to={`/tasks/${suggestion.decision.taskId}`}>查看任务</Link>}</Space>}
         {suggestion.decision?.status === 'ignored' && <Tag>已忽略</Tag>}

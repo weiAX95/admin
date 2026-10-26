@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { parseProjectRequirements, validateCrossModuleFlows, validateProjectReport } from './project-analysis-core.mjs';
+import { candidateTaskIds } from './project-analysis-duplicates.mjs';
 
 export function projectCallFingerprint(job, group) {
   const input = JSON.parse(group.messages[1].content);
@@ -24,7 +25,7 @@ export function projectCallFingerprint(job, group) {
 export function cachedProjectCallValid(job, group, output) {
   try {
     if (group.kind === 'cross') validateCrossModuleFlows(output,group.files);
-    else validateProjectReport(output,group.files,{ maxFindings: 5, maxSuggestions: 3, requirementIds: parseProjectRequirements(job.requirement_document).map(item => item.id) });
+    else validateProjectReport(output,group.files,{ maxFindings: 5, maxSuggestions: 3, requirementIds: parseProjectRequirements(job.requirement_document).map(item => item.id), duplicateCandidateTaskIds: job.analysis_plan_version >= 11 ? candidateTaskIds(job) : null });
     return true;
   } catch { return false; }
 }

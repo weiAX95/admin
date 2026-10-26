@@ -225,22 +225,26 @@ export function validateCrossModuleFlows(raw, selectedFiles) {
 }
 
 export function mergeProjectModuleReports(results) {
-  const findings = [], suggestions = [], flows = [];
+  const findings = [], suggestions = [], flows = [], semanticDuplicates = [];
   for (const { moduleKey, report } of results) {
     const offset = findings.length;
+    const suggestionOffset = suggestions.length;
     findings.push(...report.findings.map(finding => ({ ...finding, moduleKey })));
     suggestions.push(...report.suggestions.map(suggestion => ({ ...suggestion, findingIndex: suggestion.findingIndex === null ? null : offset + suggestion.findingIndex })));
+    semanticDuplicates.push(...(report.semanticDuplicates || []).map(item => ({ ...item, suggestionIndex: suggestionOffset + item.suggestionIndex })));
     flows.push(...(report.flows || []).map(flow => ({ ...flow, moduleKey })));
   }
   if (findings.length > 40 || suggestions.length > 30 || flows.length > 16) throw new Error('模块报告条目超出汇总上限');
   const summary = results.length === 1 ? results[0].report.summary : `已分析 ${results.length} 个目录模块。${results.map(({moduleKey,report}) => `${moduleKey}：${report.summary.slice(0,180)}`).join('；')}`.slice(0,2000);
-  return { summary, findings, suggestions, flows };
+  return { summary, findings, suggestions, flows, ...(results.some(item => Object.hasOwn(item.report,'semanticDuplicates')) ? { semanticDuplicates } : {}) };
 }
 
-export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [] } = {}) {
+export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [], duplicateCandidateTaskIds = null } = {}) {
   let value;
   try { value = JSON.parse(raw); } catch { throw new Error('模型报告不是有效 JSON'); }
-  if (!(exactKeys(value, ['summary', 'findings', 'suggestions']) || exactKeys(value, ['summary', 'findings', 'suggestions', 'flows'])) || !boundedText(value.summary, 2000) || !Array.isArray(value.findings) || !value.findings.length || value.findings.length > maxFindings || !Array.isArray(value.suggestions) || value.suggestions.length > maxSuggestions || (Object.hasOwn(value, 'flows') && (!Array.isArray(value.flows) || value.flows.length > maxFlows))) throw new Error('模型报告结构无效');
+  const legacyShape = exactKeys(value, ['summary', 'findings', 'suggestions']) || exactKeys(value, ['summary', 'findings', 'suggestions', 'flows']);
+  const semanticShape = exactKeys(value, ['summary', 'findings', 'suggestions', 'flows', 'semanticDuplicates']);
+  if (!(duplicateCandidateTaskIds === null ? legacyShape : semanticShape) || !boundedText(value.summary, 2000) || !Array.isArray(value.findings) || !value.findings.length || value.findings.length > maxFindings || !Array.isArray(value.suggestions) || value.suggestions.length > maxSuggestions || (Object.hasOwn(value, 'flows') && (!Array.isArray(value.flows) || value.flows.length > maxFlows))) throw new Error('模型报告结构无效');
   const byPath = new Map(selectedFiles.map(file => [file.path, file]));
   const findings = value.findings.map(item => {
     if (!exactKeys(item, ['title', 'status', 'detail', 'evidence', 'requirementId']) || !boundedText(item.title, 160) || !boundedText(item.detail, 2000) || !['implemented', 'partial', 'not_found', 'unverified'].includes(item.status) || item.requirementId !== null && (typeof item.requirementId !== 'string' || !requirementIds.includes(item.requirementId))) throw new Error('模型结论结构或需求关联无效');
@@ -261,6 +265,18 @@ export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, ma
     if (!exactKeys(item, ['topic', 'reason', 'practice', 'acceptance', 'findingIndex', 'impact', 'impactReason', 'prerequisites']) || !boundedText(item.topic, 160) || !boundedText(item.reason, 1000) || !boundedText(item.practice, 1000) || !boundedText(item.acceptance, 1000) || !['high','medium','low'].includes(item.impact) || !boundedText(item.impactReason, 1000) || !Array.isArray(item.prerequisites) || item.prerequisites.length > 5 || item.prerequisites.some(value => !boundedText(value, 120)) || new Set(item.prerequisites.map(value => value.trim().toLocaleLowerCase())).size !== item.prerequisites.length || item.findingIndex !== null && (!Number.isInteger(item.findingIndex) || item.findingIndex < 0 || item.findingIndex >= findings.length)) throw new Error('模型建议结构或关联结论无效');
     return item;
   });
+  const semanticDuplicates = [];
+  if (duplicateCandidateTaskIds !== null) {
+    if (!Array.isArray(value.semanticDuplicates) || value.semanticDuplicates.length > suggestions.length) throw new Error('模型语义重复候选结构无效');
+    const usedSuggestions = new Set();
+    for (const item of value.semanticDuplicates) {
+      if (!exactKeys(item,['suggestionIndex','taskId','reason']) || !Number.isInteger(item.suggestionIndex) || item.suggestionIndex < 0 || item.suggestionIndex >= suggestions.length
+        || usedSuggestions.has(item.suggestionIndex) || !duplicateCandidateTaskIds.has(item.taskId)
+        || !boundedText(item.reason,300) || Array.from(item.reason.trim()).length < 10) throw new Error('模型语义重复候选无效');
+      usedSuggestions.add(item.suggestionIndex);
+      semanticDuplicates.push({ suggestionIndex: item.suggestionIndex, taskId: item.taskId, reason: item.reason.trim() });
+    }
+  }
   const flows = (value.flows || []).map(flow => {
     if (!exactKeys(flow, ['title', 'steps']) || !boundedText(flow.title, 160) || !Array.isArray(flow.steps) || flow.steps.length < 2 || flow.steps.length > 4) throw new Error('核心流程结构无效');
     return { title: flow.title.trim(), steps: flow.steps.map(step => {
@@ -271,5 +287,5 @@ export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, ma
       return { description: step.description.trim(), evidence: { path: file.path, line, excerpt: step.evidence.excerpt, type: file.category === 'test' ? 'test' : 'code', gitSha: file.gitSha } };
     }) };
   });
-  return { summary: value.summary.trim(), findings, suggestions, flows };
+  return { summary: value.summary.trim(), findings, suggestions, flows, ...(duplicateCandidateTaskIds !== null ? { semanticDuplicates } : {}) };
 }
