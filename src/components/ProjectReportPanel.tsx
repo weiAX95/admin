@@ -156,7 +156,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       if (!cancelled) setError(cause instanceof Error ? cause.message : '报告刷新失败');
     });
     return () => { cancelled = true; };
-  }, [repository.id, repository.goal, repository.requirementBaseline, repository.baselineVersionId, repository.commitSha]);
+  }, [repository.id, repository.githubRepositoryId, repository.branch, repository.goal, repository.requirementBaseline, repository.baselineVersionId, repository.commitSha]);
 
   const submit = async (selectedScan: string, selectedModel: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }, disclosure?: PrivateProjectDisclosure, autoApproval = false) => {
     setStarting(true);
@@ -272,13 +272,14 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     finally { setActingSuggestionId(''); }
   };
   const openAdjustment = (suggestion: ProjectAnalysisReport['suggestions'][number]) => {
+    if (!report || report.staleReasons.length > 0) return;
     setAdjustSuggestionId(suggestion.id);
     setAdjustPractice(suggestion.adjustment?.practice || suggestion.practice);
     setAdjustAcceptance(suggestion.adjustment?.acceptance || suggestion.acceptance);
     setAdjustRationale(suggestion.adjustment?.rationale || '');
   };
   const saveAdjustment = async () => {
-    if (!report || !adjustSuggestionId) return;
+    if (!report || report.staleReasons.length > 0 || !adjustSuggestionId) return;
     const suggestion = report.suggestions.find(item => item.id === adjustSuggestionId);
     if (!suggestion) return;
     setAdjustSaving(true);
@@ -342,7 +343,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     catch (cause) { setError(cause instanceof Error ? cause.message : '需求文档读取失败'); }
     finally { setRequirementLoading(false); }
   };
-  const reviewScan = report && scans.find(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status));
+  const reviewScan = report && scans.find(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && scan.branch === repository.branch && scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status));
   const reviewModelAvailable = report && models.some(model => model.id === report.modelId);
   const suggestionOrder = report ? orderProjectSuggestions(report.suggestions) : null;
   const renderSnapshotTask = (task: ProjectAnalysisReport['linkedTasks'][number]) => <Space key={task.id} size="small" wrap><Tag>{taskStates[task.status] || task.status} · {task.progress === null ? '进度未知' : `${Math.round(task.progress)}%`}</Tag>{task.currentlyAvailable ? <Link to={`/tasks/${task.id}`}>{task.title}</Link> : <Typography.Text type="secondary">{task.title}（当前不可访问）</Typography.Text>}</Space>;
@@ -488,14 +489,14 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         {suggestion.decision?.status === 'ignored' && <Tag>已忽略</Tag>}
         {suggestion.status === 'stale' && <Tag color="warning">已失效，需重审</Tag>}
         {!suggestion.decision && <Space>
-          <Button size="small" onClick={() => openAdjustment(suggestion)}>调整建议</Button>
+          <Button size="small" disabled={report.staleReasons.length > 0} onClick={() => openAdjustment(suggestion)}>调整建议</Button>
           {canEditTasks && <Popconfirm title="确认将此建议创建为学习任务？" description={suggestion.possibleDuplicates.length ? '可能已有相关任务；确认它们不同后再创建。' : '任务会保留实践、验收要求与当前报告来源。'} onConfirm={() => void decide(suggestion.id,'accept')}><Button type="primary" size="small" disabled={report.staleReasons.length > 0 || suggestion.possibleDuplicates.some(item => item.exact)} loading={actingSuggestionId === suggestion.id}>加入任务</Button></Popconfirm>}
           {canEditTasks && <Button size="small" disabled={report.staleReasons.length > 0 || suggestion.possibleDuplicates.some(item => item.exact)} onClick={() => void openAttach(suggestion.id)}>关联已有任务</Button>}
           <Popconfirm title="确认忽略此建议？" onConfirm={() => void decide(suggestion.id,'ignore')}><Button size="small" loading={actingSuggestionId === suggestion.id}>忽略</Button></Popconfirm>
         </Space>}
       </Card>) : <Empty description="暂无建议" />}
     </Card>}
-    <Modal title="调整学习建议" open={Boolean(adjustSuggestionId)} onCancel={() => { if (!adjustSaving) setAdjustSuggestionId(''); }} onOk={() => void saveAdjustment()} okText="保存调整" okButtonProps={{ loading: adjustSaving, disabled: [adjustPractice,adjustAcceptance,adjustRationale].some(value => Array.from(value.trim()).length < 10) }}>
+    <Modal title="调整学习建议" open={Boolean(adjustSuggestionId)} onCancel={() => { if (!adjustSaving) setAdjustSuggestionId(''); }} onOk={() => void saveAdjustment()} okText="保存调整" okButtonProps={{ loading: adjustSaving, disabled: !report || report.staleReasons.length > 0 || [adjustPractice,adjustAcceptance,adjustRationale].some(value => Array.from(value.trim()).length < 10) }}>
       <Typography.Paragraph type="secondary">原报告不会改写。接受建议创建或关联任务时，使用这里确认的实践与验收文字。</Typography.Paragraph>
       <Typography.Text>实践内容</Typography.Text><Input.TextArea aria-label="调整实践内容" value={adjustPractice} onChange={event => setAdjustPractice(event.target.value)} rows={4} maxLength={2000} showCount />
       <Typography.Text>验收标准</Typography.Text><Input.TextArea aria-label="调整验收标准" value={adjustAcceptance} onChange={event => setAdjustAcceptance(event.target.value)} rows={4} maxLength={2000} showCount />

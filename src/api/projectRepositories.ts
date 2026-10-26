@@ -59,6 +59,7 @@ export const getProjectRequirementBaseline = (repositoryId: string, baselineId: 
 export const createProjectRequirementBaseline = (repositoryId: string, content: string, currentVersionId: string | null) => http.post<ProjectRequirementBaseline>(`/project-repositories/${repositoryId}/baselines`, { content, currentVersionId });
 
 export interface ProjectScan {
+  branch: string;
   id: string;
   repositoryId: string;
   githubRepositoryId: number | null;

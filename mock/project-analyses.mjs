@@ -411,7 +411,9 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     return { status: 200, data: { items: rows.slice(0,30).map(view), nextCursor: rows.length > 30 ? rows[29].id : null } };
   }
   if (method === 'GET' && analysisId && !action) {
-    const job = (await client.query('SELECT * FROM project_analyses WHERE id=$1 AND repository_id=$2', [analysisId,repositoryId])).rows[0];
+    const job = (await client.query(`SELECT a.*,s.github_repository_id AS scan_github_repository_id,s.branch AS scan_branch,s.commit_sha AS scan_commit_sha
+      FROM project_analyses a LEFT JOIN project_scans s ON s.id=a.scan_id AND s.repository_id=a.repository_id
+      WHERE a.id=$1 AND a.repository_id=$2`, [analysisId,repositoryId])).rows[0];
     if (!job) return fail(404,'分析不存在');
     const feedbackRows = (await client.query('SELECT b.*,u.username FROM project_finding_feedback b JOIN users u ON u.id=b.owner_id WHERE b.analysis_id=$1 ORDER BY b.created_at DESC,b.id DESC', [analysisId])).rows;
     const feedbackByFinding = new Map();
@@ -421,7 +423,15 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       feedbackByFinding.set(feedback.finding_id,entries);
     }
     const findings = (await client.query('SELECT * FROM project_analysis_findings WHERE analysis_id=$1 ORDER BY position', [analysisId])).rows.map(row => ({ id: row.id, requirementId: row.requirement_id, moduleKey: row.module_key, title: row.title, status: row.status, detail: row.detail, evidence: row.evidence_path === null ? null : { type: row.evidence_type, path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha?.trim() || null }, feedback: feedbackByFinding.get(row.id) || [] }));
-    const staleReasons = [job.goal !== repository.goal ? '项目目标已变化' : null, job.requirement_baseline !== repository.requirement_baseline || job.baseline_version_id !== repository.baseline_version_id ? '需求基线已变化' : null, job.commit_sha.trim() !== repository.commit_sha.trim() ? '仓库 commit 已变化' : null].filter(Boolean);
+    const staleReasons = [
+      !repository.github_repository_id || !job.scan_github_repository_id ? '报告缺少已核对的 GitHub 仓库身份' : job.scan_github_repository_id !== repository.github_repository_id ? 'GitHub 仓库身份已变化' : null,
+      job.branch !== repository.branch ? '仓库分支已变化' : null,
+      job.branch !== job.scan_branch ? '报告分支与扫描不一致' : null,
+      job.goal !== repository.goal ? '项目目标已变化' : null,
+      job.requirement_baseline !== repository.requirement_baseline || job.baseline_version_id !== repository.baseline_version_id ? '需求基线已变化' : null,
+      job.commit_sha.trim() !== repository.commit_sha?.trim() ? '仓库 commit 已变化' : null,
+      job.commit_sha.trim() !== job.scan_commit_sha?.trim() ? '报告 commit 与扫描不一致' : null,
+    ].filter(Boolean);
     const accepted = (await client.query(`SELECT s.topic,COALESCE(adj.practice,s.practice) AS practice,t.id AS task_id,t.title
       FROM project_suggestion_decisions d JOIN project_analysis_suggestions s ON s.id=d.suggestion_id
       LEFT JOIN project_suggestion_adjustments adj ON adj.suggestion_id=s.id

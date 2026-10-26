@@ -36,11 +36,13 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
   try {
     await connection.query('BEGIN');
     await connection.query('SELECT pg_advisory_xact_lock(748201)');
-    const row = (await connection.query(`SELECT s.*,a.id AS analysis_id,a.status AS analysis_status,a.goal AS report_goal,a.requirement_baseline AS report_baseline,a.commit_sha,a.full_name,
-      a.baseline_version_id AS report_baseline_version_id,r.owner_id AS repository_owner_id,r.goal AS current_goal,r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,r.commit_sha AS current_commit,r.branch AS current_branch,
+    const row = (await connection.query(`SELECT s.*,a.id AS analysis_id,a.status AS analysis_status,a.goal AS report_goal,a.requirement_baseline AS report_baseline,a.commit_sha,a.full_name,a.branch AS report_branch,
+      a.baseline_version_id AS report_baseline_version_id,r.owner_id AS repository_owner_id,r.goal AS current_goal,r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,r.commit_sha AS current_commit,r.branch AS current_branch,r.github_repository_id AS current_github_repository_id,
+      scan.github_repository_id AS scan_github_repository_id,scan.branch AS scan_branch,scan.commit_sha AS scan_commit_sha,
       f.title AS finding_title,f.requirement_id AS finding_requirement_id,f.evidence_path,f.evidence_line
       FROM project_analysis_suggestions s JOIN project_analyses a ON a.id=s.analysis_id
       JOIN project_repositories r ON r.id=a.repository_id
+      LEFT JOIN project_scans scan ON scan.id=a.scan_id AND scan.repository_id=a.repository_id
       LEFT JOIN project_analysis_findings f ON f.id=s.finding_id
       WHERE s.id=$1 AND a.id=$2 AND a.repository_id=$3 AND r.owner_id=$4 FOR UPDATE OF s FOR SHARE OF r`, [suggestionId,analysisId,repositoryId,me.id])).rows[0];
     if (!row) { await connection.query('ROLLBACK'); return fail(404,'建议不存在'); }
@@ -48,8 +50,20 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
     if (!canAccess(me,'project_suggestions',operation,{ownerId:row.repository_owner_id})) { await connection.query('ROLLBACK'); return fail(403,'无权处理该项目建议'); }
     if (row.analysis_status !== 'completed') { await connection.query('ROLLBACK'); return fail(409,'报告尚未完成'); }
     const existing = (await connection.query('SELECT * FROM project_suggestion_decisions WHERE suggestion_id=$1', [suggestionId])).rows[0];
+    if (existing) {
+      if (action === 'adjust') { await connection.query('ROLLBACK'); return fail(409,'已处理的建议不能再调整'); }
+      if (action === 'preview' || action === 'accept' && body?.targetTaskId && body.targetTaskId !== existing.task_id) { await connection.query('ROLLBACK'); return fail(409,'该建议已处理'); }
+      await connection.query('COMMIT');
+      return existing.state === (action === 'accept' ? 'accepted' : 'ignored') ? { status: 200, data: { suggestionId, status: existing.state, taskId: existing.task_id, targetMode: existing.target_mode, decidedAt: existing.decided_at } } : fail(409,'该建议已有不同处理结果');
+    }
+    if (action !== 'ignore' && (!row.current_github_repository_id || !row.scan_github_repository_id || row.scan_github_repository_id !== row.current_github_repository_id
+      || row.report_branch !== row.current_branch || row.report_branch !== row.scan_branch
+      || row.commit_sha.trim() !== row.current_commit?.trim() || row.commit_sha.trim() !== row.scan_commit_sha?.trim()
+      || row.report_goal !== row.current_goal || row.report_baseline !== row.current_baseline || row.report_baseline_version_id !== row.current_baseline_version_id)) {
+      await connection.query('ROLLBACK');
+      return fail(409,'报告的仓库身份、分支、commit、项目目标或需求基线已变化或无法核对，请重新扫描并分析后确认');
+    }
     if (action === 'adjust') {
-      if (existing) { await connection.query('ROLLBACK'); return fail(409,'已处理的建议不能再调整'); }
       const practice = typeof body?.practice === 'string' ? body.practice.trim() : '';
       const acceptance = typeof body?.acceptance === 'string' ? body.acceptance.trim() : '';
       const rationale = typeof body?.rationale === 'string' ? body.rationale.trim() : '';
@@ -67,16 +81,10 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
       await connection.query('COMMIT');
       return { status: 200, data: { suggestionId, practice, acceptance, rationale, version: saved.version, updatedAt: saved.updated_at } };
     }
-    if (existing) {
-      if (action === 'preview' || action === 'accept' && body?.targetTaskId && body.targetTaskId !== existing.task_id) { await connection.query('ROLLBACK'); return fail(409,'该建议已处理'); }
-      await connection.query('COMMIT');
-      return existing.state === (action === 'accept' ? 'accepted' : 'ignored') ? { status: 200, data: { suggestionId, status: existing.state, taskId: existing.task_id, targetMode: existing.target_mode, decidedAt: existing.decided_at } } : fail(409,'该建议已有不同处理结果');
-    }
     const adjustment = (await connection.query('SELECT practice,acceptance FROM project_suggestion_adjustments WHERE suggestion_id=$1',[suggestionId])).rows[0];
     if (adjustment) { row.practice = adjustment.practice; row.acceptance = adjustment.acceptance; }
     const key = fingerprint(row);
     if (action === 'preview' || action === 'accept') {
-      if (row.report_goal !== row.current_goal || row.report_baseline !== row.current_baseline || row.report_baseline_version_id !== row.current_baseline_version_id || row.commit_sha.trim() !== row.current_commit?.trim()) { await connection.query('ROLLBACK'); return fail(409,'项目目标、需求基线或 commit 已变化，请重新分析后确认'); }
       const duplicate = (await connection.query("SELECT task_id FROM project_suggestion_decisions WHERE owner_id=$1 AND repository_id=$2 AND fingerprint=$3 AND state='accepted' LIMIT 1", [me.id,repositoryId,key])).rows[0];
       if (duplicate) { await connection.query('ROLLBACK'); return fail(409,'相同实践建议已转为任务', { taskId: duplicate.task_id }); }
     }
