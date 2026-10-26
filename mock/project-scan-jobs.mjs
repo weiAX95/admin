@@ -45,7 +45,7 @@ export async function runProjectScan(db, id, scanRepository = scanPublicReposito
   try {
     locked = (await lockClient.query('SELECT pg_try_advisory_lock(748207) AS locked')).rows[0].locked;
     if (!locked) return;
-    const claimed = await db.query("UPDATE project_scans SET status='scanning',started_at=now(),next_attempt_at=NULL,error_code=NULL WHERE id=$1 AND (status='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=now()) OR status='scanning') RETURNING id,repository_id,full_name,commit_sha,github_repository_id,created_at,budget_file_limit,budget_byte_limit,force_full,retry_count", [id]);
+    const claimed = await db.query("UPDATE project_scans SET status='scanning',started_at=now(),next_attempt_at=NULL,error_code=NULL WHERE id=$1 AND (status='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=now()) OR status='scanning') RETURNING id,repository_id,full_name,branch,commit_sha,github_repository_id,created_at,budget_file_limit,budget_byte_limit,force_full,retry_count", [id]);
     if (!claimed.rowCount) return;
     const job = claimed.rows[0];
     try {
@@ -53,7 +53,7 @@ export async function runProjectScan(db, id, scanRepository = scanPublicReposito
     if (!repository) throw new Error('REPOSITORY_MISSING');
     if (repository.github_repository_id === null || job.github_repository_id === null || repository.github_repository_id !== job.github_repository_id) throw Object.assign(new Error('仓库身份尚未核对或已变化'),{ code: 'GITHUB_REPOSITORY_IDENTITY_REQUIRED' });
     if (repository.is_private) await assertGithubPrivateRepoAccess(db,repository.owner_id,repository.full_name,repository.github_repository_id);
-    const source = (await db.query("SELECT id,commit_sha FROM project_scans WHERE repository_id=$1 AND id<>$2 AND created_at<$3 AND github_repository_id=$4 AND status IN ('completed','partial') ORDER BY created_at DESC,id DESC LIMIT 1", [job.repository_id,id,job.created_at,job.github_repository_id])).rows[0];
+    const source = (await db.query("SELECT id,commit_sha FROM project_scans WHERE repository_id=$1 AND id<>$2 AND created_at<$3 AND github_repository_id=$4 AND branch=$5 AND status IN ('completed','partial') ORDER BY created_at DESC,id DESC LIMIT 1", [job.repository_id,id,job.created_at,job.github_repository_id,job.branch])).rows[0];
     const cachedBlobs = new Map();
     if (source && !job.force_full && !repository.is_private) {
       const rows = (await db.query("SELECT git_sha,content_sha256,content FROM project_scan_files WHERE scan_id=$1 AND status='read' AND content IS NOT NULL AND content_sha256 IS NOT NULL LIMIT 5000", [source.id])).rows;
@@ -134,6 +134,11 @@ export async function handleProjectScans({ pathname, method, client, me, url, re
     const connection = pooled ? await client.connect() : client;
     try {
       await connection.query('BEGIN');
+      const current = (await connection.query('SELECT github_repository_id,branch,commit_sha FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR SHARE',[repositoryId,me.id])).rows[0];
+      if (!current || !current.github_repository_id || current.github_repository_id !== repository.github_repository_id || current.branch !== repository.branch || current.commit_sha.trim() !== repository.commit_sha.trim()) {
+        await connection.query('ROLLBACK');
+        return fail(409,'仓库身份、分支或 commit 已变化，请刷新项目后重新扫描');
+      }
       await connection.query("INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,github_repository_id,budget_file_limit,budget_byte_limit,force_full,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'queued')", [id,repositoryId,repository.full_name,repository.branch,repository.commit_sha,repository.github_repository_id,budgetFileLimit,budgetByteLimit,forceFull]);
       if (req) await appendSecurityAudit(connection,req,me,'create','project_scans',id,{repositoryId,commitSha:repository.commit_sha.trim(),budgetFileLimit,budgetByteLimit,forceFull});
       await connection.query('COMMIT');
@@ -141,7 +146,7 @@ export async function handleProjectScans({ pathname, method, client, me, url, re
     catch (error) {
       await connection.query('ROLLBACK').catch(() => undefined);
       if (error.code !== '23505') throw error;
-      const active = (await client.query("SELECT * FROM project_scans WHERE repository_id=$1 AND commit_sha=$2 AND status IN ('queued','scanning') ORDER BY created_at LIMIT 1", [repositoryId,repository.commit_sha])).rows[0];
+      const active = (await client.query("SELECT * FROM project_scans WHERE repository_id=$1 AND branch=$2 AND commit_sha=$3 AND status IN ('queued','scanning') ORDER BY created_at LIMIT 1", [repositoryId,repository.branch,repository.commit_sha])).rows[0];
       return active && active.force_full === forceFull ? { status: 202, data: view(active) } : fail(409,'同一 commit 已有不同模式的扫描任务，请稍后重试');
     }
     finally { if (pooled) connection.release(); }

@@ -748,4 +748,6 @@ flowchart LR
 | `schema_migrations` | 已执行的 SQL 迁移版本与时间。 | `npm run db:migrate` |
 | `data_imports` | 旧 JSON 导入文件的哈希与导入时间，防止重复导入。 | `npm run db:import` |
 
+[146 扫描分支隔离迁移](../db/migrations/146_project_scan_branch_isolation.sql) 将 `project_scans` 进行中唯一索引限定为项目、分支和 commit；它是唯一索引，不是新的外键或表。扫描差异的基线也只从同一可信 GitHub 仓库 ID、同一分支的较早扫描中选择，防止跨分支差异误报。
+
 早期的任务、会话和笔记表组之外，后续迁移还增加了实验、评测、模型治理、系统设置、项目分析、会话分析及页面错误报告等表，当前总数以本文开头的 151 张为准。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。
