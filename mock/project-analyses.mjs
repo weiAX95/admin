@@ -31,6 +31,9 @@ const pending = new Map();
 const running = new Map();
 const defaultRunModel = (client, job, messages, signal) => completeWithProvider(client, { provider: job.provider, connectionId: job.connection_id, model: job.api_model, messages, signal, parameters: { temperature: 0, max_tokens: MAX_OUTPUT_TOKENS }, timeoutMs: 90000, audit: { runId: job.id, attempt: job.attempts, userId: job.owner_id, module: 'project_analysis', phase: 'main', modelId: job.model_id, redactPrompt: true } });
 const hasSensitiveMetadata = job => [job.full_name, job.branch, job.goal, job.requirement_baseline, job.requirement_document].some(value => value && containsKnownSecret(value));
+const scanMatchesCurrentRepository = (repository, scan) => Boolean(repository?.github_repository_id && scan?.github_repository_id
+  && repository.github_repository_id === scan.github_repository_id
+  && repository.branch === scan.branch && repository.commit_sha?.trim() === scan.commit_sha?.trim());
 
 function modelDestination(baseUrl) {
   try {
@@ -314,7 +317,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     const body = await readBody();
     if (!UUID.test(body?.scanId || '') || typeof body?.modelId !== 'string') return fail(400,'请选择扫描记录和模型');
     const scan = (await client.query("SELECT * FROM project_scans WHERE id=$1 AND repository_id=$2 AND status IN ('completed','partial')",[body.scanId,repositoryId])).rows[0];
-    if (repository.github_repository_id === null || scan?.github_repository_id !== repository.github_repository_id) return fail(409,'此扫描缺少已核对的 GitHub 仓库身份，请重新扫描');
+    if (!scanMatchesCurrentRepository(repository,scan)) return fail(409,'扫描与当前仓库身份、分支或 commit 不一致，请重新扫描');
     const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1',[body.modelId])).rows[0];
     if (!scan || !modelUsable(model,me) || !supportedProvider.has(model.provider) || !model.capabilities?.output?.includes('text') || !await connectionAvailable(client,model)) return fail(409,'扫描记录或模型不可用');
     try { await assertGithubPrivateRepoAccess(client,me.id,repository.full_name,repository.github_repository_id); }
@@ -489,8 +492,9 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (method === 'POST' && analysisId && action === 'retry') {
     const previous = (await client.query('SELECT * FROM project_analyses WHERE id=$1 AND repository_id=$2', [analysisId,repositoryId])).rows[0];
     if (!previous || previous.status !== 'failed' || previous.attempts >= previous.max_attempts) return fail(409,'分析不可重试或已达到次数上限');
-    const retryScan = (await client.query('SELECT github_repository_id FROM project_scans WHERE id=$1',[previous.scan_id])).rows[0];
-    if (!repository.github_repository_id || retryScan?.github_repository_id !== repository.github_repository_id) return fail(409,'原扫描缺少已核对的 GitHub 仓库身份，请重新扫描');
+    const retryScan = (await client.query('SELECT github_repository_id,branch,commit_sha FROM project_scans WHERE id=$1 AND repository_id=$2',[previous.scan_id,repositoryId])).rows[0];
+    if (!scanMatchesCurrentRepository(repository,retryScan) || previous.branch !== retryScan.branch || previous.commit_sha.trim() !== retryScan.commit_sha.trim()
+      || previous.goal !== repository.goal || previous.requirement_baseline !== repository.requirement_baseline || previous.baseline_version_id !== repository.baseline_version_id) return fail(409,'原分析与当前仓库或需求基线不一致，请重新扫描或新建分析');
     const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1', [previous.model_id])).rows[0];
     if (!modelUsable(model,me) || !supportedProvider.has(previous.provider) || !model.capabilities?.output?.includes('text') || !await connectionAvailable(client,{ ...model, provider: previous.provider, connection_id: previous.connection_id })) return fail(409,'模型不可用或原连接未配置');
     const files = (await client.query('SELECT path,git_sha,category,status,content FROM project_scan_files WHERE scan_id=$1', [previous.scan_id])).rows;
@@ -520,6 +524,9 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       await connection.query('SELECT pg_advisory_xact_lock(748204)');
       const locked = (await connection.query('SELECT * FROM project_analyses WHERE id=$1 FOR UPDATE', [analysisId])).rows[0];
       if (locked.status !== 'failed' || locked.attempts >= locked.max_attempts) { await connection.query('ROLLBACK'); return fail(409,'分析不可重试或已达到次数上限'); }
+      const currentRepository = (await connection.query('SELECT github_repository_id,branch,commit_sha,goal,requirement_baseline,baseline_version_id FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR SHARE',[repositoryId,me.id])).rows[0];
+      if (!scanMatchesCurrentRepository(currentRepository,retryScan) || locked.branch !== retryScan.branch || locked.commit_sha.trim() !== retryScan.commit_sha.trim()
+        || locked.goal !== currentRepository.goal || locked.requirement_baseline !== currentRepository.requirement_baseline || locked.baseline_version_id !== currentRepository.baseline_version_id) { await connection.query('ROLLBACK'); return fail(409,'仓库身份、分支、commit、项目目标或需求版本已变化，请新建分析'); }
       if (locked.connection_version !== null && !(await connection.query('SELECT 1 FROM model_connections WHERE id=$1 AND version=$2 AND active=true',[locked.connection_id,locked.connection_version])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'原模型连接配置已变化，请新建分析'); }
       const active = (await connection.query("SELECT id FROM project_analyses WHERE scan_id=$1 AND model_id=$2 AND status IN ('queued','analyzing') LIMIT 1", [locked.scan_id,locked.model_id])).rows[0];
       if (active) { await connection.query('ROLLBACK'); return fail(409,'同一扫描和模型已有进行中的分析'); }
@@ -559,7 +566,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (tokenBudget !== null && !TOKEN_BUDGETS.includes(tokenBudget) || costBudgetUsd !== null && !COST_BUDGETS.includes(costBudgetUsd)) return fail(400,'分析预算选项无效');
   const scan = (await client.query("SELECT * FROM project_scans WHERE id=$1 AND repository_id=$2 AND status IN ('completed','partial')", [body.scanId,repositoryId])).rows[0];
   if (!scan) return fail(404,'已完成的扫描记录不存在');
-  if (!repository.github_repository_id || scan.github_repository_id !== repository.github_repository_id) return fail(409,'此扫描缺少已核对的 GitHub 仓库身份，请重新扫描');
+  if (!scanMatchesCurrentRepository(repository,scan)) return fail(409,'扫描与当前仓库身份、分支或 commit 不一致，请重新扫描');
   if (autoApproval && (!repository.is_private || scan.auto_analysis_state !== 'approval_required')) return fail(409,'本次私有分析不在待审核状态');
   if (source === 'webhook' && (scan.trigger_source !== 'webhook' || repository.is_private !== autoApproval || !repository.webhook_scan_enabled || !repository.auto_analysis_enabled || repository.auto_analysis_model_id !== body.modelId || repository.auto_analysis_token_budget !== tokenBudget || Number(repository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) return fail(409,'自动分析设置或扫描来源已变化');
   const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1', [body.modelId])).rows[0];
@@ -595,8 +602,8 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   try {
     await connection.query('BEGIN');
     await connection.query('SELECT pg_advisory_xact_lock(748204)');
-    const currentRepository = (await connection.query('SELECT goal,requirement_baseline,baseline_version_id,commit_sha,webhook_scan_enabled,auto_analysis_enabled,auto_analysis_model_id,auto_analysis_token_budget,auto_analysis_cost_budget_usd FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR SHARE',[repositoryId,me.id])).rows[0];
-    if (!currentRepository || currentRepository.goal !== repository.goal || currentRepository.requirement_baseline !== repository.requirement_baseline || currentRepository.baseline_version_id !== repository.baseline_version_id || currentRepository.commit_sha.trim() !== repository.commit_sha.trim()) { await connection.query('ROLLBACK'); return fail(409,'项目目标、需求版本或 commit 已变化，请重新提交分析'); }
+    const currentRepository = (await connection.query('SELECT github_repository_id,branch,goal,requirement_baseline,baseline_version_id,commit_sha,webhook_scan_enabled,auto_analysis_enabled,auto_analysis_model_id,auto_analysis_token_budget,auto_analysis_cost_budget_usd FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR SHARE',[repositoryId,me.id])).rows[0];
+    if (!scanMatchesCurrentRepository(currentRepository,scan) || currentRepository.goal !== repository.goal || currentRepository.requirement_baseline !== repository.requirement_baseline || currentRepository.baseline_version_id !== repository.baseline_version_id || currentRepository.commit_sha.trim() !== repository.commit_sha.trim()) { await connection.query('ROLLBACK'); return fail(409,'仓库身份、分支、commit、项目目标或需求版本已变化，请重新扫描或提交分析'); }
     if (source === 'webhook' && (!currentRepository.webhook_scan_enabled || !currentRepository.auto_analysis_enabled || currentRepository.auto_analysis_model_id !== model.id || currentRepository.auto_analysis_token_budget !== tokenBudget || Number(currentRepository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) { await connection.query('ROLLBACK'); return fail(409,'自动分析设置已变化'); }
     if (autoApproval && !(await connection.query("SELECT 1 FROM project_scans WHERE id=$1 AND auto_analysis_state='approval_required' FOR UPDATE",[scan.id])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'本次私有分析已处理，请刷新'); }
     if (repository.is_private && !(await connection.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 FOR SHARE',[me.id])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'GitHub 授权已断开，请重新连接'); }

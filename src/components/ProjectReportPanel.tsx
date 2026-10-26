@@ -98,9 +98,9 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const loadedMore = useRef(false);
 
   useEffect(() => {
-    const eligible = scans.filter(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && ['completed', 'partial'].includes(scan.status));
+    const eligible = scans.filter(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && scan.branch === repository.branch && scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status));
     setScanId(current => eligible.some(scan => scan.id === current) ? current : eligible[0]?.id || '');
-  }, [scans, repository.githubRepositoryId]);
+  }, [scans, repository.githubRepositoryId, repository.branch, repository.commitSha]);
   useEffect(() => {
     const analysisId = new URLSearchParams(window.location.search).get('analysisId');
     if (!analysisId) return;
@@ -363,7 +363,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     {scans.some(scan => scan.githubRepositoryId === null) && <Alert type="info" showIcon message="旧扫描仅供查看" description="仓库身份绑定前的扫描无法证明来源，不能用于新报告；请核对仓库后重新扫描。" style={{ marginBottom: 16 }} />}
     <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
     <Space wrap style={{ marginBottom: 16 }}>
-      <Select aria-label="扫描记录" placeholder="选择扫描记录" value={scanId || undefined} onChange={setScanId} style={{ minWidth: 230 }} options={scans.filter(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && ['completed', 'partial'].includes(scan.status)).map(scan => ({ value: scan.id, label: `${scan.commitSha.slice(0, 10)} · ${scan.status === 'partial' ? '部分覆盖' : '完整覆盖'}${scan.forceFull ? ' · 全量重扫' : ''}` }))} />
+      <Select aria-label="扫描记录" placeholder="选择扫描记录" value={scanId || undefined} onChange={setScanId} style={{ minWidth: 230 }} options={scans.filter(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && scan.branch === repository.branch && scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status)).map(scan => ({ value: scan.id, label: `${scan.commitSha.slice(0, 10)} · ${scan.status === 'partial' ? '部分覆盖' : '完整覆盖'}${scan.forceFull ? ' · 全量重扫' : ''}` }))} />
       <Select aria-label="分析模型" placeholder="选择分析模型" value={modelId || undefined} onChange={setModelId} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
       <Select aria-label="分析 token 上限" value={tokenBudget} onChange={setTokenBudget} style={{ minWidth: 170 }} options={[{ value: null, label: 'token：仅系统配额' }, ...[30000,60000,120000].map(value => ({ value, label: `${value.toLocaleString()} token` }))]} />
       <Select aria-label="单次分析费用上限" value={costBudgetUsd} onChange={setCostBudgetUsd} style={{ minWidth: 170 }} options={[{ value: null, label: '费用：仅每日预算' }, ...[0.1,0.5,1,5].map(value => ({ value, label: `最多 $${value.toFixed(2)}` }))]} />
