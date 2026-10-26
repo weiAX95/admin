@@ -435,12 +435,28 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       job.commit_sha.trim() !== repository.commit_sha?.trim() ? '仓库 commit 已变化' : null,
       job.commit_sha.trim() !== job.scan_commit_sha?.trim() ? '报告 commit 与扫描不一致' : null,
     ].filter(Boolean);
-    const accepted = (await client.query(`SELECT s.topic,COALESCE(adj.practice,s.practice) AS practice,t.id AS task_id,t.title
+    const accepted = (await client.query(`SELECT s.topic,COALESCE(adj.practice,s.practice) AS practice,t.id AS task_id,t.title,
+      a.branch,a.commit_sha,sc.github_repository_id,sc.branch AS scan_branch,sc.commit_sha AS scan_commit_sha,
+      f.evidence_path,f.evidence_line,f.evidence_excerpt
       FROM project_suggestion_decisions d JOIN project_analysis_suggestions s ON s.id=d.suggestion_id
+      JOIN project_analyses a ON a.id=s.analysis_id
+      LEFT JOIN project_scans sc ON sc.id=a.scan_id AND sc.repository_id=a.repository_id
+      LEFT JOIN project_analysis_findings f ON f.id=s.finding_id
       LEFT JOIN project_suggestion_adjustments adj ON adj.suggestion_id=s.id
       JOIN tasks t ON t.id=d.task_id AND t.owner_id=d.owner_id AND t.deleted_at IS NULL
-      WHERE d.repository_id=$1 AND d.owner_id=$2 AND d.state='accepted'`, [repositoryId, me.id])).rows.map(row => ({ topic: row.topic, practice: row.practice, taskId: row.task_id, title: row.title }));
-    const suggestions = (await client.query('SELECT s.*,d.state AS decision_state,d.task_id,d.target_mode,d.decided_at,adj.practice AS adjusted_practice,adj.acceptance AS adjusted_acceptance,adj.rationale AS adjustment_rationale,adj.version AS adjustment_version,adj.updated_at AS adjustment_updated_at FROM project_analysis_suggestions s LEFT JOIN project_suggestion_decisions d ON d.suggestion_id=s.id LEFT JOIN project_suggestion_adjustments adj ON adj.suggestion_id=s.id WHERE s.analysis_id=$1 ORDER BY s.position', [analysisId])).rows.map(row => ({ id: row.id, findingId: row.finding_id, topic: row.topic, reason: row.reason, practice: row.practice, acceptance: row.acceptance, adjustment: row.adjustment_version ? { practice: row.adjusted_practice, acceptance: row.adjusted_acceptance, rationale: row.adjustment_rationale, version: row.adjustment_version, updatedAt: row.adjustment_updated_at } : null, impact: row.impact, impactReason: row.impact_reason, prerequisites: row.prerequisites || [], status: row.decision_state || (staleReasons.length ? 'stale' : 'pending'), decision: row.decision_state ? { status: row.decision_state, taskId: row.task_id, targetMode: row.target_mode, decidedAt: row.decided_at } : null, possibleDuplicates: row.decision_state ? [] : relatedAcceptedSuggestions({ ...row, practice: row.adjusted_practice || row.practice }, accepted) }));
+      WHERE d.repository_id=$1 AND d.owner_id=$2 AND d.state='accepted'`, [repositoryId, me.id])).rows.map(row => ({ topic: row.topic, practice: row.practice, taskId: row.task_id, title: row.title,
+      source: row.github_repository_id && row.github_repository_id === job.scan_github_repository_id
+        && row.branch === row.scan_branch && row.commit_sha.trim() === row.scan_commit_sha?.trim()
+        && row.evidence_path && row.evidence_excerpt ? {
+        repositoryId: row.github_repository_id, branch: row.branch, commitSha: row.commit_sha.trim(), path: row.evidence_path,
+        line: row.evidence_line, excerpt: row.evidence_excerpt,
+      } : null }));
+    const findingById = new Map(findings.map(finding => [finding.id,finding]));
+    const suggestions = (await client.query('SELECT s.*,d.state AS decision_state,d.task_id,d.target_mode,d.decided_at,adj.practice AS adjusted_practice,adj.acceptance AS adjusted_acceptance,adj.rationale AS adjustment_rationale,adj.version AS adjustment_version,adj.updated_at AS adjustment_updated_at FROM project_analysis_suggestions s LEFT JOIN project_suggestion_decisions d ON d.suggestion_id=s.id LEFT JOIN project_suggestion_adjustments adj ON adj.suggestion_id=s.id WHERE s.analysis_id=$1 ORDER BY s.position', [analysisId])).rows.map(row => {
+      const evidence = findingById.get(row.finding_id)?.evidence;
+      const source = !staleReasons.length && evidence ? { repositoryId: job.scan_github_repository_id, branch: job.branch, commitSha: job.commit_sha.trim(), path: evidence.path, line: evidence.line, excerpt: evidence.excerpt } : null;
+      return { id: row.id, findingId: row.finding_id, topic: row.topic, reason: row.reason, practice: row.practice, acceptance: row.acceptance, adjustment: row.adjustment_version ? { practice: row.adjusted_practice, acceptance: row.adjusted_acceptance, rationale: row.adjustment_rationale, version: row.adjustment_version, updatedAt: row.adjustment_updated_at } : null, impact: row.impact, impactReason: row.impact_reason, prerequisites: row.prerequisites || [], status: row.decision_state || (staleReasons.length ? 'stale' : 'pending'), decision: row.decision_state ? { status: row.decision_state, taskId: row.task_id, targetMode: row.target_mode, decidedAt: row.decided_at } : null, possibleDuplicates: row.decision_state ? [] : relatedAcceptedSuggestions({ ...row, practice: row.adjusted_practice || row.practice, source }, accepted) };
+    });
     const modules = (await client.query('SELECT * FROM project_analysis_modules WHERE analysis_id=$1 ORDER BY module_key', [analysisId])).rows.map(row => ({ moduleKey: row.module_key, indexedCount: row.indexed_count, readCount: row.read_count, selectedCount: row.selected_count, truncatedCount: row.truncated_count, excludedCount: row.excluded_count, failedCount: row.failed_count, unscannedCount: row.unscanned_count, summary: row.summary }));
     const flowRows = (await client.query(`SELECT f.id,f.module_key,f.title,f.position AS flow_position,s.position AS step_position,s.description,s.evidence_type,s.evidence_path,s.evidence_line,s.evidence_excerpt,s.evidence_git_sha
       FROM project_analysis_flows f JOIN project_analysis_flow_steps s ON s.flow_id=f.id
