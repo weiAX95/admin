@@ -68,7 +68,7 @@ export async function runProjectScan(db, id, scanRepository = scanPublicReposito
     if (result.commitSha !== job.commit_sha.trim()) throw new Error('COMMIT_MISMATCH');
     if (repository.is_private) await assertGithubPrivateRepoAccess(db,repository.owner_id,repository.full_name,repository.github_repository_id);
     result.cacheSourceCommitSha = source?.commit_sha?.trim() || null;
-    const sourceFiles = source ? (await db.query('SELECT path,git_sha FROM project_scan_files WHERE scan_id=$1 ORDER BY path LIMIT 5000',[source.id])).rows.map(row => ({ path: row.path, gitSha: row.git_sha.trim() })) : null;
+    const sourceFiles = source ? (await db.query('SELECT path,git_sha,status,content FROM project_scan_files WHERE scan_id=$1 ORDER BY path LIMIT 5000',[source.id])).rows.map(row => ({ path: row.path, gitSha: row.git_sha.trim(), status: row.status, content: row.content })) : null;
     const changes = compareProjectScanFiles(sourceFiles,result.files);
     await saveResult(db,id,result,source,changes,repository.is_private ? repository.owner_id : null);
     } catch (error) {
