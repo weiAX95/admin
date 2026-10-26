@@ -30,15 +30,16 @@ export function relatedAcceptedSuggestions(suggestion, accepted, limit = 3) {
       && suggestion.source.path === item.source.path
       && suggestion.source.line === item.source.line
       && suggestion.source.excerpt === item.source.excerpt);
+    const exact = normalize(suggestion.topic) === normalize(item.topic) && normalize(suggestion.practice) === normalize(item.practice);
     return {
       taskId: item.taskId,
       title: item.title,
-      exact: normalize(suggestion.topic) === normalize(item.topic) && normalize(suggestion.practice) === normalize(item.practice),
-      sourceMatch,
+      exact,
+      ...(sourceMatch && !exact ? { sourceMatch: true } : {}),
       similarity: Math.round((dice(suggestion.topic, item.topic) * 0.4 + dice(suggestion.practice, item.practice) * 0.6) * 100) / 100,
     };
   }).filter(item => item.sourceMatch || item.similarity >= 0.55)
-    .sort((a, b) => Number(b.exact) - Number(a.exact) || Number(b.sourceMatch) - Number(a.sourceMatch) || b.similarity - a.similarity || a.taskId.localeCompare(b.taskId))
+    .sort((a, b) => Number(b.exact) - Number(a.exact) || Number(Boolean(b.sourceMatch)) - Number(Boolean(a.sourceMatch)) || b.similarity - a.similarity || a.taskId.localeCompare(b.taskId))
     .filter(item => {
       if (seenTasks.has(item.taskId)) return false;
       seenTasks.add(item.taskId);
