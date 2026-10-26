@@ -52,10 +52,10 @@ async function currentBranchHead(pool, repository) {
 
 async function queueScan(client, repository, commitSha) {
   await client.query('UPDATE project_repositories SET commit_sha=$2,last_checked_at=now(),updated_at=now() WHERE id=$1',[repository.id,commitSha]);
-  const previous = await client.query("SELECT 1 FROM project_scans WHERE repository_id=$1 AND commit_sha=$2 AND github_repository_id=$3 AND status IN ('queued','scanning','completed','partial') LIMIT 1",[repository.id,commitSha,repository.github_repository_id]);
+  const previous = await client.query("SELECT 1 FROM project_scans WHERE repository_id=$1 AND branch=$2 AND commit_sha=$3 AND github_repository_id=$4 AND status IN ('queued','scanning','completed','partial') LIMIT 1",[repository.id,repository.branch,commitSha,repository.github_repository_id]);
   if (previous.rowCount) return 0;
-  const queuedScan = (await client.query(`SELECT id FROM project_scans WHERE repository_id=$1 AND github_repository_id=$2 AND trigger_source='webhook' AND status='queued'
-    AND created_at>now()-interval '2 minutes' ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE SKIP LOCKED`,[repository.id,repository.github_repository_id])).rows[0];
+  const queuedScan = (await client.query(`SELECT id FROM project_scans WHERE repository_id=$1 AND github_repository_id=$2 AND branch=$3 AND trigger_source='webhook' AND status='queued'
+    AND created_at>now()-interval '2 minutes' ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE SKIP LOCKED`,[repository.id,repository.github_repository_id,repository.branch])).rows[0];
   if (queuedScan) {
     await client.query('SAVEPOINT webhook_coalesce_scan');
     try {
@@ -66,7 +66,7 @@ async function queueScan(client, repository, commitSha) {
       await client.query('ROLLBACK TO SAVEPOINT webhook_coalesce_scan');
       await client.query('RELEASE SAVEPOINT webhook_coalesce_scan');
       if (error.code !== '23505') throw error;
-      const duplicate = await client.query("SELECT 1 FROM project_scans WHERE repository_id=$1 AND commit_sha=$2 AND github_repository_id=$3 AND status IN ('queued','scanning','completed','partial') LIMIT 1",[repository.id,commitSha,repository.github_repository_id]);
+      const duplicate = await client.query("SELECT 1 FROM project_scans WHERE repository_id=$1 AND branch=$2 AND commit_sha=$3 AND github_repository_id=$4 AND status IN ('queued','scanning','completed','partial') LIMIT 1",[repository.id,repository.branch,commitSha,repository.github_repository_id]);
       if (duplicate.rowCount) return 0;
     }
   }
