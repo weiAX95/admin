@@ -26,6 +26,38 @@ function excludedReason(path, entry, maxFileBytes) {
   return null;
 }
 
+function balancedIndexOrder(entries, maxFileBytes) {
+  const categories = ['config','source','test','documentation'];
+  const modules = new Map(), excluded = [];
+  for (const entry of entries) {
+    if (typeof entry.path !== 'string' || !SHA.test(entry.sha || '') || entry.skippedTree || excludedReason(entry.path,entry,maxFileBytes)) { excluded.push(entry); continue; }
+    const moduleKey = entry.path.includes('/') ? entry.path.split('/')[0] : '@root';
+    if (!modules.has(moduleKey)) modules.set(moduleKey,new Map(categories.map(name => [name,[]])));
+    modules.get(moduleKey).get(classification(entry.path)).push(entry);
+  }
+  const buckets = [...modules].sort(([left],[right]) => left.localeCompare(right)).map(([,groups]) => {
+    for (const files of groups.values()) files.sort((a,b) => a.path.localeCompare(b.path));
+    return { groups, positions: new Map(categories.map(name => [name,0])) };
+  });
+  const ordered = [];
+  let preferred = 0, remaining = entries.length - excluded.length;
+  while (remaining) {
+    for (const bucket of buckets) {
+      for (let offset = 0; offset < categories.length; offset++) {
+        const category = categories[(preferred + offset) % categories.length];
+        const files = bucket.groups.get(category), position = bucket.positions.get(category);
+        if (position >= files.length) continue;
+        ordered.push(files[position]);
+        bucket.positions.set(category,position + 1);
+        remaining--;
+        break;
+      }
+    }
+    preferred = (preferred + 1) % categories.length;
+  }
+  return ordered.concat(excluded.sort((a,b) => String(a.path || '').localeCompare(String(b.path || ''))));
+}
+
 async function githubFetch(url) {
   return fetch(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(10000) });
 }
@@ -88,6 +120,7 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
     }
     unscannedSubtrees += queue.length;
   }
+  entries = balancedIndexOrder(entries,maxFileBytes);
   const files = [];
   let readCount = 0, attemptedCount = 0, reusedCount = 0, failedCount = 0, excludedCount = 0, totalBytes = 0, unscannedCount = Math.max(0, entries.length - maxIndexEntries);
   for (const entry of entries.slice(0,maxIndexEntries)) {
