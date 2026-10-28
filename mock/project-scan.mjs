@@ -27,7 +27,7 @@ function excludedReason(path, entry, maxFileBytes) {
   return null;
 }
 
-function balancedIndexOrder(entries, maxFileBytes, priorityPaths = new Set(), priorityLimit = 0, priorityByteLimit = 0) {
+function balancedIndexOrder(entries, maxFileBytes, priorityPaths = new Set(), relatedPaths = new Set(), maxFiles = 0, maxTotalBytes = 0) {
   const categories = ['config','source','test','documentation'];
   const modules = new Map(), excluded = [];
   for (const entry of entries) {
@@ -56,16 +56,22 @@ function balancedIndexOrder(entries, maxFileBytes, priorityPaths = new Set(), pr
     }
     preferred = (preferred + 1) % categories.length;
   }
-  const priority = [];
-  let priorityBytes = 0;
-  for (const entry of ordered) {
-    if (priority.length >= priorityLimit) break;
-    if (!priorityPaths.has(entry.path) || priorityBytes + entry.size > priorityByteLimit) continue;
-    priority.push(entry);
-    priorityBytes += entry.size;
-  }
-  const selected = new Set(priority.map(entry => entry.path));
-  return priority.concat(ordered.filter(entry => !selected.has(entry.path)),excluded.sort((a,b) => String(a.path || '').localeCompare(String(b.path || ''))));
+  const selected = new Set();
+  const take = (paths, fileLimit, byteLimit) => {
+    const picked = [];
+    let bytes = 0;
+    for (const entry of ordered) {
+      if (picked.length >= fileLimit) break;
+      if (selected.has(entry.path) || !paths.has(entry.path) || bytes + entry.size > byteLimit) continue;
+      picked.push(entry);
+      selected.add(entry.path);
+      bytes += entry.size;
+    }
+    return picked;
+  };
+  const changed = take(priorityPaths,Math.floor(maxFiles / 2),Math.floor(maxTotalBytes / 2));
+  const related = take(relatedPaths,Math.floor(maxFiles / 4),Math.floor(maxTotalBytes / 4));
+  return changed.concat(related,ordered.filter(entry => !selected.has(entry.path)),excluded.sort((a,b) => String(a.path || '').localeCompare(String(b.path || ''))));
 }
 
 async function githubFetch(url) {
@@ -94,7 +100,7 @@ async function getJson(fetchGithub, url) {
   return response.json();
 }
 
-export async function scanPublicRepository({ fullName, commitSha, expectedRepositoryId = null, fetchGithub = githubFetch, cachedBlobs = new Map(), previousFiles = [], previousCoverageComplete = false, maxFiles = 200, maxFileBytes = 262144, maxTotalBytes = 5 * 1024 * 1024, maxTreeRequests = 100, maxIndexEntries = 5000 }) {
+export async function scanPublicRepository({ fullName, commitSha, expectedRepositoryId = null, fetchGithub = githubFetch, cachedBlobs = new Map(), previousFiles = [], previousCoverageComplete = false, relatedPathsForChanges = null, maxFiles = 200, maxFileBytes = 262144, maxTotalBytes = 5 * 1024 * 1024, maxTreeRequests = 100, maxIndexEntries = 5000 }) {
   if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(fullName || '') || !SHA.test(commitSha || '')) throw new Error('仓库或 commit SHA 无效');
   let resolvedFullName = fullName;
   if (expectedRepositoryId !== null) {
@@ -135,7 +141,16 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
     const before = previous.get(entry.path);
     return before ? before !== String(entry.sha || '').toLowerCase() : previousCoverageComplete;
   }).map(entry => entry.path));
-  entries = balancedIndexOrder(entries,maxFileBytes,priorityPaths,Math.floor(maxFiles / 2),Math.floor(maxTotalBytes / 2));
+  const treePaths = new Set(entries.map(entry => entry.path));
+  const changes = [...priorityPaths].map(path => ({ kind: previous.has(path) ? 'modified' : 'added', path }));
+  if (!unscannedSubtrees) for (const path of previous.keys()) if (!treePaths.has(path)) changes.push({ kind: 'deleted', path });
+  let relatedPaths = new Set();
+  const knownChanges = changes.filter(change => change.kind !== 'added');
+  if (knownChanges.length && typeof relatedPathsForChanges === 'function') {
+    try { relatedPaths = new Set((relatedPathsForChanges(knownChanges) || []).filter(path => !priorityPaths.has(path))); }
+    catch { /* A stale or unsupported dependency graph must not prevent the scan. */ }
+  }
+  entries = balancedIndexOrder(entries,maxFileBytes,priorityPaths,relatedPaths,maxFiles,maxTotalBytes);
   const files = [];
   let readCount = 0, attemptedCount = 0, reusedCount = 0, failedCount = 0, excludedCount = 0, totalBytes = 0, unscannedCount = Math.max(0, entries.length - maxIndexEntries);
   for (const entry of entries.slice(0,maxIndexEntries)) {

@@ -628,7 +628,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath) || includeAliases && (aliasConfigPath.test(change.path) || change.oldPath && aliasConfigPath.test(change.oldPath)) || includeNestedConfigs && (nestedConfigPath.test(change.path) || change.oldPath && nestedConfigPath.test(change.oldPath)))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   if (includeSqlTables && changedSqlNeedsBroadReview(changes,files)) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   const priorityPaths = [...currentChanged].sort().concat(...layers,[...dependencies].sort(),...uncertainLayers);
-  return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
+  return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules, priorityPaths };
 }
 
 export const selectProjectImpactEvidence = (files, changes) => selectImpactEvidence(files,changes,false);
@@ -639,3 +639,4 @@ export const selectProjectImpactEvidenceV8 = (files, changes) => selectImpactEvi
 export const selectProjectImpactEvidenceV9 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true);
 export const selectProjectImpactEvidenceV10 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true);
 export const selectProjectImpactEvidenceV13 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true);
+export const projectImpactPriorityPathsV13 = (files, changes) => selectProjectImpactEvidenceV13(files,changes).priorityPaths;
