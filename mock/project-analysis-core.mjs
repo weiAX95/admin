@@ -258,9 +258,9 @@ export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, ma
     const file = byPath.get(item.evidence.path);
     const line = item.evidence.line;
     if (!file || !Number.isInteger(line) || line < 1 || line > file.lines.length || !boundedText(item.evidence.excerpt, 500) || file.lines[line - 1].trim() !== item.evidence.excerpt.trim()) throw new Error('模型证据未匹配本次扫描的文件和行号');
-    const type = file.category === 'test' ? 'test' : file.category === 'documentation' ? 'document' : 'code';
+    const type = file.category === 'test' ? 'test' : file.category === 'documentation' ? 'document' : sourceRequiredForImplementation && file.category !== 'source' ? 'config' : 'code';
     if (sourceRequiredForImplementation && type !== 'code' && ['implemented', 'partial'].includes(item.status)) {
-      const caveat = `（本次仅有${type === 'test' ? '测试源码' : '文档声明'}线索，尚无实现源码或运行结果）`;
+      const caveat = `（本次仅有${type === 'test' ? '测试源码' : type === 'document' ? '文档声明' : '配置文件'}线索，尚无实现源码或运行结果）`;
       return {
         ...item,
         status: 'unverified',

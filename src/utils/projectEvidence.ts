@@ -6,6 +6,7 @@ type EvidenceType = NonNullable<Finding['evidence']>['type'];
 export function projectSourceLabel(type: EvidenceType): string {
   if (type === 'test') return '测试源码行（报告未提供执行结果）';
   if (type === 'document') return '文档行（仅为项目声明）';
+  if (type === 'config') return '配置文件行（尚需核对实现）';
   return '源码行（仅静态阅读）';
 }
 
