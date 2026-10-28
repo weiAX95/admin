@@ -187,7 +187,7 @@ async function saveReport(db, job, report, metadata) {
   const client = pooled ? await db.connect() : db;
   try {
     await client.query('BEGIN');
-    const updated = await client.query("UPDATE project_analyses SET status='completed',summary=$2,selected_file_count=$3,available_file_count=$4,analysis_coverage_complete=$5,error_code=NULL,finished_at=now(),change_notification_state=CASE WHEN trigger_source='webhook' THEN 'pending' ELSE 'none' END WHERE id=$1 AND attempts=$6 AND status='analyzing' RETURNING id", [job.id, report.summary, metadata.selectedCount, metadata.availableCount, metadata.coverageComplete, job.attempts]);
+    const updated = await client.query("UPDATE project_analyses SET status='completed',summary=$2,selected_file_count=$3,available_file_count=$4,analysis_coverage_complete=$5,error_code=NULL,finished_at=now(),change_notification_state=CASE WHEN trigger_source='webhook' THEN 'pending' ELSE 'none' END,selected_file_paths=$7 WHERE id=$1 AND attempts=$6 AND status='analyzing' RETURNING id", [job.id, report.summary, metadata.selectedCount, metadata.availableCount, metadata.coverageComplete, job.attempts, metadata.selectedFilePaths]);
     if (!updated.rowCount) throw new Error('分析作业已失效');
     const moduleSummaries = new Map(metadata.results.map(result => [result.moduleKey,result.report.summary]));
     for (const module of metadata.modules) await client.query('INSERT INTO project_analysis_modules(analysis_id,module_key,indexed_count,read_count,selected_count,truncated_count,excluded_count,failed_count,unscanned_count,summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [job.id,module.moduleKey,module.indexedCount,module.readCount,module.selectedCount,module.truncatedCount,module.excludedCount,module.failedCount,module.unscannedCount,moduleSummaries.get(module.moduleKey) || null]);
@@ -306,7 +306,7 @@ export async function runProjectAnalysis(db, id, runModel = defaultRunModel) {
     const report = mergeProjectModuleReports(results);
     report.flows.push(...crossFlows);
     if (repositoryAccess.is_private) await verifyPrivateAnalysisAccess(db,job);
-    await saveReport(db, job, report, { selectedCount: selected.length, availableCount, coverageComplete, modules, technologies, results });
+    await saveReport(db, job, report, { selectedCount: selected.length, selectedFilePaths: selected.map(file => file.path).sort(), availableCount, coverageComplete, modules, technologies, results });
   } catch (error) {
     const errorCode = ['INVALID_REPORT','NO_EVIDENCE','SCAN_MISSING','INVALID_USAGE','CALL_OUTCOME_UNKNOWN','SENSITIVE_INPUT','ANALYSIS_BUDGET_EXCEEDED','MODEL_CONNECTION_CHANGED','PRIVATE_CONSENT_REQUIRED','GITHUB_AUTH_REQUIRED','GITHUB_ACCESS_CHECK_FAILED','GITHUB_REPOSITORY_IDENTITY_REQUIRED','MODEL_DESTINATION_CHANGED'].includes(error.code) ? error.code : /HTTP 429|HTTP 403/.test(error.message || '') ? 'MODEL_LIMIT' : error.name === 'AbortError' ? 'MODEL_TIMEOUT' : 'MODEL_FAILED';
     await db.query("UPDATE project_analyses SET status='failed',error_code=$2,summary=NULL,finished_at=now() WHERE id=$1 AND status='analyzing'", [id,errorCode]);
@@ -373,6 +373,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
         githubRepositoryId: row.github_repository_id, baselineVersionId: row.baseline_version_id,
         goal: row.goal, analysisCoverageComplete: row.analysis_coverage_complete,
         selectedFileCount: row.selected_file_count, availableFileCount: row.available_file_count,
+        selectedFilePaths: row.selected_file_paths, modelId: row.model_id, analysisPlanVersion: row.analysis_plan_version,
         findings: findings.filter(item => item.analysis_id === id).map(item => ({ requirementId: item.requirement_id, featureKey: item.feature_key, title: item.title, status: item.status, detail: item.detail, evidence: item.evidence_path ? { type: item.evidence_type, path: item.evidence_path, line: item.evidence_line, excerpt: item.evidence_excerpt, gitSha: item.evidence_git_sha?.trim() || null } : null })),
         suggestions: suggestions.filter(item => item.analysis_id === id).map(item => ({ topic: item.topic, practice: item.practice })),
       };

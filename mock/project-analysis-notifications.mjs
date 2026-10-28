@@ -8,6 +8,9 @@ const reportView = (row, findings, suggestions) => ({
   analysisCoverageComplete: row.analysis_coverage_complete,
   selectedFileCount: row.selected_file_count,
   availableFileCount: row.available_file_count,
+  selectedFilePaths: row.selected_file_paths,
+  modelId: row.model_id,
+  analysisPlanVersion: row.analysis_plan_version,
   findings: findings.filter(item => item.analysis_id === row.id).map(item => ({
     requirementId: item.requirement_id, status: item.status, title: item.title,
   })),

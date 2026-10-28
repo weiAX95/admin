@@ -4,6 +4,8 @@
 
 第 147 号迁移只为现有 `project_analyses` 增加 `duplicate_candidates` JSONB 分析输入快照，并为 `project_analysis_suggestions` 增加可空的 `semantic_duplicate_task_id`、`semantic_duplicate_reason`。后者是模型提出的人工核对线索，不是任务外键；候选任务后来删除时仍保留原始 ID 与理由。该迁移没有新增表。详见[项目建议处理规则](project-analysis-suggestions.md)。
 
+[157 号迁移](../db/migrations/157_project_analysis_selected_paths.sql) 为 `project_analyses` 增加可空的 `selected_file_paths` 路径快照，并校验路径数量与 `selected_file_count` 一致。新报告完成时与结论同事务保存实际进入模型的路径；旧报告保持空值。报告对照和自动进展通知据此核对分析范围，不把相同文件数误作相同文件集合。该迁移不新增表或外键。
+
 > [104_super_admin.sql](../db/migrations/104_super_admin.sql) 扩展 `users.role` 为 `super_admin`／`admin`／`member`。迁移从已有启用管理员中选取创建时间最早者；空库在旧 JSON 导入时提升一名管理员。唯一索引保证全库至多一个 SuperAdmin，CHECK 和触发器禁止其停用、软删除、降级与物理删除；普通管理员不能修改该账号。账号与登录会话的原有外键关系不变。
 
 > [105_super_admin_candidates.sql](../db/migrations/105_super_admin_candidates.sql) 在 `users` 增加 `super_admin_candidate` 布尔列，仅 `admin` 角色可标记。它是由现任 SuperAdmin 管理的提名信息，不会创建第二名 SuperAdmin，也不会在登录鉴权中授予额外权限；无新表或外键。

@@ -14,6 +14,11 @@ export function compareProjectReports(older, newer) {
   if (older.goal !== newer.goal) limitations.push('项目目标不同');
   if (!older.analysisCoverageComplete || !newer.analysisCoverageComplete) limitations.push('至少一份报告只覆盖部分扫描内容');
   if (older.selectedFileCount !== newer.selectedFileCount || older.availableFileCount !== newer.availableFileCount) limitations.push('进入分析的文件数量或可用文件数量不同');
+  if (!older.selectedFilePaths || !newer.selectedFilePaths) limitations.push('至少一份旧报告未保存进入模型的文件路径，无法核对分析范围');
+  else if (older.selectedFilePaths.length !== older.selectedFileCount || newer.selectedFilePaths.length !== newer.selectedFileCount
+    || older.selectedFilePaths.some((path, index) => path !== newer.selectedFilePaths[index])) limitations.push('进入模型的文件路径不同或路径快照不完整');
+  if (older.modelId !== newer.modelId) limitations.push('分析模型不同');
+  if (older.analysisPlanVersion !== newer.analysisPlanVersion) limitations.push('分析规则版本不同');
 
   const changes = [];
   const findingReview = { sameStatusChanges: [], unmatchedGroups: [], featureKeyCandidates: [] };
