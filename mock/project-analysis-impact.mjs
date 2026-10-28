@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { projectModuleKey, selectProjectEvidence } from './project-analysis-core.mjs';
 import { projectApiDependencyEdges } from './project-analysis-api-impact.mjs';
+import { changedSqlNeedsBroadReview, projectSqlDependencyEdges } from './project-analysis-sql-impact.mjs';
 
 const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
 const relativeImport = /\b(?:from\s*|import\s*\(|require\s*\()\s*['"](\.{1,2}\/[^'"\n]+)['"]/g;
@@ -553,7 +554,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -573,6 +574,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const goBoundaries = includeNestedConfigs ? files.filter(file => /(?:^|\/)go\.mod$/.test(file.path)).map(file => ({ path: file.path, directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.status === 'read' && typeof file.content === 'string' ? goModuleName(file.content) : null })).sort((a,b) => b.directory.length - a.directory.length) : null;
   const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files) : null;
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
+  const sqlEdges = includeSqlTables ? projectSqlDependencyEdges(files) : new Map();
   const aliasConfigs = includeAliases ? javascriptAliasConfigs(files,includeExtends) : [];
   const viteConfigs = includeViteAliases ? viteAliasConfigs(files) : null;
   const reverse = new Map();
@@ -580,7 +582,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const uncertainViteImporters = new Set();
   for (const file of files) {
     if (file.status !== 'read') continue;
-    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages,pythonBoundaries),...(apiEdges.get(file.path) || [])])];
+    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages,pythonBoundaries),...(apiEdges.get(file.path) || []),...(sqlEdges.get(file.path) || [])])];
     if (viteConfigs && typeof file.content === 'string' && hasLiteralViteAliasImport(file,viteConfigs)) uncertainViteImporters.add(file.path);
     importsByPath.set(file.path,imports);
     for (const target of imports) {
@@ -624,6 +626,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
     }
   }
   if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath) || includeAliases && (aliasConfigPath.test(change.path) || change.oldPath && aliasConfigPath.test(change.oldPath)) || includeNestedConfigs && (nestedConfigPath.test(change.path) || change.oldPath && nestedConfigPath.test(change.oldPath)))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
+  if (includeSqlTables && changedSqlNeedsBroadReview(changes,files)) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   const priorityPaths = [...currentChanged].sort().concat(...layers,[...dependencies].sort(),...uncertainLayers);
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
@@ -635,3 +638,4 @@ export const selectProjectImpactEvidenceV7 = (files, changes) => selectImpactEvi
 export const selectProjectImpactEvidenceV8 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true);
 export const selectProjectImpactEvidenceV9 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true);
 export const selectProjectImpactEvidenceV10 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true);
+export const selectProjectImpactEvidenceV13 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true);
