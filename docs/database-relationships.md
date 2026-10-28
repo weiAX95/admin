@@ -1,5 +1,7 @@
 # 当前数据库关系与页面取数
 
+第 148 号迁移为 `project_analysis_suggestions` 增加 `dependency_positions`，保存模型建议的同报告前置项位置；数组位置由应用代码校验，SQL 只限制长度。这是报告内部的有序关系，不新增表或外键。旧报告保留空数组，并由分析计划版本区分旧文字匹配规则。
+
 第 147 号迁移只为现有 `project_analyses` 增加 `duplicate_candidates` JSONB 分析输入快照，并为 `project_analysis_suggestions` 增加可空的 `semantic_duplicate_task_id`、`semantic_duplicate_reason`。后者是模型提出的人工核对线索，不是任务外键；候选任务后来删除时仍保留原始 ID 与理由。该迁移没有新增表。详见[项目建议处理规则](project-analysis-suggestions.md)。
 
 > [104_super_admin.sql](../db/migrations/104_super_admin.sql) 扩展 `users.role` 为 `super_admin`／`admin`／`member`。迁移从已有启用管理员中选取创建时间最早者；空库在旧 JSON 导入时提升一名管理员。唯一索引保证全库至多一个 SuperAdmin，CHECK 和触发器禁止其停用、软删除、降级与物理删除；普通管理员不能修改该账号。账号与登录会话的原有外键关系不变。

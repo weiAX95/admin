@@ -482,7 +482,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <Typography.Paragraph>{suggestion.reason}</Typography.Paragraph>
         {suggestion.impactReason && <Typography.Paragraph><strong>影响下一步开发：</strong>{suggestion.impactReason}</Typography.Paragraph>}
         <Typography.Paragraph><strong>前置知识：</strong>{suggestion.prerequisites.length ? suggestion.prerequisites.join('、') : '暂无明确前置知识'}</Typography.Paragraph>
-        {!!suggestionOrder.dependencies.get(suggestion.id)?.length && <Typography.Paragraph type="secondary">先处理本报告建议：{suggestionOrder.dependencies.get(suggestion.id)!.map(item => item.topic).join('、')}</Typography.Paragraph>}
+        {!!suggestionOrder.dependencies.get(suggestion.id)?.length && <Typography.Paragraph type="secondary">建议先处理（模型线索，需核对）：{suggestionOrder.dependencies.get(suggestion.id)!.map(item => item.topic).join('、')}</Typography.Paragraph>}
         <Typography.Paragraph><strong>实践：</strong>{suggestion.practice}</Typography.Paragraph>
         <Typography.Paragraph><strong>验收：</strong>{suggestion.acceptance}</Typography.Paragraph>
         {suggestion.adjustment && <Alert type="info" showIcon style={{ marginBottom: 12 }} message="个人调整稿（接受时使用）" description={<><div><strong>实践：</strong>{suggestion.adjustment.practice}</div><div><strong>验收：</strong>{suggestion.adjustment.acceptance}</div><div><strong>调整理由：</strong>{suggestion.adjustment.rationale}</div></>} />}

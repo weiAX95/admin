@@ -1,4 +1,4 @@
-type Suggestion = { id: string; topic: string; impact: 'high' | 'medium' | 'low' | null; prerequisites: string[] };
+type Suggestion = { id: string; topic: string; impact: 'high' | 'medium' | 'low' | null; prerequisites: string[]; dependsOnIndexes?: number[] | null };
 
 const normalize = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/[\p{P}\p{S}\s]+/gu, '');
 const impactRank = { high: 0, medium: 1, low: 2 };
@@ -14,7 +14,9 @@ export function orderProjectSuggestions<T extends Suggestion>(suggestions: T[]) 
   const pending = suggestions.map(() => 0);
   suggestions.forEach((item, index) => {
     const matched = new Set<number>();
-    for (const prerequisite of item.prerequisites) {
+    if (Array.isArray(item.dependsOnIndexes)) {
+      for (const position of item.dependsOnIndexes) if (Number.isInteger(position) && position >= 0 && position < suggestions.length && position !== index) matched.add(position);
+    } else for (const prerequisite of item.prerequisites) {
       const candidates = topics.get(normalize(prerequisite));
       if (candidates?.length === 1 && candidates[0] !== index) matched.add(candidates[0]);
     }

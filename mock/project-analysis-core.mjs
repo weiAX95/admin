@@ -230,7 +230,8 @@ export function mergeProjectModuleReports(results) {
     const offset = findings.length;
     const suggestionOffset = suggestions.length;
     findings.push(...report.findings.map(finding => ({ ...finding, moduleKey })));
-    suggestions.push(...report.suggestions.map(suggestion => ({ ...suggestion, findingIndex: suggestion.findingIndex === null ? null : offset + suggestion.findingIndex })));
+    suggestions.push(...report.suggestions.map(suggestion => ({ ...suggestion, findingIndex: suggestion.findingIndex === null ? null : offset + suggestion.findingIndex,
+      ...(suggestion.dependsOnIndexes ? { dependsOnIndexes: suggestion.dependsOnIndexes.map(index => suggestionOffset + index) } : {}) })));
     semanticDuplicates.push(...(report.semanticDuplicates || []).map(item => ({ ...item, suggestionIndex: suggestionOffset + item.suggestionIndex })));
     flows.push(...(report.flows || []).map(flow => ({ ...flow, moduleKey })));
   }
@@ -239,7 +240,7 @@ export function mergeProjectModuleReports(results) {
   return { summary, findings, suggestions, flows, ...(results.some(item => Object.hasOwn(item.report,'semanticDuplicates')) ? { semanticDuplicates } : {}) };
 }
 
-export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [], duplicateCandidateTaskIds = null } = {}) {
+export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [], duplicateCandidateTaskIds = null, structuredDependencies = false } = {}) {
   let value;
   try { value = JSON.parse(raw); } catch { throw new Error('模型报告不是有效 JSON'); }
   const legacyShape = exactKeys(value, ['summary', 'findings', 'suggestions']) || exactKeys(value, ['summary', 'findings', 'suggestions', 'flows']);
@@ -261,8 +262,10 @@ export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, ma
     if (type === 'document' && ['implemented', 'partial'].includes(item.status)) throw new Error('文档声明不能证明功能已实现');
     return { ...item, evidence: { ...item.evidence, type, gitSha: file.gitSha } };
   });
-  const suggestions = value.suggestions.map(item => {
-    if (!exactKeys(item, ['topic', 'reason', 'practice', 'acceptance', 'findingIndex', 'impact', 'impactReason', 'prerequisites']) || !boundedText(item.topic, 160) || !boundedText(item.reason, 1000) || !boundedText(item.practice, 1000) || !boundedText(item.acceptance, 1000) || !['high','medium','low'].includes(item.impact) || !boundedText(item.impactReason, 1000) || !Array.isArray(item.prerequisites) || item.prerequisites.length > 5 || item.prerequisites.some(value => !boundedText(value, 120)) || new Set(item.prerequisites.map(value => value.trim().toLocaleLowerCase())).size !== item.prerequisites.length || item.findingIndex !== null && (!Number.isInteger(item.findingIndex) || item.findingIndex < 0 || item.findingIndex >= findings.length)) throw new Error('模型建议结构或关联结论无效');
+  const suggestions = value.suggestions.map((item,index) => {
+    const keys = ['topic', 'reason', 'practice', 'acceptance', 'findingIndex', 'impact', 'impactReason', 'prerequisites', ...(structuredDependencies ? ['dependsOnIndexes'] : [])];
+    if (!exactKeys(item, keys) || !boundedText(item.topic, 160) || !boundedText(item.reason, 1000) || !boundedText(item.practice, 1000) || !boundedText(item.acceptance, 1000) || !['high','medium','low'].includes(item.impact) || !boundedText(item.impactReason, 1000) || !Array.isArray(item.prerequisites) || item.prerequisites.length > 5 || item.prerequisites.some(value => !boundedText(value, 120)) || new Set(item.prerequisites.map(value => value.trim().toLocaleLowerCase())).size !== item.prerequisites.length || item.findingIndex !== null && (!Number.isInteger(item.findingIndex) || item.findingIndex < 0 || item.findingIndex >= findings.length)
+      || structuredDependencies && (!Array.isArray(item.dependsOnIndexes) || item.dependsOnIndexes.length > 3 || new Set(item.dependsOnIndexes).size !== item.dependsOnIndexes.length || item.dependsOnIndexes.some(position => !Number.isInteger(position) || position < 0 || position >= value.suggestions.length || position === index))) throw new Error('模型建议结构或关联结论无效');
     return item;
   });
   const semanticDuplicates = [];
