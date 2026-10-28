@@ -147,7 +147,7 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
   let relatedPaths = new Set();
   // New SQL migrations can affect existing computed queries even though the
   // migration itself was absent from the previous scan's dependency graph.
-  const knownChanges = changes.filter(change => change.kind !== 'added' || /\.sql$/i.test(change.path));
+  const knownChanges = changes.filter(change => change.kind !== 'added' || /\.(?:sql|py)$/i.test(change.path));
   if (knownChanges.length && typeof relatedPathsForChanges === 'function') {
     try { relatedPaths = new Set((relatedPathsForChanges(knownChanges) || []).filter(path => !priorityPaths.has(path))); }
     catch { /* A stale or unsupported dependency graph must not prevent the scan. */ }
