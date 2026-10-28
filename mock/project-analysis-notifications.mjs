@@ -33,11 +33,10 @@ export async function processProjectAnalysisNotifications(pool) {
       const previous = (await client.query(`SELECT a.*,s.github_repository_id FROM project_analyses a
         JOIN project_scans s ON s.id=a.scan_id
         WHERE a.repository_id=$1 AND a.status='completed' AND a.id<>$2
-          AND a.finished_at<$3 AND a.branch=$4 AND a.baseline_version_id=$5
-          AND a.goal=$6 AND a.analysis_coverage_complete=true
-          AND a.selected_file_count=$7 AND a.available_file_count=$8
-          AND s.github_repository_id=$9
-        ORDER BY a.finished_at DESC,a.id DESC LIMIT 1`, [current.repository_id,current.id,current.finished_at,current.branch,current.baseline_version_id,current.goal,current.selected_file_count,current.available_file_count,current.github_repository_id])).rows[0];
+          AND (a.finished_at<$3 OR (a.finished_at=$3 AND a.id<$2))
+          AND a.branch=$4 AND a.baseline_version_id IS NOT DISTINCT FROM $5
+          AND a.goal=$6
+        ORDER BY a.finished_at DESC,a.id DESC LIMIT 1`, [current.repository_id,current.id,current.finished_at,current.branch,current.baseline_version_id,current.goal])).rows[0];
       let notificationState = 'skipped';
       if (previous && current.analysis_coverage_complete) {
         const ids = [previous.id,current.id];
