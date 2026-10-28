@@ -77,7 +77,7 @@ import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
-import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, handleProjectGithubAuth } from './project-github-auth.mjs';
+import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, handleProjectGithubAuth, reconcileDisconnectedGithubAutomation } from './project-github-auth.mjs';
 import { handleProjectGithubWebhook, processProjectGithubDeliveries } from './project-github-webhooks.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
@@ -2561,6 +2561,7 @@ server.on("error", (err) => {
 try {
   await assertSchemaCurrent(pool);
   await recoverBackupJobs(pool);
+  await reconcileDisconnectedGithubAutomation(pool);
   await resumeProjectScans(pool);
   await resumeProjectAnalyses(pool);
   await processProjectAnalysisNotifications(pool);
@@ -2575,6 +2576,7 @@ try {
     console.log(`[mock] PostgreSQL API listening on http://127.0.0.1:${PORT}`);
     void processProjectGithubDeliveries(pool).catch(error => console.error('[project-github] delivery processing failed:',error));
     setInterval(() => { void processProjectGithubDeliveries(pool).catch(error => console.error('[project-github] delivery processing failed:',error)); }, 5000).unref();
+    setInterval(() => { void reconcileDisconnectedGithubAutomation(pool).catch(error => console.error('[project-github] authorization cleanup failed:',error)); }, 60_000).unref();
     setInterval(() => { void resumeProjectScans(pool, undefined, false).catch(error => console.error('[project-scans] resume failed:',error)); }, 5000).unref();
     setInterval(() => { void resumeProjectAnalyses(pool).catch(error => console.error('[project-analyses] resume failed:',error)); }, 5000).unref();
     setInterval(() => { void processProjectAutoAnalyses(pool).catch(error => console.error('[project-auto-analyses] processing failed:',error)); }, 5000).unref();
