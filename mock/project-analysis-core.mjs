@@ -240,7 +240,7 @@ export function mergeProjectModuleReports(results) {
   return { summary, findings, suggestions, flows, ...(results.some(item => Object.hasOwn(item.report,'semanticDuplicates')) ? { semanticDuplicates } : {}) };
 }
 
-export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [], duplicateCandidateTaskIds = null, structuredDependencies = false, sourceRequiredForImplementation = false } = {}) {
+export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [], duplicateCandidateTaskIds = null, structuredDependencies = false, sourceRequiredForImplementation = false, unlinkedAbsenceUnverified = false } = {}) {
   let value;
   try { value = JSON.parse(raw); } catch { throw new Error('模型报告不是有效 JSON'); }
   const legacyShape = exactKeys(value, ['summary', 'findings', 'suggestions']) || exactKeys(value, ['summary', 'findings', 'suggestions', 'flows']);
@@ -251,6 +251,10 @@ export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, ma
     if (!exactKeys(item, ['title', 'status', 'detail', 'evidence', 'requirementId']) || !boundedText(item.title, 160) || !boundedText(item.detail, 2000) || !['implemented', 'partial', 'not_found', 'unverified'].includes(item.status) || item.requirementId !== null && (typeof item.requirementId !== 'string' || !requirementIds.includes(item.requirementId))) throw new Error('模型结论结构或需求关联无效');
     if (item.evidence === null) {
       if (['implemented', 'partial'].includes(item.status)) throw new Error('已实现或部分实现结论缺少证据');
+      if (unlinkedAbsenceUnverified && item.status === 'not_found' && item.requirementId === null) {
+        const caveat = '（未关联明确需求，不能把模型未指出实现视为功能缺失）';
+        return { ...item, status: 'unverified', detail: `${item.detail.slice(0,2000 - caveat.length)}${caveat}` };
+      }
       return item;
     }
     if (item.status === 'not_found') throw new Error('未发现实现结论不能使用正向代码证据');
