@@ -20,6 +20,8 @@ const unmatchedReasonLabels: Record<Comparison['findingReview']['unmatchedGroups
 };
 
 export default function ProjectReportComparison({ comparison, onOpenReport, onRefresh, onClose }: { comparison: Comparison; onOpenReport: (id: string) => void; onRefresh: () => Promise<void>; onClose: () => void }) {
+  const confirmedByOld = new Map(comparison.confirmedFindingMatches.map(item => [item.before.id, item.after.id]));
+  const confirmedByNew = new Map(comparison.confirmedFindingMatches.map(item => [item.after.id, item.before.id]));
   const source = (report: Comparison['older'], finding: ProjectComparedFinding) => finding.evidence
     ? <Space direction="vertical" size={0}><a href={`https://github.com/${report.fullName}/blob/${report.commitSha}/${finding.evidence.path.split('/').map(encodeURIComponent).join('/')}#L${finding.evidence.line}`} target="_blank" rel="noopener noreferrer">{finding.evidence.path}:{finding.evidence.line}</a><Typography.Text type="secondary">{projectFindingBasis(finding)} · {finding.evidence.excerpt}</Typography.Text></Space>
     : <Typography.Text type="secondary">{projectFindingBasis(finding)}</Typography.Text>;
@@ -30,7 +32,7 @@ export default function ProjectReportComparison({ comparison, onOpenReport, onRe
     {source(report, finding)}
   </Space>;
   const findingList = (report: Comparison['older'], findings: ProjectComparedFinding[]) => findings.length
-    ? <Space direction="vertical" size="small">{findings.map((finding, index) => <div key={`${finding.requirementId || 'unlinked'}-${index}`}><Tag>{finding.requirementId || '未关联需求'}</Tag>{findingView(report, finding)}</div>)}</Space>
+    ? <Space direction="vertical" size="small">{findings.map((finding, index) => <div key={finding.id || `${finding.requirementId || 'unlinked'}-${index}`}><Tag>{finding.requirementId || '未关联需求'}</Tag>{(report.id === comparison.older.id ? confirmedByOld : confirmedByNew).has(finding.id) && <Tag color="blue">已人工确认对应</Tag>}{findingView(report, finding)}</div>)}</Space>
     : <Typography.Text type="secondary">此侧没有对应结论</Typography.Text>;
   const reportLabel = (item: Comparison['older']) => `${new Date(item.finishedAt || item.createdAt).toLocaleString('zh-CN')} · ${item.branch} · ${item.commitSha.slice(0, 10)} · ${item.selectedFileCount}/${item.availableFileCount} 文件`;
 
@@ -57,12 +59,12 @@ export default function ProjectReportComparison({ comparison, onOpenReport, onRe
     <Typography.Paragraph type="secondary">仅在同一仓库、分支和目标下展示两侧唯一匹配的线索 ID；标题或路径改变、同 ID 有多条结论时不会配对。状态变化不计入进度判断。</Typography.Paragraph>
     {comparison.findingReview.featureKeyCandidates.length ? <Table rowKey="featureKey" size="small" dataSource={comparison.findingReview.featureKeyCandidates} scroll={{ x: 850 }} columns={[
       { title: '线索 ID', dataIndex: 'featureKey', width: 190 },
-      { title: '待核对变化', render: (_, item: Comparison['findingReview']['featureKeyCandidates'][number]) => <Space wrap>{item.statusChanged && <Tag color="orange">状态变化</Tag>}{item.evidenceChanged && <Tag>证据变化</Tag>}{!item.statusChanged && !item.evidenceChanged && <Tag>文字或内容待核对</Tag>}</Space> },
+      { title: '待核对变化', render: (_, item: Comparison['findingReview']['featureKeyCandidates'][number]) => <Space wrap>{confirmedByOld.get(item.before.id) === item.after.id && <Tag color="blue">已人工确认</Tag>}{(confirmedByOld.has(item.before.id) || confirmedByNew.has(item.after.id)) && confirmedByOld.get(item.before.id) !== item.after.id && <Tag color="red">与人工确认不一致</Tag>}{item.statusChanged && <Tag color="orange">状态变化</Tag>}{item.evidenceChanged && <Tag>证据变化</Tag>}{!item.statusChanged && !item.evidenceChanged && <Tag>文字或内容待核对</Tag>}</Space> },
       { title: '旧结论', render: (_, item: Comparison['findingReview']['featureKeyCandidates'][number]) => findingView(comparison.older,item.before) },
       { title: '新结论', render: (_, item: Comparison['findingReview']['featureKeyCandidates'][number]) => findingView(comparison.newer,item.after) },
     ]} /> : <Empty description="没有可按功能线索 ID 唯一匹配的结论" />}
-    <Typography.Title level={5} style={{ marginTop: 16 }}>未能安全配对的结论</Typography.Title>
-    <Typography.Paragraph type="secondary">这些是原始报告结论，出现或消失不代表功能新增、问题解决或个人已掌握；部分扫描时尤其需要核对覆盖范围。</Typography.Paragraph>
+    <Typography.Title level={5} style={{ marginTop: 16 }}>未能自动配对的结论</Typography.Title>
+    <Typography.Paragraph type="secondary">这里保留原始报告结论；已人工确认的条目另有标记。结论出现或消失不代表功能新增、问题解决或个人已掌握；部分扫描时尤其需要核对覆盖范围。</Typography.Paragraph>
     {comparison.findingReview.unmatchedGroups.length ? <Table rowKey={(item, index) => `${item.reason}:${item.requirementId || index}`} size="small" dataSource={comparison.findingReview.unmatchedGroups} scroll={{ x: 850 }} columns={[
       { title: '需求', width: 125, render: (_, item: Comparison['findingReview']['unmatchedGroups'][number]) => item.requirementId || (item.reason === 'incomparable_scope' ? '范围不可比' : '未关联') },
       { title: '待复核原因', render: (_, item: Comparison['findingReview']['unmatchedGroups'][number]) => <Tag color="orange">{unmatchedReasonLabels[item.reason]}</Tag> },
