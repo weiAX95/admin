@@ -17,6 +17,7 @@ import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
 import { tryModelSlot, releaseModelSlot } from './model-concurrency.mjs';
 import { assertGithubPrivateRepoAccess, GithubAuthorizationError } from './project-github-auth.mjs';
+import { projectFindingKey } from './project-finding-key.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const fail = (status, error) => ({ status, data: { error } });
@@ -205,7 +206,7 @@ async function saveReport(db, job, report, metadata) {
       const id = crypto.randomUUID();
       findingIds.push(id);
       const evidence = finding.evidence;
-      await client.query('INSERT INTO project_analysis_findings(id,analysis_id,position,title,status,detail,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha,module_key,requirement_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', [id,job.id,position,finding.title,finding.status,finding.detail,evidence?.type || null,evidence?.path || null,evidence?.line || null,evidence?.excerpt || null,evidence?.gitSha || null,finding.moduleKey,finding.requirementId]);
+      await client.query('INSERT INTO project_analysis_findings(id,analysis_id,position,title,status,detail,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha,module_key,requirement_id,feature_key) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)', [id,job.id,position,finding.title,finding.status,finding.detail,evidence?.type || null,evidence?.path || null,evidence?.line || null,evidence?.excerpt || null,evidence?.gitSha || null,finding.moduleKey,finding.requirementId,projectFindingKey(finding)]);
     }
     const semanticByPosition = new Map((report.semanticDuplicates || []).map(item => [item.suggestionIndex,item]));
     for (const [position, suggestion] of report.suggestions.entries()) {
@@ -363,7 +364,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     if (rows.length !== 2) return fail(404,'已完成报告不存在');
     const olderRow = rows.find(item => item.id === olderId), newerRow = rows.find(item => item.id === newerId);
     if (new Date(olderRow.finished_at).getTime() >= new Date(newerRow.finished_at).getTime()) return fail(400,'请按完成时间选择较早和较新的报告');
-    const findings = (await client.query('SELECT analysis_id,requirement_id,title,status,detail,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha FROM project_analysis_findings WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
+    const findings = (await client.query('SELECT analysis_id,requirement_id,feature_key,title,status,detail,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha FROM project_analysis_findings WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
     const suggestions = (await client.query('SELECT analysis_id,topic,practice FROM project_analysis_suggestions WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
     const report = id => {
       const row = rows.find(item => item.id === id);
@@ -372,7 +373,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
         githubRepositoryId: row.github_repository_id, baselineVersionId: row.baseline_version_id,
         goal: row.goal, analysisCoverageComplete: row.analysis_coverage_complete,
         selectedFileCount: row.selected_file_count, availableFileCount: row.available_file_count,
-        findings: findings.filter(item => item.analysis_id === id).map(item => ({ requirementId: item.requirement_id, title: item.title, status: item.status, detail: item.detail, evidence: item.evidence_path ? { type: item.evidence_type, path: item.evidence_path, line: item.evidence_line, excerpt: item.evidence_excerpt, gitSha: item.evidence_git_sha?.trim() || null } : null })),
+        findings: findings.filter(item => item.analysis_id === id).map(item => ({ requirementId: item.requirement_id, featureKey: item.feature_key, title: item.title, status: item.status, detail: item.detail, evidence: item.evidence_path ? { type: item.evidence_type, path: item.evidence_path, line: item.evidence_line, excerpt: item.evidence_excerpt, gitSha: item.evidence_git_sha?.trim() || null } : null })),
         suggestions: suggestions.filter(item => item.analysis_id === id).map(item => ({ topic: item.topic, practice: item.practice })),
       };
     };
@@ -444,7 +445,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       entries.push({ id: feedback.id, correctedStatus: feedback.corrected_status, reason: feedback.reason, author: feedback.username, createdAt: feedback.created_at });
       feedbackByFinding.set(feedback.finding_id,entries);
     }
-    const findings = (await client.query('SELECT * FROM project_analysis_findings WHERE analysis_id=$1 ORDER BY position', [analysisId])).rows.map(row => ({ id: row.id, requirementId: row.requirement_id, moduleKey: row.module_key, title: row.title, status: row.status, detail: row.detail, evidence: row.evidence_path === null ? null : { type: row.evidence_type, path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha?.trim() || null }, feedback: feedbackByFinding.get(row.id) || [] }));
+    const findings = (await client.query('SELECT * FROM project_analysis_findings WHERE analysis_id=$1 ORDER BY position', [analysisId])).rows.map(row => ({ id: row.id, requirementId: row.requirement_id, featureKey: row.feature_key, moduleKey: row.module_key, title: row.title, status: row.status, detail: row.detail, evidence: row.evidence_path === null ? null : { type: row.evidence_type, path: row.evidence_path, line: row.evidence_line, excerpt: row.evidence_excerpt, gitSha: row.evidence_git_sha?.trim() || null }, feedback: feedbackByFinding.get(row.id) || [] }));
     const staleReasons = [
       !repository.github_repository_id || !job.scan_github_repository_id ? '报告缺少已核对的 GitHub 仓库身份' : job.scan_github_repository_id !== repository.github_repository_id ? 'GitHub 仓库身份已变化' : null,
       job.branch !== repository.branch ? '仓库分支已变化' : null,

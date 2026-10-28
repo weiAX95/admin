@@ -9,3 +9,5 @@
 分支、需求版本或项目目标不同，无法安全配对需求结论。任一报告部分覆盖，或进入分析／可用文件数量不同，页面展示可比性限制；可配对的变化仍作为待复核线索显示。页面不提供“进度增长百分比”，因为静态阅读、模型判断和不同扫描范围都不能证明运行验收通过。人工校正保存在各自报告中，原始模型结论与人工判断应分别查看。
 
 接口：`GET /api/project-repositories/:id/analyses?before=<分析 ID>` 返回 `items` 与 `nextCursor`；`GET /api/project-repositories/:id/analyses/compare/:olderId/:newerId` 返回比较限制、原有 `changes`、新增只读 `findingReview.sameStatusChanges`／`findingReview.unmatchedGroups` 及建议文字变化。两者都检查当前账号的仓库归属。
+
+未关联明确需求的新版结论额外保存 `F-` 功能线索 ID，使用目录模块、规范化标题及证据文件路径计算；行号与 commit 变化不改变该 ID。标题或文件移动会产生新 ID，同名同路径的不同功能仍可能共用 ID，因此对照页仅展示供人工核对，不自动把它当成进度配对依据。旧报告保留空值，不追溯推断。

@@ -24,6 +24,7 @@ export default function ProjectReportComparison({ comparison, onOpenReport, onCl
     : <Typography.Text type="secondary">{projectFindingBasis(finding)}</Typography.Text>;
   const findingView = (report: Comparison['older'], finding: ProjectComparedFinding) => <Space direction="vertical" size={0}>
     <strong>{statusLabels[finding.status]} · {finding.title}</strong>
+    {finding.featureKey && <Tag title="功能线索 ID；仅供人工核对，不自动配对">{finding.featureKey}</Tag>}
     <span>{finding.detail}</span>
     {source(report, finding)}
   </Space>;

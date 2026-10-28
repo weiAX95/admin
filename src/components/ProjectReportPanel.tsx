@@ -470,7 +470,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         </li>)}</ol>
       </Card>) : <Typography.Paragraph type="secondary">扫描范围内没有足够的逐步代码证据，暂不列出核心流程。</Typography.Paragraph>}
       <Typography.Title level={5}>进度判断与证据</Typography.Title>
-      {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}{finding.requirementId && <Tag color="purple">{finding.requirementId}</Tag>}{finding.moduleKey && <Tag>{finding.moduleKey}</Tag>}<Tag>{findingStates[finding.status]}</Tag></Space>}>
+      {report.findings.length ? report.findings.map(finding => <Card key={finding.id} size="small" style={{ marginBottom: 8 }} title={<Space>{finding.title}{finding.requirementId && <Tag color="purple">{finding.requirementId}</Tag>}{finding.featureKey && <Tag title="功能线索 ID；标题或文件路径变化时需人工核对">{finding.featureKey}</Tag>}{finding.moduleKey && <Tag>{finding.moduleKey}</Tag>}<Tag>{findingStates[finding.status]}</Tag></Space>}>
         <Typography.Paragraph>{finding.detail}</Typography.Paragraph>
         <Typography.Paragraph type="secondary">{projectFindingBasis(finding)}{finding.evidence && <>：<a href={sourceLink(finding.evidence.path, finding.evidence.line)} target="_blank" rel="noopener noreferrer">{finding.evidence.path}:{finding.evidence.line}</a><br /><code>{finding.evidence.excerpt}</code></>}</Typography.Paragraph>
         {finding.feedback.map(entry => <Typography.Paragraph key={entry.id} type="secondary"><Tag color="blue">人工校正：{findingStates[entry.correctedStatus]}</Tag>{entry.reason} · {entry.author} · {new Date(entry.createdAt).toLocaleString('zh-CN')} · 不改写模型原结论或文件证据</Typography.Paragraph>)}
