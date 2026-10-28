@@ -240,7 +240,7 @@ export function mergeProjectModuleReports(results) {
   return { summary, findings, suggestions, flows, ...(results.some(item => Object.hasOwn(item.report,'semanticDuplicates')) ? { semanticDuplicates } : {}) };
 }
 
-export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [], duplicateCandidateTaskIds = null, structuredDependencies = false } = {}) {
+export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [], duplicateCandidateTaskIds = null, structuredDependencies = false, sourceRequiredForImplementation = false } = {}) {
   let value;
   try { value = JSON.parse(raw); } catch { throw new Error('模型报告不是有效 JSON'); }
   const legacyShape = exactKeys(value, ['summary', 'findings', 'suggestions']) || exactKeys(value, ['summary', 'findings', 'suggestions', 'flows']);
@@ -259,6 +259,15 @@ export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, ma
     const line = item.evidence.line;
     if (!file || !Number.isInteger(line) || line < 1 || line > file.lines.length || !boundedText(item.evidence.excerpt, 500) || file.lines[line - 1].trim() !== item.evidence.excerpt.trim()) throw new Error('模型证据未匹配本次扫描的文件和行号');
     const type = file.category === 'test' ? 'test' : file.category === 'documentation' ? 'document' : 'code';
+    if (sourceRequiredForImplementation && type !== 'code' && ['implemented', 'partial'].includes(item.status)) {
+      const caveat = `（本次仅有${type === 'test' ? '测试源码' : '文档声明'}线索，尚无实现源码或运行结果）`;
+      return {
+        ...item,
+        status: 'unverified',
+        detail: `${item.detail.slice(0,2000 - caveat.length)}${caveat}`,
+        evidence: { ...item.evidence, type, gitSha: file.gitSha },
+      };
+    }
     if (type === 'document' && ['implemented', 'partial'].includes(item.status)) throw new Error('文档声明不能证明功能已实现');
     return { ...item, evidence: { ...item.evidence, type, gitSha: file.gitSha } };
   });

@@ -25,7 +25,7 @@ export function projectCallFingerprint(job, group) {
 export function cachedProjectCallValid(job, group, output) {
   try {
     if (group.kind === 'cross') validateCrossModuleFlows(output,group.files);
-    else validateProjectReport(output,group.files,{ maxFindings: 5, maxSuggestions: 3, requirementIds: parseProjectRequirements(job.requirement_document).map(item => item.id), duplicateCandidateTaskIds: job.analysis_plan_version >= 11 ? candidateTaskIds(job) : null, structuredDependencies: job.analysis_plan_version >= 12 });
+    else validateProjectReport(output,group.files,{ maxFindings: 5, maxSuggestions: 3, requirementIds: parseProjectRequirements(job.requirement_document).map(item => item.id), duplicateCandidateTaskIds: job.analysis_plan_version >= 11 ? candidateTaskIds(job) : null, structuredDependencies: job.analysis_plan_version >= 12, sourceRequiredForImplementation: job.analysis_plan_version >= 16 });
     return true;
   } catch { return false; }
 }
