@@ -610,7 +610,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false, includePrisma = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false, includePrisma = false, includeSqlAlchemy = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -630,7 +630,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const goBoundaries = includeNestedConfigs ? files.filter(file => /(?:^|\/)go\.mod$/.test(file.path)).map(file => ({ path: file.path, directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.status === 'read' && typeof file.content === 'string' ? goModuleName(file.content) : null })).sort((a,b) => b.directory.length - a.directory.length) : null;
   const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files) : null;
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
-  const sqlEdges = includeSqlTables ? projectSqlDependencyEdges(files) : new Map();
+  const sqlEdges = includeSqlTables ? projectSqlDependencyEdges(files,includeSqlAlchemy) : new Map();
   const prismaEdges = includePrisma ? prismaDependencyEdges(files) : new Map();
   const unknownApi = includeDynamicApi ? dynamicApiFiles(files) : new Set();
   const sqlChanged = changes.some(change => /\.sql$/i.test(change.path) || change.oldPath && /\.sql$/i.test(change.oldPath));
@@ -713,3 +713,5 @@ export const selectProjectImpactEvidenceV17 = (files, changes) => selectImpactEv
 export const projectImpactPriorityPathsV17 = (files, changes) => selectProjectImpactEvidenceV17(files,changes).priorityPaths;
 export const selectProjectImpactEvidenceV19 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true,true,true,true);
 export const projectImpactPriorityPathsV19 = (files, changes) => selectProjectImpactEvidenceV19(files,changes).priorityPaths;
+export const selectProjectImpactEvidenceV20 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true,true,true,true,true);
+export const projectImpactPriorityPathsV20 = (files, changes) => selectProjectImpactEvidenceV20(files,changes).priorityPaths;

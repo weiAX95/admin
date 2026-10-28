@@ -13,7 +13,27 @@ function names(content, pattern) {
   return result;
 }
 
-export function projectSqlDependencyEdges(files) {
+function sqlalchemyTables(content) {
+  const tables = new Set();
+  const lines = content.split(/\r?\n/);
+  let classIndent = -1;
+  for (const line of lines) {
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    const indent = line.match(/^\s*/)[0].length;
+    if (classIndent >= 0 && indent <= classIndent) classIndent = -1;
+    if (/^\s*class\s+[A-Za-z_]\w*\s*\([^\n)]*\)\s*:/.test(line)) {
+      classIndent = indent;
+      continue;
+    }
+    if (classIndent >= 0 && indent > classIndent) {
+      const match = line.match(/^\s*__tablename__\s*=\s*(['"])([A-Za-z_]\w*)\1\s*(?:#.*)?$/);
+      if (match) tables.add(match[2].toLowerCase());
+    }
+  }
+  return tables;
+}
+
+export function projectSqlDependencyEdges(files, includeSqlAlchemy = false) {
   const definitions = new Map();
   for (const file of files) {
     if (file.status !== 'read' || !sqlPath.test(file.path) || typeof file.content !== 'string' || file.content.length > 250000) continue;
@@ -27,6 +47,7 @@ export function projectSqlDependencyEdges(files) {
     if (file.status !== 'read' || !codePath.test(file.path) || typeof file.content !== 'string' || file.content.length > 250000) continue;
     const targets = new Set();
     for (const name of names(file.content,reference)) for (const path of definitions.get(name) || []) targets.add(path);
+    if (includeSqlAlchemy && /\.py$/i.test(file.path)) for (const name of sqlalchemyTables(file.content)) for (const path of definitions.get(name) || []) targets.add(path);
     if (targets.size) edges.set(file.path,targets);
   }
   return edges;
