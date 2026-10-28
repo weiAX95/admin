@@ -20,6 +20,16 @@ export async function processProjectAutoAnalyses(pool) {
         || row.user_status !== 'active' || !row.webhook_scan_enabled || !row.auto_analysis_enabled || row.commit_sha.trim() !== scan.commit_sha.trim()) {
         status = 'skipped';
         error = '仓库身份、项目设置或提交已变化';
+      } else if (scan.coverage_complete && scan.baseline_commit_sha && (await pool.query(`SELECT 1 FROM project_scans prior
+          JOIN project_analyses a ON a.scan_id=prior.id AND a.status='completed' AND a.analysis_coverage_complete=true
+          WHERE prior.repository_id=$1 AND prior.github_repository_id=$9 AND prior.commit_sha=$2 AND prior.coverage_complete=true
+            AND a.model_id=$3 AND a.goal=$4 AND a.requirement_baseline=$5
+            AND a.baseline_version_id IS NOT DISTINCT FROM $6::uuid
+            AND a.analysis_plan_version=$7
+            AND NOT EXISTS (SELECT 1 FROM project_scan_changes WHERE scan_id=$8)
+          LIMIT 1`,[row.id,scan.baseline_commit_sha,row.auto_analysis_model_id,row.goal,row.requirement_baseline,row.baseline_version_id,CURRENT_ANALYSIS_PLAN_VERSION,scan.id,scan.github_repository_id])).rowCount) {
+        status = 'skipped';
+        error = '与前次完整报告相比没有文件变化，已跳过重复分析';
       } else if (row.is_private) {
         const existing = (await pool.query("SELECT id,status FROM project_analyses WHERE scan_id=$1 AND model_id=$2 AND status IN ('queued','analyzing','completed') ORDER BY created_at DESC LIMIT 1",[scan.id,row.auto_analysis_model_id])).rows[0];
         if (existing) {
@@ -32,16 +42,6 @@ export async function processProjectAutoAnalyses(pool) {
           approvalOwner = row.owner_id;
           approvalRepository = row.full_name;
         }
-      } else if (scan.coverage_complete && scan.baseline_commit_sha && (await pool.query(`SELECT 1 FROM project_scans prior
-          JOIN project_analyses a ON a.scan_id=prior.id AND a.status='completed' AND a.analysis_coverage_complete=true
-          WHERE prior.repository_id=$1 AND prior.github_repository_id=$9 AND prior.commit_sha=$2 AND prior.coverage_complete=true
-            AND a.model_id=$3 AND a.goal=$4 AND a.requirement_baseline=$5
-            AND a.baseline_version_id IS NOT DISTINCT FROM $6::uuid
-            AND a.analysis_plan_version=$7
-            AND NOT EXISTS (SELECT 1 FROM project_scan_changes WHERE scan_id=$8)
-          LIMIT 1`,[row.id,scan.baseline_commit_sha,row.auto_analysis_model_id,row.goal,row.requirement_baseline,row.baseline_version_id,CURRENT_ANALYSIS_PLAN_VERSION,scan.id,scan.github_repository_id])).rowCount) {
-        status = 'skipped';
-        error = '与前次完整报告相比没有文件变化，已跳过重复分析';
       } else {
         const response = await handleProjectAnalyses({
           pathname: `/api/project-repositories/${row.id}/analyses`, method: 'POST', client: pool,
