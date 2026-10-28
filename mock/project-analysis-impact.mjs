@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { projectModuleKey, selectProjectEvidence } from './project-analysis-core.mjs';
-import { projectApiDependencyEdges } from './project-analysis-api-impact.mjs';
+import { dynamicApiFiles, projectApiDependencyEdges } from './project-analysis-api-impact.mjs';
 import { changedSqlNeedsBroadReview, projectSqlDependencyEdges } from './project-analysis-sql-impact.mjs';
 
 const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
@@ -554,7 +554,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -575,6 +575,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files) : null;
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
   const sqlEdges = includeSqlTables ? projectSqlDependencyEdges(files) : new Map();
+  const unknownApi = includeDynamicApi ? dynamicApiFiles(files) : new Set();
   const aliasConfigs = includeAliases ? javascriptAliasConfigs(files,includeExtends) : [];
   const viteConfigs = includeViteAliases ? viteAliasConfigs(files) : null;
   const reverse = new Map();
@@ -608,12 +609,13 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
     dependencies.add(target);
     impactedModules.add(projectModuleKey(target));
   }
-  // The unknown Vite target may be any changed file. Invalidate each importer
-  // and its known transitive callers; unrelated modules remain reusable.
+  // Dynamic API targets and Vite aliases cannot be resolved to a fixed edge.
+  // Recheck those sources and their known transitive callers on any change.
   const uncertainLayers = [];
-  if (changedPaths.size && uncertainViteImporters.size) {
-    let pending = [...uncertainViteImporters].filter(name => !visited.has(name));
-    for (const name of uncertainViteImporters) impactedModules.add(projectModuleKey(name));
+  const uncertainSources = new Set([...uncertainViteImporters,...unknownApi]);
+  if (changedPaths.size && uncertainSources.size) {
+    let pending = [...uncertainSources].filter(name => !visited.has(name));
+    for (const name of uncertainSources) impactedModules.add(projectModuleKey(name));
     while (pending.length) {
       uncertainLayers.push(pending.sort());
       for (const name of pending) visited.add(name);
@@ -639,4 +641,5 @@ export const selectProjectImpactEvidenceV8 = (files, changes) => selectImpactEvi
 export const selectProjectImpactEvidenceV9 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true);
 export const selectProjectImpactEvidenceV10 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true);
 export const selectProjectImpactEvidenceV13 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true);
-export const projectImpactPriorityPathsV13 = (files, changes) => selectProjectImpactEvidenceV13(files,changes).priorityPaths;
+export const selectProjectImpactEvidenceV14 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true);
+export const projectImpactPriorityPathsV14 = (files, changes) => selectProjectImpactEvidenceV14(files,changes).priorityPaths;

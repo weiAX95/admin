@@ -6,6 +6,8 @@ const pythonRoute = /@(?:app|router)\.(?:get|post|put|patch|delete)\s*\(\s*['"](
 const goRoute = /\b(?:HandleFunc|Handle|GET|POST|PUT|PATCH|DELETE)\s*\(\s*["`](\/api\/[A-Za-z0-9_/-]+)/g;
 const clientHttp = /\b(?:http|axios)\.(?:get|post|put|patch|delete|del)(?:<[^\n(]+>)?\s*\(\s*['"`](\/[A-Za-z0-9_/-]+)/g;
 const clientFetch = /\bfetch\s*\(\s*['"`](\/api\/[A-Za-z0-9_/-]+)/g;
+const dynamicCall = /\b(?:fetch|(?:axios|http|app|router|server)\.(?:get|post|put|patch|delete|del|use|route|GET|POST|PUT|PATCH|DELETE)|HandleFunc|Handle)\s*\(\s*([^\n)]{1,160})/g;
+const dynamicPathname = /\bpathname\s*(?:===|==|\.startsWith\s*\()\s*(?!['"`/])\b[A-Za-z_$][\w$]*/g;
 
 function collect(content, patterns, transform = value => value) {
   const values = new Set();
@@ -49,4 +51,24 @@ export function projectApiDependencyEdges(files) {
     }
   }
   return edges;
+}
+
+export function dynamicApiFiles(files) {
+  const found = new Set();
+  for (const file of files) {
+    if (file.status !== 'read' || typeof file.content !== 'string' || !sourcePath.test(file.path) || file.content.length > 250000) continue;
+    dynamicCall.lastIndex = 0;
+    let match, count = 0;
+    while ((match = dynamicCall.exec(file.content)) && count++ < 200) {
+      const argument = match[1].trim();
+      const quote = argument[0];
+      if (!['\'', '"', '`'].includes(quote)) { found.add(file.path); break; }
+      const end = argument.indexOf(quote,1);
+      if (end < 0 || quote === '`' && argument.slice(1,end).includes('${') || /^\s*\+/.test(argument.slice(end + 1))) { found.add(file.path); break; }
+    }
+    if (found.has(file.path)) continue;
+    dynamicPathname.lastIndex = 0;
+    if (dynamicPathname.test(file.content)) found.add(file.path);
+  }
+  return found;
 }
