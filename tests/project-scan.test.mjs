@@ -1,26 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { containsKnownSecret, scanPublicRepository } from '../mock/project-scan.mjs';
 
 const SHA = 'a'.repeat(40), TREE = 'b'.repeat(40);
 const json = value => ({ ok: true, status: 200, json: async () => value });
 const blob = text => ({ content: Buffer.from(text).toString('base64'), encoding: 'base64', size: Buffer.byteLength(text) });
+const blobSha = text => {
+  const bytes = Buffer.from(text);
+  return crypto.createHash('sha1').update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex');
+};
 
 test('scanner pins one commit, expands truncated trees and excludes secrets before blob requests', async () => {
   const calls = [];
+  const source = 'export const x = 1;', sourceSha = blobSha(source);
   const get = async url => {
     calls.push(url);
     if (url.endsWith(`/git/commits/${SHA}`)) return json({ tree: { sha: TREE } });
-    if (url.endsWith(`/git/trees/${TREE}?recursive=1`)) return json({ truncated: true, tree: [{ path: 'src/app.ts', type: 'blob', sha: 'c'.repeat(40), size: 19 }] });
+    if (url.endsWith(`/git/trees/${TREE}?recursive=1`)) return json({ truncated: true, tree: [{ path: 'src/app.ts', type: 'blob', sha: sourceSha, size: 19 }] });
     if (url.endsWith(`/git/trees/${TREE}`)) return json({ truncated: false, tree: [
       { path: 'src', type: 'tree', sha: 'd'.repeat(40) },
       { path: '.env', type: 'blob', sha: 'e'.repeat(40), size: 30 },
     ] });
     if (url.endsWith(`/git/trees/${'d'.repeat(40)}`)) return json({ truncated: false, tree: [
-      { path: 'app.ts', type: 'blob', sha: 'c'.repeat(40), size: 19 },
+      { path: 'app.ts', type: 'blob', sha: sourceSha, size: 19 },
       { path: 'huge.ts', type: 'blob', sha: 'f'.repeat(40), size: 900000 },
     ] });
-    if (url.endsWith(`/git/blobs/${'c'.repeat(40)}`)) return json(blob('export const x = 1;'));
+    if (url.endsWith(`/git/blobs/${sourceSha}`)) return json(blob(source));
     throw new Error(`unexpected ${url}`);
   };
   const result = await scanPublicRepository({ fullName: 'octocat/example', commitSha: SHA, fetchGithub: get });
@@ -79,7 +85,7 @@ test('scanner excludes known secret patterns inside otherwise allowed source fil
   const secret = 'const api_key = "sk-' + 'q'.repeat(24) + '";';
   const get = async url => {
     if (url.endsWith(`/git/commits/${SHA}`)) return json({ tree: { sha: TREE } });
-    if (url.includes('/git/trees/')) return json({ truncated: false, tree: [{ path: 'src/config.ts', type: 'blob', sha: 'c'.repeat(40), size: Buffer.byteLength(secret) }] });
+    if (url.includes('/git/trees/')) return json({ truncated: false, tree: [{ path: 'src/config.ts', type: 'blob', sha: blobSha(secret), size: Buffer.byteLength(secret) }] });
     return json(blob(secret));
   };
   const result = await scanPublicRepository({ fullName: 'octocat/example', commitSha: SHA, fetchGithub: get });

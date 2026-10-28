@@ -6,8 +6,10 @@ import { createPgTestServer } from './pg-helper.mjs';
 import { scanPublicRepository } from '../mock/project-scan.mjs';
 import { runProjectScan } from '../mock/project-scan-jobs.mjs';
 
-const commitSha = 'a'.repeat(40), treeSha = 'b'.repeat(40), fileSha = 'c'.repeat(40);
+const commitSha = 'a'.repeat(40), treeSha = 'b'.repeat(40);
 const content = 'export const x = 1;';
+const bytes = Buffer.from(content);
+const fileSha = crypto.createHash('sha1').update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex');
 const entries = Array.from({ length: 10000 }, (_, index) => ({ path: `src/file-${String(index).padStart(5, '0')}.ts`, type: 'blob', sha: fileSha, size: Buffer.byteLength(content) }));
 const response = value => ({ ok: true, status: 200, json: async () => value });
 const fetchGithub = async url => url.includes('/commits/') ? response({ tree: { sha: treeSha } })

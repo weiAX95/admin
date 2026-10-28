@@ -8,6 +8,7 @@ const SENSITIVE_NAMES = /(?:^|\/)(?:\.env(?:\.[^/]*)?|\.npmrc|\.pypirc|\.netrc|i
 const SENSITIVE_CONTENT = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35}|xox[baprs]-[A-Za-z0-9-]{20,})\b|https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/_-]{15,}|\b(?:api[_-]?key|client[_-]?secret|password|access[_-]?token)\s*[:=]\s*['"]?[^'"\s]{16,}/i;
 export const containsKnownSecret = content => SENSITIVE_CONTENT.test(content);
 export const isSensitiveProjectPath = path => SENSITIVE_NAMES.test(path) || containsKnownSecret(path) || path.split('/').some(part => /^(?:secret|secrets|private|credentials|\.aws|\.kube|\.ssh)$/i.test(part));
+const gitBlobSha = bytes => crypto.createHash('sha1').update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex');
 
 function classification(path) {
   if (/(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|\.)|\.(?:test|spec)\./i.test(path)) return 'test';
@@ -148,8 +149,7 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
     if (cached && typeof cached.content === 'string' && typeof cached.contentSha256 === 'string') {
       const bytes = Buffer.from(cached.content, 'utf8');
       const digest = crypto.createHash('sha256').update(bytes).digest('hex');
-      const gitBlobSha = crypto.createHash('sha1').update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex');
-      if (bytes.length === entry.size && digest === cached.contentSha256.toLowerCase() && gitBlobSha === entry.sha.toLowerCase() && !containsKnownSecret(cached.content)) {
+      if (bytes.length === entry.size && digest === cached.contentSha256.toLowerCase() && gitBlobSha(bytes) === entry.sha.toLowerCase() && !containsKnownSecret(cached.content)) {
         attemptedCount++;
         reusedCount++;
         readCount++;
@@ -163,7 +163,7 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
       const data = await getJson(fetchGithub, `${base}/blobs/${entry.sha}`);
       if (data?.encoding !== 'base64' || typeof data.content !== 'string') throw new Error('blob_format');
       const bytes = Buffer.from(data.content.replace(/\s/g, ''), 'base64');
-      if (bytes.length !== entry.size || bytes.length > maxFileBytes || bytes.includes(0)) throw new Error('blob_size_or_binary');
+      if (bytes.length !== entry.size || bytes.length > maxFileBytes || bytes.includes(0) || gitBlobSha(bytes) !== entry.sha.toLowerCase()) throw new Error('blob_size_binary_or_sha');
       const content = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
       totalBytes += bytes.length;
       if (containsKnownSecret(content)) { files.push({ ...file, status: 'excluded', reason: 'sensitive_content' }); excludedCount++; continue; }
