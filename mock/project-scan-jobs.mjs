@@ -53,7 +53,8 @@ export async function runProjectScan(db, id, scanRepository = scanPublicReposito
     if (!repository) throw new Error('REPOSITORY_MISSING');
     if (repository.github_repository_id === null || job.github_repository_id === null || repository.github_repository_id !== job.github_repository_id) throw Object.assign(new Error('仓库身份尚未核对或已变化'),{ code: 'GITHUB_REPOSITORY_IDENTITY_REQUIRED' });
     if (repository.is_private) await assertGithubPrivateRepoAccess(db,repository.owner_id,repository.full_name,repository.github_repository_id);
-    const source = (await db.query("SELECT id,commit_sha FROM project_scans WHERE repository_id=$1 AND id<>$2 AND created_at<$3 AND github_repository_id=$4 AND branch=$5 AND status IN ('completed','partial') ORDER BY created_at DESC,id DESC LIMIT 1", [job.repository_id,id,job.created_at,job.github_repository_id,job.branch])).rows[0];
+    const source = (await db.query("SELECT id,commit_sha,coverage_complete FROM project_scans WHERE repository_id=$1 AND id<>$2 AND created_at<$3 AND github_repository_id=$4 AND branch=$5 AND status IN ('completed','partial') ORDER BY created_at DESC,id DESC LIMIT 1", [job.repository_id,id,job.created_at,job.github_repository_id,job.branch])).rows[0];
+    const sourceFiles = source ? (await db.query('SELECT path,git_sha,status,content FROM project_scan_files WHERE scan_id=$1 ORDER BY path LIMIT 5000',[source.id])).rows.map(row => ({ path: row.path, gitSha: row.git_sha.trim(), status: row.status, content: row.content })) : null;
     const cachedBlobs = new Map();
     if (source && !job.force_full && !repository.is_private) {
       const rows = (await db.query("SELECT git_sha,content_sha256,content FROM project_scan_files WHERE scan_id=$1 AND status='read' AND content IS NOT NULL AND content_sha256 IS NOT NULL LIMIT 5000", [source.id])).rows;
@@ -64,11 +65,10 @@ export async function runProjectScan(db, id, scanRepository = scanPublicReposito
       if (response.status === 404 || response.status === 403 && response.headers?.get?.('x-ratelimit-remaining') !== '0' && !response.headers?.get?.('retry-after')) throw new GithubAuthorizationError('GitHub App 已失去仓库读取权限');
       return response;
     } : undefined;
-    const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim(), expectedRepositoryId: repository.github_repository_id, fetchGithub, cachedBlobs, maxFiles: job.budget_file_limit, maxTotalBytes: job.budget_byte_limit });
+    const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim(), expectedRepositoryId: repository.github_repository_id, fetchGithub, cachedBlobs, previousFiles: sourceFiles || [], previousCoverageComplete: Boolean(source?.coverage_complete), maxFiles: job.budget_file_limit, maxTotalBytes: job.budget_byte_limit });
     if (result.commitSha !== job.commit_sha.trim()) throw new Error('COMMIT_MISMATCH');
     if (repository.is_private) await assertGithubPrivateRepoAccess(db,repository.owner_id,repository.full_name,repository.github_repository_id);
     result.cacheSourceCommitSha = source?.commit_sha?.trim() || null;
-    const sourceFiles = source ? (await db.query('SELECT path,git_sha,status,content FROM project_scan_files WHERE scan_id=$1 ORDER BY path LIMIT 5000',[source.id])).rows.map(row => ({ path: row.path, gitSha: row.git_sha.trim(), status: row.status, content: row.content })) : null;
     const changes = compareProjectScanFiles(sourceFiles,result.files);
     await saveResult(db,id,result,source,changes,repository.is_private ? repository.owner_id : null);
     } catch (error) {
