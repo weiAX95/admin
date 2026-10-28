@@ -16,7 +16,28 @@ export function compareProjectReports(older, newer) {
   if (older.selectedFileCount !== newer.selectedFileCount || older.availableFileCount !== newer.availableFileCount) limitations.push('进入分析的文件数量或可用文件数量不同');
 
   const changes = [];
-  const findingReview = { sameStatusChanges: [], unmatchedGroups: [] };
+  const findingReview = { sameStatusChanges: [], unmatchedGroups: [], featureKeyCandidates: [] };
+  if (sameRepositoryIdentity && older.branch === newer.branch && older.goal === newer.goal) {
+    const keyed = report => {
+      const groups = new Map();
+      for (const finding of report.findings) {
+        if (finding.requirementId || !finding.featureKey) continue;
+        const rows = groups.get(finding.featureKey) || [];
+        rows.push(finding);
+        groups.set(finding.featureKey, rows);
+      }
+      return groups;
+    };
+    const before = keyed(older), after = keyed(newer);
+    for (const [featureKey, oldRows] of before) {
+      const newRows = after.get(featureKey) || [];
+      if (oldRows.length === 1 && newRows.length === 1) findingReview.featureKeyCandidates.push({
+        featureKey, before: oldRows[0], after: newRows[0],
+        statusChanged: oldRows[0].status !== newRows[0].status,
+        evidenceChanged: evidenceChanged(oldRows[0].evidence,newRows[0].evidence),
+      });
+    }
+  }
   const canPairRequirements = sameRepositoryIdentity && older.baselineVersionId
     && older.baselineVersionId === newer.baselineVersionId && older.branch === newer.branch && older.goal === newer.goal;
   if (canPairRequirements) {

@@ -52,6 +52,14 @@ export default function ProjectReportComparison({ comparison, onOpenReport, onCl
       { title: '旧结论与证据', render: (_, item: Comparison['findingReview']['sameStatusChanges'][number]) => findingView(comparison.older, item.before) },
       { title: '新结论与证据', render: (_, item: Comparison['findingReview']['sameStatusChanges'][number]) => findingView(comparison.newer, item.after) },
     ]} /> : <Empty description="没有同状态的文字或证据变化" />}
+    <Typography.Title level={5} style={{ marginTop: 16 }}>功能线索 ID 待核对配对</Typography.Title>
+    <Typography.Paragraph type="secondary">仅在同一仓库、分支和目标下展示两侧唯一匹配的线索 ID；标题或路径改变、同 ID 有多条结论时不会配对。状态变化不计入进度判断。</Typography.Paragraph>
+    {comparison.findingReview.featureKeyCandidates.length ? <Table rowKey="featureKey" size="small" dataSource={comparison.findingReview.featureKeyCandidates} scroll={{ x: 850 }} columns={[
+      { title: '线索 ID', dataIndex: 'featureKey', width: 190 },
+      { title: '待核对变化', render: (_, item: Comparison['findingReview']['featureKeyCandidates'][number]) => <Space wrap>{item.statusChanged && <Tag color="orange">状态变化</Tag>}{item.evidenceChanged && <Tag>证据变化</Tag>}{!item.statusChanged && !item.evidenceChanged && <Tag>文字或内容待核对</Tag>}</Space> },
+      { title: '旧结论', render: (_, item: Comparison['findingReview']['featureKeyCandidates'][number]) => findingView(comparison.older,item.before) },
+      { title: '新结论', render: (_, item: Comparison['findingReview']['featureKeyCandidates'][number]) => findingView(comparison.newer,item.after) },
+    ]} /> : <Empty description="没有可按功能线索 ID 唯一匹配的结论" />}
     <Typography.Title level={5} style={{ marginTop: 16 }}>未能安全配对的结论</Typography.Title>
     <Typography.Paragraph type="secondary">这些是原始报告结论，出现或消失不代表功能新增、问题解决或个人已掌握；部分扫描时尤其需要核对覆盖范围。</Typography.Paragraph>
     {comparison.findingReview.unmatchedGroups.length ? <Table rowKey={(item, index) => `${item.reason}:${item.requirementId || index}`} size="small" dataSource={comparison.findingReview.unmatchedGroups} scroll={{ x: 850 }} columns={[

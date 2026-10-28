@@ -166,6 +166,7 @@ export interface ProjectReportComparison {
   changes: { requirementId: string; kind: 'completion_signal' | 'possible_regression' | 'new_gap' | 'improved_gap' | 'changed'; before: ProjectComparedFinding; after: ProjectComparedFinding }[];
   findingReview: {
     sameStatusChanges: { requirementId: string; changedFields: ('title' | 'detail' | 'evidence')[]; before: ProjectComparedFinding; after: ProjectComparedFinding }[];
+    featureKeyCandidates: { featureKey: string; before: ProjectComparedFinding; after: ProjectComparedFinding; statusChanged: boolean; evidenceChanged: boolean }[];
     unmatchedGroups: {
       reason: 'new_only' | 'old_only' | 'ambiguous_multiple' | 'missing_requirement_id' | 'incomparable_scope';
       requirementId: string | null; before: ProjectComparedFinding[]; after: ProjectComparedFinding[];

@@ -11,3 +11,5 @@
 接口：`GET /api/project-repositories/:id/analyses?before=<分析 ID>` 返回 `items` 与 `nextCursor`；`GET /api/project-repositories/:id/analyses/compare/:olderId/:newerId` 返回比较限制、原有 `changes`、新增只读 `findingReview.sameStatusChanges`／`findingReview.unmatchedGroups` 及建议文字变化。两者都检查当前账号的仓库归属。
 
 未关联明确需求的新版结论额外保存 `F-` 功能线索 ID，使用目录模块、规范化标题及证据文件路径计算；行号与 commit 变化不改变该 ID。标题或文件移动会产生新 ID，同名同路径的不同功能仍可能共用 ID，因此对照页仅展示供人工核对，不自动把它当成进度配对依据。旧报告保留空值，不追溯推断。
+
+两份报告若属于同一可信仓库、分支和目标，且未关联需求的某个功能线索 ID 在两侧各只出现一次，对照页另列一组**待核对配对**，标出状态与证据是否变化。它不会进入需求结论变化或进度通知；同 ID 多条、旧报告无 ID、标题或路径变化时不自动配对。人工仍需确认两条结论是否同一功能及覆盖范围是否可比。
