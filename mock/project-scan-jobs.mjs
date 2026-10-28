@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
 import { scanPublicRepository } from './project-scan.mjs';
-import { projectImpactPriorityPathsV14 } from './project-analysis-impact.mjs';
+import { projectImpactPriorityPathsV15 } from './project-analysis-impact.mjs';
 import { compareProjectScanFiles } from './project-scan-changes.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
@@ -66,7 +66,7 @@ export async function runProjectScan(db, id, scanRepository = scanPublicReposito
       if (response.status === 404 || response.status === 403 && response.headers?.get?.('x-ratelimit-remaining') !== '0' && !response.headers?.get?.('retry-after')) throw new GithubAuthorizationError('GitHub App 已失去仓库读取权限');
       return response;
     } : undefined;
-    const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim(), expectedRepositoryId: repository.github_repository_id, fetchGithub, cachedBlobs, previousFiles: sourceFiles || [], previousCoverageComplete: Boolean(source?.coverage_complete), relatedPathsForChanges: sourceFiles ? changes => projectImpactPriorityPathsV14(sourceFiles,changes) : null, maxFiles: job.budget_file_limit, maxTotalBytes: job.budget_byte_limit });
+    const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim(), expectedRepositoryId: repository.github_repository_id, fetchGithub, cachedBlobs, previousFiles: sourceFiles || [], previousCoverageComplete: Boolean(source?.coverage_complete), relatedPathsForChanges: sourceFiles ? changes => projectImpactPriorityPathsV15(sourceFiles,changes) : null, maxFiles: job.budget_file_limit, maxTotalBytes: job.budget_byte_limit });
     if (result.commitSha !== job.commit_sha.trim()) throw new Error('COMMIT_MISMATCH');
     if (repository.is_private) await assertGithubPrivateRepoAccess(db,repository.owner_id,repository.full_name,repository.github_repository_id);
     result.cacheSourceCommitSha = source?.commit_sha?.trim() || null;

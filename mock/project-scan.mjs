@@ -145,7 +145,9 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
   const changes = [...priorityPaths].map(path => ({ kind: previous.has(path) ? 'modified' : 'added', path }));
   if (!unscannedSubtrees) for (const path of previous.keys()) if (!treePaths.has(path)) changes.push({ kind: 'deleted', path });
   let relatedPaths = new Set();
-  const knownChanges = changes.filter(change => change.kind !== 'added');
+  // New SQL migrations can affect existing computed queries even though the
+  // migration itself was absent from the previous scan's dependency graph.
+  const knownChanges = changes.filter(change => change.kind !== 'added' || /\.sql$/i.test(change.path));
   if (knownChanges.length && typeof relatedPathsForChanges === 'function') {
     try { relatedPaths = new Set((relatedPathsForChanges(knownChanges) || []).filter(path => !priorityPaths.has(path))); }
     catch { /* A stale or unsupported dependency graph must not prevent the scan. */ }

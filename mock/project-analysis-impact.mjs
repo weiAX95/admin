@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { projectModuleKey, selectProjectEvidence } from './project-analysis-core.mjs';
 import { dynamicApiFiles, projectApiDependencyEdges } from './project-analysis-api-impact.mjs';
-import { changedSqlNeedsBroadReview, projectSqlDependencyEdges } from './project-analysis-sql-impact.mjs';
+import { changedSqlNeedsBroadReview, dynamicSqlFiles, projectSqlDependencyEdges } from './project-analysis-sql-impact.mjs';
 
 const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
 const relativeImport = /\b(?:from\s*|import\s*\(|require\s*\()\s*['"](\.{1,2}\/[^'"\n]+)['"]/g;
@@ -554,7 +554,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -576,6 +576,8 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
   const sqlEdges = includeSqlTables ? projectSqlDependencyEdges(files) : new Map();
   const unknownApi = includeDynamicApi ? dynamicApiFiles(files) : new Set();
+  const sqlChanged = changes.some(change => /\.sql$/i.test(change.path) || change.oldPath && /\.sql$/i.test(change.oldPath));
+  const unknownSql = includeDynamicSql && sqlChanged ? dynamicSqlFiles(files) : new Set();
   const aliasConfigs = includeAliases ? javascriptAliasConfigs(files,includeExtends) : [];
   const viteConfigs = includeViteAliases ? viteAliasConfigs(files) : null;
   const reverse = new Map();
@@ -609,10 +611,10 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
     dependencies.add(target);
     impactedModules.add(projectModuleKey(target));
   }
-  // Dynamic API targets and Vite aliases cannot be resolved to a fixed edge.
-  // Recheck those sources and their known transitive callers on any change.
+  // Dynamic API targets and Vite aliases are uncertain on any change;
+  // computed SQL is uncertain when a SQL file changes.
   const uncertainLayers = [];
-  const uncertainSources = new Set([...uncertainViteImporters,...unknownApi]);
+  const uncertainSources = new Set([...uncertainViteImporters,...unknownApi,...unknownSql]);
   if (changedPaths.size && uncertainSources.size) {
     let pending = [...uncertainSources].filter(name => !visited.has(name));
     for (const name of uncertainSources) impactedModules.add(projectModuleKey(name));
@@ -643,3 +645,5 @@ export const selectProjectImpactEvidenceV10 = (files, changes) => selectImpactEv
 export const selectProjectImpactEvidenceV13 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true);
 export const selectProjectImpactEvidenceV14 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true);
 export const projectImpactPriorityPathsV14 = (files, changes) => selectProjectImpactEvidenceV14(files,changes).priorityPaths;
+export const selectProjectImpactEvidenceV15 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true,true);
+export const projectImpactPriorityPathsV15 = (files, changes) => selectProjectImpactEvidenceV15(files,changes).priorityPaths;
