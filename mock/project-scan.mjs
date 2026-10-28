@@ -13,7 +13,7 @@ const gitBlobSha = bytes => crypto.createHash('sha1').update(Buffer.from(`blob $
 function classification(path) {
   if (/(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|\.)|\.(?:test|spec)\./i.test(path)) return 'test';
   if (/(?:^|\/)(?:README|CHANGELOG|CONTRIBUTING)(?:\.|$)|\.(?:md|mdx|rst)$/i.test(path)) return 'documentation';
-  if (/(?:^|\/)(?:package\.json|requirements\.txt|go\.mod|pyproject\.toml|Cargo\.toml|Dockerfile|vite\.config\.[^/]+)$/i.test(path)) return 'config';
+  if (/(?:^|\/)(?:package\.json|requirements\.txt|go\.mod|pyproject\.toml|Cargo\.toml|Dockerfile|vite\.config\.[^/]+)$|\.prisma$/i.test(path)) return 'config';
   return 'source';
 }
 

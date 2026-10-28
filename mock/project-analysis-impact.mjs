@@ -13,6 +13,8 @@ const aliasConfigPath = /(?:^|\/)(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json$/;
 const viteConfigPath = /(?:^|\/)vite\.config\.(?:[cm]?[jt]s)$/;
 const nestedConfigPath = /(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json|vite\.config\.[^/]+|pyproject\.toml|requirements\.txt|go\.(?:mod|work)|Cargo\.toml)$/;
 const pythonPathMutation = /\bsys\s*\.\s*path\s*(?:\.\s*(?:append|insert|extend|remove)\s*\(|\[[^\]\n]{0,80}\]\s*=|=)|\b(?:site\s*\.\s*addsitedir|os\s*\.\s*environ\s*\[\s*['"]PYTHONPATH['"]\s*\]\s*=)/;
+const prismaSchemaPath = /\.prisma$/i;
+const prismaMethods = new Set(['findUnique','findUniqueOrThrow','findFirst','findFirstOrThrow','findMany','create','createMany','createManyAndReturn','update','updateMany','updateManyAndReturn','upsert','delete','deleteMany','count','aggregate','groupBy']);
 
 function runtimePythonPathFiles(files) {
   return new Set(files.filter(file => file.status === 'read' && file.path.endsWith('.py') && typeof file.content === 'string' && file.content.length <= 250000 && pythonPathMutation.test(file.content)).map(file => file.path));
@@ -350,6 +352,55 @@ function literalImportNames(tokens) {
   return names;
 }
 
+function prismaModels(content) {
+  if (typeof content !== 'string' || content.length > 250_000) return new Set();
+  const clean = content.replace(/\/\*[\s\S]*?\*\//g,'');
+  return new Set(clean.split(/\r?\n/).map(line => line.replace(/\/\/.*$/,'').match(/^\s*model\s+([A-Za-z_]\w*)\s*\{/)?.[1]).filter(Boolean));
+}
+
+function prismaPackageRoot(name, roots) {
+  return roots.find(root => !root || name.startsWith(`${root}/`)) || '';
+}
+
+function prismaDependencyEdges(files) {
+  const roots = files.filter(file => /(?:^|\/)package\.json$/.test(file.path)).map(file => path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path)).sort((a,b) => b.length - a.length);
+  const schemas = files.filter(file => prismaSchemaPath.test(file.path) && file.status === 'read').map(file => ({ path: file.path, root: prismaPackageRoot(file.path,roots), delegates: new Set([...prismaModels(file.content)].map(name => name[0].toLowerCase() + name.slice(1))) }));
+  const edges = new Map();
+  for (const file of files) {
+    if (file.status !== 'read' || !/\.(?:[cm]?[jt]sx?)$/.test(file.path) || typeof file.content !== 'string') continue;
+    const tokens = javascriptSourceTokens(file.content);
+    if (!tokens) continue;
+    const root = prismaPackageRoot(file.path,roots), used = new Set();
+    for (let i = 0; i + 5 < tokens.length; i++) {
+      if (tokens[i].type !== 'identifier' || tokens[i + 1].value !== '.' || tokens[i + 2].type !== 'identifier'
+        || tokens[i + 3].value !== '.' || !prismaMethods.has(tokens[i + 4].value) || tokens[i + 5].value !== '(') continue;
+      used.add(tokens[i + 2].value);
+    }
+    const targets = schemas.filter(schema => schema.root === root && [...used].some(name => schema.delegates.has(name))).map(schema => schema.path);
+    if (targets.length) edges.set(file.path,new Set(targets));
+  }
+  return edges;
+}
+
+function uncertainPrismaFiles(files) {
+  const result = new Set();
+  for (const file of files) {
+    if (file.status !== 'read' || !/\.(?:[cm]?[jt]sx?)$/.test(file.path) || typeof file.content !== 'string') continue;
+    const tokens = javascriptSourceTokens(file.content);
+    if (tokens && (literalImportNames(tokens).includes('@prisma/client') || tokens.some((token,index) => token.value === 'PrismaClient' && tokens[index - 1]?.value === 'new'))) result.add(file.path);
+  }
+  return result;
+}
+
+function changedPrismaNeedsBroadReview(changes,files) {
+  const current = new Map(files.map(file => [file.path,file]));
+  return changes.some(change => {
+    if (!prismaSchemaPath.test(change.path) && !(change.oldPath && prismaSchemaPath.test(change.oldPath))) return false;
+    const file = current.get(change.path);
+    return change.kind !== 'added' || !file || file.status !== 'read' || !prismaModels(file.content).size;
+  });
+}
+
 function hasLiteralViteAliasImport(file, viteConfigs) {
   if (!/\.(?:[cm]?[jt]sx?)$/.test(file.path)) return false;
   const candidates = viteConfigs.filter(item => !item.directory || file.path.startsWith(`${item.directory}/`));
@@ -559,7 +610,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false, includePrisma = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -580,11 +631,14 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files) : null;
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
   const sqlEdges = includeSqlTables ? projectSqlDependencyEdges(files) : new Map();
+  const prismaEdges = includePrisma ? prismaDependencyEdges(files) : new Map();
   const unknownApi = includeDynamicApi ? dynamicApiFiles(files) : new Set();
   const sqlChanged = changes.some(change => /\.sql$/i.test(change.path) || change.oldPath && /\.sql$/i.test(change.oldPath));
   const unknownSql = includeDynamicSql && sqlChanged ? dynamicSqlFiles(files) : new Set();
   const pythonChanged = changes.some(change => /\.py$/i.test(change.path) || change.oldPath && /\.py$/i.test(change.oldPath));
   const unknownPythonPaths = includeRuntimePythonPath && pythonChanged ? runtimePythonPathFiles(files) : new Set();
+  const prismaChanged = includePrisma && changes.some(change => prismaSchemaPath.test(change.path) || change.oldPath && prismaSchemaPath.test(change.oldPath));
+  const unknownPrisma = prismaChanged ? uncertainPrismaFiles(files) : new Set();
   const aliasConfigs = includeAliases ? javascriptAliasConfigs(files,includeExtends) : [];
   const viteConfigs = includeViteAliases ? viteAliasConfigs(files) : null;
   const reverse = new Map();
@@ -592,7 +646,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const uncertainViteImporters = new Set();
   for (const file of files) {
     if (file.status !== 'read') continue;
-    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages,pythonBoundaries),...(apiEdges.get(file.path) || []),...(sqlEdges.get(file.path) || [])])];
+    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages,pythonBoundaries),...(apiEdges.get(file.path) || []),...(sqlEdges.get(file.path) || []),...(prismaEdges.get(file.path) || [])])];
     if (viteConfigs && typeof file.content === 'string' && hasLiteralViteAliasImport(file,viteConfigs)) uncertainViteImporters.add(file.path);
     importsByPath.set(file.path,imports);
     for (const target of imports) {
@@ -621,7 +675,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   // Dynamic API targets and Vite aliases are uncertain on any change;
   // computed SQL is uncertain when a SQL file changes.
   const uncertainLayers = [];
-  const uncertainSources = new Set([...uncertainViteImporters,...unknownApi,...unknownSql,...unknownPythonPaths]);
+  const uncertainSources = new Set([...uncertainViteImporters,...unknownApi,...unknownSql,...unknownPythonPaths,...unknownPrisma]);
   if (changedPaths.size && uncertainSources.size) {
     let pending = [...uncertainSources].filter(name => !visited.has(name));
     for (const name of uncertainSources) impactedModules.add(projectModuleKey(name));
@@ -638,6 +692,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   }
   if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath) || includeAliases && (aliasConfigPath.test(change.path) || change.oldPath && aliasConfigPath.test(change.oldPath)) || includeNestedConfigs && (nestedConfigPath.test(change.path) || change.oldPath && nestedConfigPath.test(change.oldPath)))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   if (includeSqlTables && changedSqlNeedsBroadReview(changes,files)) for (const file of files) impactedModules.add(projectModuleKey(file.path));
+  if (includePrisma && changedPrismaNeedsBroadReview(changes,files)) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   const priorityPaths = [...currentChanged].sort().concat(...layers,[...dependencies].sort(),...uncertainLayers);
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules, priorityPaths };
 }
@@ -656,3 +711,5 @@ export const selectProjectImpactEvidenceV15 = (files, changes) => selectImpactEv
 export const projectImpactPriorityPathsV15 = (files, changes) => selectProjectImpactEvidenceV15(files,changes).priorityPaths;
 export const selectProjectImpactEvidenceV17 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true,true,true);
 export const projectImpactPriorityPathsV17 = (files, changes) => selectProjectImpactEvidenceV17(files,changes).priorityPaths;
+export const selectProjectImpactEvidenceV19 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true,true,true,true);
+export const projectImpactPriorityPathsV19 = (files, changes) => selectProjectImpactEvidenceV19(files,changes).priorityPaths;
