@@ -414,7 +414,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       <Select aria-label="较新的报告" placeholder="较新的报告" value={newerId || undefined} onChange={value => { comparisonRequest.current += 1; setNewerId(value); setComparison(null); setComparing(false); }} style={{ minWidth: 260 }} options={items.filter(item => item.status === 'completed').map(item => ({ value: item.id, label: `${new Date(item.finishedAt || item.createdAt).toLocaleString('zh-CN')} · ${item.commitSha.slice(0, 10)}` }))} />
       <Button disabled={!olderId || !newerId || olderId === newerId || new Date(items.find(item => item.id === olderId)?.finishedAt || 0).getTime() >= new Date(items.find(item => item.id === newerId)?.finishedAt || 0).getTime()} loading={comparing} onClick={() => void compareReports()}>对照两次报告</Button>
     </Space>
-    {comparison && <ProjectReportComparison comparison={comparison} onOpenReport={id => void show(id)} onClose={() => setComparison(null)} />}
+    {comparison && <ProjectReportComparison comparison={comparison} onOpenReport={id => void show(id)} onRefresh={compareReports} onClose={() => setComparison(null)} />}
     <Modal title="分析实际用量与未覆盖范围" open={Boolean(scopeJob)} onCancel={() => setScopeJob(null)} footer={<Button onClick={() => setScopeJob(null)}>关闭</Button>} width={720}>
       {scopeJob && <>
         <Alert type="warning" showIcon message={scopeJob.errorCode ? errors[scopeJob.errorCode] || scopeJob.errorCode : '本次分析未完成'} style={{ marginBottom: 12 }} />

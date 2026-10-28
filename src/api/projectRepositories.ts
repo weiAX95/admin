@@ -158,11 +158,14 @@ export const requestProjectLearningReview = (repositoryId: string, analysisId: s
 export const setProjectPrerequisiteTask = (repositoryId: string, analysisId: string, suggestionId: string, index: number, body: { taskId: string | null; expectedVersion: number }) =>
   http.put<{ suggestionId: string; prerequisiteIndex: number; mappedTaskId: string | null; source: 'auto' | 'manual'; version: number; updatedAt: string | null }>(`/project-repositories/${repositoryId}/roadmap/${analysisId}/prerequisites/${suggestionId}/${index}`, body);
 export const adjustProjectSuggestion = (repositoryId: string, analysisId: string, suggestionId: string, body: { practice: string; acceptance: string; rationale: string; expectedVersion: number }) => http.patch<ProjectAnalysisReport['suggestions'][number]['adjustment']>(`/project-repositories/${repositoryId}/analyses/${analysisId}/suggestions/${suggestionId}/adjust`, body);
-export type ProjectComparedFinding = Pick<ProjectAnalysisReport['findings'][number], 'requirementId' | 'featureKey' | 'title' | 'status' | 'detail' | 'evidence'>;
+export type ProjectComparedFinding = Pick<ProjectAnalysisReport['findings'][number], 'id' | 'requirementId' | 'featureKey' | 'title' | 'status' | 'detail' | 'evidence'>;
 export interface ProjectReportComparison {
   older: ProjectAnalysisJob & { fullName: string }; newer: ProjectAnalysisJob & { fullName: string };
   comparable: boolean; limitations: string[];
   suggestionReviewEligible: boolean; suggestionReviewUnavailableReason: string | null;
+  findingMatchEligible: boolean;
+  findingMatchCandidates: { older: ProjectComparedFinding[]; newer: ProjectComparedFinding[] };
+  confirmedFindingMatches: { id: string; before: ProjectComparedFinding; after: ProjectComparedFinding; reason: string; reviewer: string; createdAt: string }[];
   changes: { requirementId: string; kind: 'completion_signal' | 'possible_regression' | 'new_gap' | 'improved_gap' | 'changed'; before: ProjectComparedFinding; after: ProjectComparedFinding }[];
   findingReview: {
     sameStatusChanges: { requirementId: string; changedFields: ('title' | 'detail' | 'evidence')[]; before: ProjectComparedFinding; after: ProjectComparedFinding }[];
@@ -175,6 +178,10 @@ export interface ProjectReportComparison {
   suggestions: { added: { topic: string; practice: string }[]; removed: { topic: string; practice: string }[] };
 }
 export const compareProjectAnalyses = (repositoryId: string, olderId: string, newerId: string) => http.get<ProjectReportComparison>(`/project-repositories/${repositoryId}/analyses/compare/${olderId}/${newerId}`);
+export const confirmProjectFindingMatch = (repositoryId: string, olderId: string, newerId: string, body: { olderFindingId: string; newerFindingId: string; reason: string }) =>
+  http.post<{ id: string }>(`/project-repositories/${repositoryId}/analyses/compare/${olderId}/${newerId}/finding-matches`, body);
+export const removeProjectFindingMatch = (repositoryId: string, olderId: string, newerId: string, matchId: string) =>
+  http.del<{ removed: true }>(`/project-repositories/${repositoryId}/analyses/compare/${olderId}/${newerId}/finding-matches/${matchId}`);
 export type ProjectSuggestionReviewOutcome = 'matched' | 'follow_up' | 'no_longer_relevant';
 export interface ProjectSuggestionReviewPair {
   olderAnalysisId: string;

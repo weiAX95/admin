@@ -364,7 +364,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
     if (rows.length !== 2) return fail(404,'已完成报告不存在');
     const olderRow = rows.find(item => item.id === olderId), newerRow = rows.find(item => item.id === newerId);
     if (new Date(olderRow.finished_at).getTime() >= new Date(newerRow.finished_at).getTime()) return fail(400,'请按完成时间选择较早和较新的报告');
-    const findings = (await client.query('SELECT analysis_id,requirement_id,feature_key,title,status,detail,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha FROM project_analysis_findings WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
+    const findings = (await client.query('SELECT id,analysis_id,requirement_id,feature_key,title,status,detail,evidence_type,evidence_path,evidence_line,evidence_excerpt,evidence_git_sha FROM project_analysis_findings WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
     const suggestions = (await client.query('SELECT analysis_id,topic,practice FROM project_analysis_suggestions WHERE analysis_id=ANY($1::uuid[]) ORDER BY position', [[olderId,newerId]])).rows;
     const report = id => {
       const row = rows.find(item => item.id === id);
@@ -374,7 +374,7 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
         goal: row.goal, analysisCoverageComplete: row.analysis_coverage_complete,
         selectedFileCount: row.selected_file_count, availableFileCount: row.available_file_count,
         selectedFilePaths: row.selected_file_paths, modelId: row.model_id, analysisPlanVersion: row.analysis_plan_version,
-        findings: findings.filter(item => item.analysis_id === id).map(item => ({ requirementId: item.requirement_id, featureKey: item.feature_key, title: item.title, status: item.status, detail: item.detail, evidence: item.evidence_path ? { type: item.evidence_type, path: item.evidence_path, line: item.evidence_line, excerpt: item.evidence_excerpt, gitSha: item.evidence_git_sha?.trim() || null } : null })),
+        findings: findings.filter(item => item.analysis_id === id).map(item => ({ id: item.id, requirementId: item.requirement_id, featureKey: item.feature_key, title: item.title, status: item.status, detail: item.detail, evidence: item.evidence_path ? { type: item.evidence_type, path: item.evidence_path, line: item.evidence_line, excerpt: item.evidence_excerpt, gitSha: item.evidence_git_sha?.trim() || null } : null })),
         suggestions: suggestions.filter(item => item.analysis_id === id).map(item => ({ topic: item.topic, practice: item.practice })),
       };
     };
@@ -383,11 +383,22 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       && olderRow.branch === newerRow.branch
       && [olderRow,newerRow].every(row => row.branch === row.scan_branch
         && String(row.commit_sha || '').trim() === String(row.scan_commit_sha || '').trim()));
+    const olderReport = report(olderId), newerReport = report(newerId);
+    const findingMatchEligible = Boolean(suggestionReviewEligible && olderRow.goal === newerRow.goal);
+    const matches = findingMatchEligible ? (await client.query(`SELECT m.id,m.older_finding_id,m.newer_finding_id,m.reason,m.created_at,u.username
+      FROM project_finding_matches m LEFT JOIN users u ON u.id=m.reviewer_id
+      WHERE m.repository_id=$1 AND m.older_analysis_id=$2 AND m.newer_analysis_id=$3
+      ORDER BY m.created_at,m.id`, [repositoryId,olderId,newerId])).rows : [];
+    const byOld = new Map(olderReport.findings.map(item => [item.id,item]));
+    const byNew = new Map(newerReport.findings.map(item => [item.id,item]));
     return { status: 200, data: {
-      ...compareProjectReports(report(olderId),report(newerId)),
+      ...compareProjectReports(olderReport,newerReport),
       suggestionReviewEligible,
       suggestionReviewUnavailableReason: suggestionReviewEligible ? null
         : '两份报告需来自同一可信 GitHub 仓库和分支，且与各自扫描的提交一致，才能逐条复核建议',
+      findingMatchEligible,
+      findingMatchCandidates: findingMatchEligible ? { older: olderReport.findings.filter(item => !item.requirementId), newer: newerReport.findings.filter(item => !item.requirementId) } : { older: [], newer: [] },
+      confirmedFindingMatches: matches.map(item => ({ id: item.id, before: byOld.get(item.older_finding_id), after: byNew.get(item.newer_finding_id), reason: item.reason, reviewer: item.username || '已删除账号', createdAt: item.created_at })),
     } };
   }
   const moduleFilesRoute = pathname.match(/^\/api\/project-repositories\/([^/]+)\/analyses\/([^/]+)\/module-files$/);

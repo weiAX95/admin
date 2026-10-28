@@ -88,6 +88,7 @@ import { handleProjectSuggestionRechecks } from './project-suggestion-rechecks.m
 import { handleProjectLearningRoadmap } from './project-learning-roadmap.mjs';
 import { handleProjectLearningReviews } from './project-learning-reviews.mjs';
 import { handleProjectFindingFeedback } from './project-finding-feedback.mjs';
+import { handleProjectFindingMatches } from './project-finding-matches.mjs';
 import { handleProjectRequirementBaselines } from './project-requirement-baselines.mjs';
 import { processDueModelRetirements } from './model-retirement.mjs';
 
@@ -2381,6 +2382,7 @@ function routeHttpRequest(req, res, pathname, method) {
         || await handleProjectLearningRoadmap({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectSuggestionRechecks({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectFindingFeedback({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
+        || await handleProjectFindingMatches({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
         || await handleProjectSuggestionAction({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectAnalyses({ pathname, method: req.method, client: pool, me, url, readBody: () => readProjectBody(req), req })
         || await handleProjectScans({ pathname, method: req.method, client: pool, me, url: new URL(req.url, 'http://localhost'), readBody: () => readProjectBody(req), req })

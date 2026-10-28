@@ -6,6 +6,8 @@
 
 [157 号迁移](../db/migrations/157_project_analysis_selected_paths.sql) 为 `project_analyses` 增加可空的 `selected_file_paths` 路径快照，并校验路径数量与 `selected_file_count` 一致。新报告完成时与结论同事务保存实际进入模型的路径；旧报告保持空值。报告对照和自动进展通知据此核对分析范围，不把相同文件数误作相同文件集合。该迁移不新增表或外键。
 
+[158 号迁移](../db/migrations/158_project_finding_matches.sql) 新增 `project_finding_matches`，保存跨两份报告由账号确认的功能对应、理由和时间。仓库、两份分析与两条结论均由真实外键约束；结论使用分析 ID＋结论 ID 复合外键，避免跨报告误配。同一报告对中每侧结论最多确认一次；删除报告或结论时级联清理，删除确认账号时仅将 `reviewer_id` 置空。该表不改变原始模型结论，也不参与自动进度通知。
+
 > [104_super_admin.sql](../db/migrations/104_super_admin.sql) 扩展 `users.role` 为 `super_admin`／`admin`／`member`。迁移从已有启用管理员中选取创建时间最早者；空库在旧 JSON 导入时提升一名管理员。唯一索引保证全库至多一个 SuperAdmin，CHECK 和触发器禁止其停用、软删除、降级与物理删除；普通管理员不能修改该账号。账号与登录会话的原有外键关系不变。
 
 > [105_super_admin_candidates.sql](../db/migrations/105_super_admin_candidates.sql) 在 `users` 增加 `super_admin_candidate` 布尔列，仅 `admin` 角色可标记。它是由现任 SuperAdmin 管理的提名信息，不会创建第二名 SuperAdmin，也不会在登录鉴权中授予额外权限；无新表或外键。
@@ -14,7 +16,7 @@
 
 > 权限矩阵由服务端 `mock/permissions.mjs` 当前参与接口鉴权的资源规则生成，经 `/api/permissions/matrix` 提供给 `/permissions` 页面；它不新增数据库表。矩阵单元格包含范围值，记录级可见性仍由任务归属、笔记创建者和 SuperAdmin 保护条件进一步限制。未接入统一策略的模块不会凭空出现在矩阵中。
 
-> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量、成本、上报归属与质量标记见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)、[063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)、[064_session_ingest_ownership.sql](../db/migrations/064_session_ingest_ownership.sql) 、[065_session_quality_flags.sql](../db/migrations/065_session_quality_flags.sql) 、[066_session_clusters.sql](../db/migrations/066_session_clusters.sql) 和 [067_session_cluster_counters.sql](../db/migrations/067_session_cluster_counters.sql)；分析调用恢复见 [068_project_analysis_call_recovery.sql](../db/migrations/068_project_analysis_call_recovery.sql)。截至 [145_project_analysis_vite_alias_v10.sql](../db/migrations/145_project_analysis_vite_alias_v10.sql)，本机迁移后的数据库表共 151 张；该迁移只扩展分析计划版本约束，不新增表。
+> 12.x 设置基础迁移见 [032_system_settings.sql](../db/migrations/032_system_settings.sql)，模型连接与安全审计见 [033_model_connections.sql](../db/migrations/033_model_connections.sql)，保留策略见 [034_retention_policy.sql](../db/migrations/034_retention_policy.sql)，备份作业见 [045_backup_jobs.sql](../db/migrations/045_backup_jobs.sql)；公开仓库连接、扫描与分析见 [046_project_repositories.sql](../db/migrations/046_project_repositories.sql)、[047_project_scans.sql](../db/migrations/047_project_scans.sql)、[048_project_scan_content.sql](../db/migrations/048_project_scan_content.sql)、[049_project_analyses.sql](../db/migrations/049_project_analyses.sql)、[050_project_model_audit.sql](../db/migrations/050_project_model_audit.sql)、[051_project_analysis_recovery.sql](../db/migrations/051_project_analysis_recovery.sql)、[052_project_analysis_modules.sql](../db/migrations/052_project_analysis_modules.sql)、[053_project_module_analysis.sql](../db/migrations/053_project_module_analysis.sql)、[054_project_suggestion_decisions.sql](../db/migrations/054_project_suggestion_decisions.sql)、[055_project_finding_feedback.sql](../db/migrations/055_project_finding_feedback.sql)、[056_project_technology_evidence.sql](../db/migrations/056_project_technology_evidence.sql)、[057_project_suggestion_priorities.sql](../db/migrations/057_project_suggestion_priorities.sql) 、[058_project_requirement_baselines.sql](../db/migrations/058_project_requirement_baselines.sql) 和 [059_project_finding_requirements.sql](../db/migrations/059_project_finding_requirements.sql)、[060_project_latest_analysis_idx.sql](../db/migrations/060_project_latest_analysis_idx.sql) 和 [061_project_repository_tasks.sql](../db/migrations/061_project_repository_tasks.sql)；会话用量、成本、上报归属与质量标记见 [062_session_token_usage.sql](../db/migrations/062_session_token_usage.sql)、[063_session_cost_snapshots.sql](../db/migrations/063_session_cost_snapshots.sql)、[064_session_ingest_ownership.sql](../db/migrations/064_session_ingest_ownership.sql) 、[065_session_quality_flags.sql](../db/migrations/065_session_quality_flags.sql) 、[066_session_clusters.sql](../db/migrations/066_session_clusters.sql) 和 [067_session_cluster_counters.sql](../db/migrations/067_session_cluster_counters.sql)；分析调用恢复见 [068_project_analysis_call_recovery.sql](../db/migrations/068_project_analysis_call_recovery.sql)。截至 [158_project_finding_matches.sql](../db/migrations/158_project_finding_matches.sql)，迁移定义的数据库表共 152 张；第 158 号迁移新增一张人工对应关系表。
 
 > [069_project_ownership_integrity.sql](../db/migrations/069_project_ownership_integrity.sql) 为项目分析增加复合外键，防止仓库、扫描、分析、建议决定在数据库层交叉归属；表数量不变。迁移遇到历史关联不一致时会报错，需先核对来源，不会自动改写旧记录。
 
@@ -212,7 +214,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [145_project_analysis_vite_alias_v10.sql](../db/migrations/145_project_analysis_vite_alias_v10.sql)。本机当前共 **151 张表**。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [158_project_finding_matches.sql](../db/migrations/158_project_finding_matches.sql)。迁移定义共 **152 张表**；实际运行库须先应用迁移。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -258,6 +260,10 @@ flowchart LR
   Findings -->|"FK finding_id + analysis_id · ON DELETE CASCADE"| Feedback[(project_finding_feedback)]
   Analyses -->|"FK analysis_id · ON DELETE CASCADE"| Feedback
   Users -->|"FK owner_id · ON DELETE CASCADE；分析所属账号"| Feedback
+  Repositories -->|"FK repository_id · ON DELETE CASCADE"| FindingMatches[(project_finding_matches)]
+  Analyses -->|"FK older/newer_analysis_id + repository_id · ON DELETE CASCADE"| FindingMatches
+  Findings -->|"FK older/newer_analysis_id + finding_id · ON DELETE CASCADE"| FindingMatches
+  Users -->|"FK reviewer_id · ON DELETE SET NULL"| FindingMatches
   Suggestions -->|"FK suggestion_id + analysis_id · ON DELETE CASCADE"| Decisions[(project_suggestion_decisions)]
   Analyses -->|"FK older/newer_analysis_id + repository_id + owner_id · ON DELETE CASCADE"| Rechecks[(project_suggestion_rechecks)]
   Suggestions -->|"FK older/newer_suggestion_id + analysis_id · ON DELETE CASCADE"| Rechecks
@@ -756,4 +762,4 @@ flowchart LR
 
 [146 扫描分支隔离迁移](../db/migrations/146_project_scan_branch_isolation.sql) 将 `project_scans` 进行中唯一索引限定为项目、分支和 commit；它是唯一索引，不是新的外键或表。扫描差异的基线也只从同一可信 GitHub 仓库 ID、同一分支的较早扫描中选择，防止跨分支差异误报。
 
-早期的任务、会话和笔记表组之外，后续迁移还增加了实验、评测、模型治理、系统设置、项目分析、会话分析及页面错误报告等表，当前总数以本文开头的 151 张为准。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。
+早期的任务、会话和笔记表组之外，后续迁移还增加了实验、评测、模型治理、系统设置、项目分析、会话分析及页面错误报告等表，当前迁移定义的总数以本文开头的 152 张为准。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。

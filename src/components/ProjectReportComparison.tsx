@@ -2,6 +2,7 @@ import { Alert, Button, Card, Empty, Space, Table, Tag, Typography } from 'antd'
 import type { ProjectComparedFinding, ProjectReportComparison as Comparison } from '../api/projectRepositories';
 import { projectFindingBasis } from '../utils/projectEvidence';
 import ProjectSuggestionReview from './ProjectSuggestionReview';
+import ProjectFindingMatchReview from './ProjectFindingMatchReview';
 
 const statusLabels: Record<string, string> = { implemented: '已实现线索', partial: '部分实现线索', not_found: '模型未发现实现线索', unverified: '待验证' };
 const kindLabels: Record<Comparison['changes'][number]['kind'], string> = {
@@ -18,7 +19,7 @@ const unmatchedReasonLabels: Record<Comparison['findingReview']['unmatchedGroups
   incomparable_scope: '仓库身份、分支、目标或需求基线不同，结论不配对',
 };
 
-export default function ProjectReportComparison({ comparison, onOpenReport, onClose }: { comparison: Comparison; onOpenReport: (id: string) => void; onClose: () => void }) {
+export default function ProjectReportComparison({ comparison, onOpenReport, onRefresh, onClose }: { comparison: Comparison; onOpenReport: (id: string) => void; onRefresh: () => Promise<void>; onClose: () => void }) {
   const source = (report: Comparison['older'], finding: ProjectComparedFinding) => finding.evidence
     ? <Space direction="vertical" size={0}><a href={`https://github.com/${report.fullName}/blob/${report.commitSha}/${finding.evidence.path.split('/').map(encodeURIComponent).join('/')}#L${finding.evidence.line}`} target="_blank" rel="noopener noreferrer">{finding.evidence.path}:{finding.evidence.line}</a><Typography.Text type="secondary">{projectFindingBasis(finding)} · {finding.evidence.excerpt}</Typography.Text></Space>
     : <Typography.Text type="secondary">{projectFindingBasis(finding)}</Typography.Text>;
@@ -68,6 +69,7 @@ export default function ProjectReportComparison({ comparison, onOpenReport, onCl
       { title: '旧报告原始结论', render: (_, item: Comparison['findingReview']['unmatchedGroups'][number]) => findingList(comparison.older, item.before) },
       { title: '新报告原始结论', render: (_, item: Comparison['findingReview']['unmatchedGroups'][number]) => findingList(comparison.newer, item.after) },
     ]} /> : <Empty description="没有未配对的结论" />}
+    <ProjectFindingMatchReview key={`${comparison.older.id}:${comparison.newer.id}`} comparison={comparison} onRefresh={onRefresh} />
     </> : <Alert type="info" showIcon message="请重新打开报告对照，获取完整的待复核结论" style={{ marginTop: 16 }} />}
     <Typography.Title level={5} style={{ marginTop: 16 }}>学习建议变化</Typography.Title>
     <Typography.Paragraph type="secondary">按主题和实践文字比较；措辞变化可能被识别为新增或移除，不代表建议已经完成。</Typography.Paragraph>

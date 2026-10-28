@@ -119,6 +119,10 @@ export const PERMISSION_RESOURCES = [
   { id: 'project_feedback', label: '项目结论反馈', description: '仅能为自己仓库已完成报告中的结论提交人工反馈；反馈随报告详情读取。', access: {
     read: nobody, create: { super_admin: 'own', admin: 'own', member: 'own' }, update: nobody, delete: nobody, manage: nobody,
   } },
+  { id: 'project_finding_matches', label: '项目结论人工对应', description: '仅能确认或撤销自己仓库两份可信报告中未关联需求的结论对应；原始结论不变。', access: {
+    read: { super_admin: 'own', admin: 'own', member: 'own' }, create: { super_admin: 'own', admin: 'own', member: 'own' },
+    update: nobody, delete: { super_admin: 'own', admin: 'own', member: 'own' }, manage: nobody,
+  } },
   { id: 'project_suggestions', label: '项目建议处理', description: '所有账号可调整或忽略自己仓库的建议；仅管理员可预览并接受建议转任务。', access: {
     read: { super_admin: 'own', admin: 'own', member: 'none' }, create: { super_admin: 'own', admin: 'own', member: 'none' },
     update: nobody, delete: nobody, manage: { super_admin: 'own', admin: 'own', member: 'own' },
