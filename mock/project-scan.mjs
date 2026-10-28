@@ -26,7 +26,7 @@ function excludedReason(path, entry, maxFileBytes) {
   return null;
 }
 
-function balancedIndexOrder(entries, maxFileBytes, priorityPaths = new Set(), priorityLimit = 0) {
+function balancedIndexOrder(entries, maxFileBytes, priorityPaths = new Set(), priorityLimit = 0, priorityByteLimit = 0) {
   const categories = ['config','source','test','documentation'];
   const modules = new Map(), excluded = [];
   for (const entry of entries) {
@@ -55,7 +55,14 @@ function balancedIndexOrder(entries, maxFileBytes, priorityPaths = new Set(), pr
     }
     preferred = (preferred + 1) % categories.length;
   }
-  const priority = ordered.filter(entry => priorityPaths.has(entry.path)).slice(0,priorityLimit);
+  const priority = [];
+  let priorityBytes = 0;
+  for (const entry of ordered) {
+    if (priority.length >= priorityLimit) break;
+    if (!priorityPaths.has(entry.path) || priorityBytes + entry.size > priorityByteLimit) continue;
+    priority.push(entry);
+    priorityBytes += entry.size;
+  }
   const selected = new Set(priority.map(entry => entry.path));
   return priority.concat(ordered.filter(entry => !selected.has(entry.path)),excluded.sort((a,b) => String(a.path || '').localeCompare(String(b.path || ''))));
 }
@@ -127,7 +134,7 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
     const before = previous.get(entry.path);
     return before ? before !== String(entry.sha || '').toLowerCase() : previousCoverageComplete;
   }).map(entry => entry.path));
-  entries = balancedIndexOrder(entries,maxFileBytes,priorityPaths,Math.floor(maxFiles / 2));
+  entries = balancedIndexOrder(entries,maxFileBytes,priorityPaths,Math.floor(maxFiles / 2),Math.floor(maxTotalBytes / 2));
   const files = [];
   let readCount = 0, attemptedCount = 0, reusedCount = 0, failedCount = 0, excludedCount = 0, totalBytes = 0, unscannedCount = Math.max(0, entries.length - maxIndexEntries);
   for (const entry of entries.slice(0,maxIndexEntries)) {
