@@ -25,7 +25,7 @@ export interface ProjectRepository {
 }
 
 export const listProjectRepositories = () => http.get<{ items: ProjectRepository[] }>('/project-repositories');
-export interface ProjectGithubConnection { configured: boolean; connected: boolean; githubLogin: string | null; accessExpiresAt: string | null; refreshExpiresAt: string | null }
+export interface ProjectGithubConnection { configured: boolean; configurationIssues: string[]; connected: boolean; githubLogin: string | null; accessExpiresAt: string | null; refreshExpiresAt: string | null }
 export const getProjectGithubConnection = () => http.get<ProjectGithubConnection>('/project-github');
 export const startProjectGithubConnection = () => http.post<{ url: string }>('/project-github/start', {});
 export const disconnectProjectGithub = () => http.del<{ connected: false }>('/project-github');

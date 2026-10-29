@@ -4,7 +4,18 @@ import { appendSecurityAudit } from './account-audit.mjs';
 
 const fail = (status, error) => ({ status, data: { error } });
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
-const configured = () => Boolean(process.env.GITHUB_APP_CLIENT_ID && process.env.GITHUB_APP_CLIENT_SECRET && process.env.GITHUB_APP_CALLBACK_URL && /^[a-f\d]{64}$/i.test(process.env.GITHUB_APP_MASTER_KEY || ''));
+function githubAppConfiguration() {
+  const issues = [];
+  if (!process.env.GITHUB_APP_CLIENT_ID) issues.push('GITHUB_APP_CLIENT_ID');
+  if (!process.env.GITHUB_APP_CLIENT_SECRET) issues.push('GITHUB_APP_CLIENT_SECRET');
+  if (!/^[a-f\d]{64}$/i.test(process.env.GITHUB_APP_MASTER_KEY || '')) issues.push('GITHUB_APP_MASTER_KEY');
+  let callback;
+  try { callback = new URL(process.env.GITHUB_APP_CALLBACK_URL); }
+  catch { issues.push('GITHUB_APP_CALLBACK_URL'); }
+  if (callback && (callback.pathname !== '/api/project-github/callback' || callback.search || callback.hash || callback.username || callback.password || callback.protocol !== 'https:' && !(callback.protocol === 'http:' && ['localhost','127.0.0.1'].includes(callback.hostname)))) issues.push('GITHUB_APP_CALLBACK_URL');
+  return { configured: issues.length === 0, configurationIssues: issues };
+}
+const configured = () => githubAppConfiguration().configured;
 const keyVersion = () => process.env.GITHUB_APP_KEY_VERSION || 'v1';
 
 function key(version) {
@@ -236,7 +247,7 @@ export async function handleProjectGithubAuth({ pathname, method, client, me, re
   if (!pathname.startsWith('/api/project-github')) return null;
   if (pathname === '/api/project-github' && method === 'GET') {
     const row = (await client.query('SELECT github_login,access_expires_at,refresh_expires_at FROM project_github_connections WHERE owner_id=$1', [me.id])).rows[0];
-    return { status: 200, data: { configured: configured(), connected: Boolean(row), githubLogin: row?.github_login || null, accessExpiresAt: row?.access_expires_at || null, refreshExpiresAt: row?.refresh_expires_at || null } };
+    return { status: 200, data: { ...githubAppConfiguration(), connected: Boolean(row), githubLogin: row?.github_login || null, accessExpiresAt: row?.access_expires_at || null, refreshExpiresAt: row?.refresh_expires_at || null } };
   }
   if (pathname === '/api/project-github/repositories' && method === 'GET') {
     try { return { status: 200, data: await listGithubRepositories(client, me.id) }; }

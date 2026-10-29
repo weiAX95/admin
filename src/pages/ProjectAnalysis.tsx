@@ -229,6 +229,7 @@ export default function ProjectAnalysis() {
     <Card title="GitHub App 账号连接">
       <Space direction="vertical">
         <Typography.Text>{githubConnection?.connected ? `已连接 ${githubConnection.githubLogin}` : githubConnection?.configured ? '尚未连接 GitHub 账号' : '服务端尚未配置 GitHub App'}</Typography.Text>
+        {githubConnection && !githubConnection.configured && <Alert type="warning" showIcon message="GitHub App 配置待完成" description={`请管理员检查服务端配置：${githubConnection.configurationIssues.join('、')}。配置后刷新此页。`} />}
         <Typography.Text type="secondary">连接账号后，从已授权仓库中选择私有仓库并接入。扫描仅读取所选仓库；开始模型分析前会再次展示发送范围供你确认。</Typography.Text>
         {githubConnection?.connected ? <Button danger loading={githubBusy} onClick={() => Modal.confirm({ title: '断开 GitHub 账号？', content: '断开后服务端删除本账号保存的 GitHub 凭证。', okText: '断开连接', okButtonProps: { danger: true }, onOk: disconnectGithub })}>断开连接</Button> : <Button loading={githubBusy} disabled={!githubConnection?.configured} onClick={() => void connectGithub()}>连接 GitHub</Button>}
         {githubConnection?.connected && <>
