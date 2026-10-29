@@ -1,5 +1,5 @@
 import { isAdministrator } from '../utils/roles';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd';
 import { Link } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
@@ -50,9 +50,20 @@ export default function ProjectAnalysis() {
   const [githubRepositoriesLoading, setGithubRepositoriesLoading] = useState(false);
   const [githubRepositoriesCursor, setGithubRepositoriesCursor] = useState<string | null>(null);
   const [selectedGithubRepository, setSelectedGithubRepository] = useState<string>();
+  const githubRepositoryLoadId = useRef(0);
 
   const loadGithubConnection = async () => {
-    try { setGithubConnection(await getProjectGithubConnection()); }
+    try {
+      const connection = await getProjectGithubConnection();
+      setGithubConnection(connection);
+      if (!connection.connected) {
+        githubRepositoryLoadId.current += 1;
+        setGithubRepositories([]);
+        setGithubRepositoriesCursor(null);
+        setSelectedGithubRepository(undefined);
+        setGithubRepositoriesLoading(false);
+      }
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'GitHub 授权状态读取失败'); }
   };
   useEffect(() => {
@@ -69,18 +80,21 @@ export default function ProjectAnalysis() {
   };
   const disconnectGithub = async () => {
     setGithubBusy(true);
-    try { await disconnectProjectGithub(); setGithubRepositories([]); setGithubRepositoriesCursor(null); await loadGithubConnection(); message.success('GitHub 账号已断开'); }
+    try { await disconnectProjectGithub(); githubRepositoryLoadId.current += 1; setGithubRepositories([]); setGithubRepositoriesCursor(null); setSelectedGithubRepository(undefined); setGithubRepositoriesLoading(false); await loadGithubConnection(); message.success('GitHub 账号已断开'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '断开 GitHub 授权失败'); }
     finally { setGithubBusy(false); }
   };
   const loadGithubRepositories = async (more = false) => {
+    const loadId = ++githubRepositoryLoadId.current;
     setGithubRepositoriesLoading(true);
     try {
       const result = await listGithubAvailableRepositories(more ? githubRepositoriesCursor || undefined : undefined);
+      if (loadId !== githubRepositoryLoadId.current) return;
       setGithubRepositories(current => more ? [...current, ...result.items.filter(item => !current.some(existing => existing.fullName === item.fullName))] : result.items);
       setGithubRepositoriesCursor(result.nextCursor);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'GitHub 已授权仓库读取失败'); }
-    finally { setGithubRepositoriesLoading(false); }
+      if (!more) setSelectedGithubRepository(current => result.items.some(item => item.fullName === current) ? current : undefined);
+    } catch (cause) { if (loadId === githubRepositoryLoadId.current) setError(cause instanceof Error ? cause.message : 'GitHub 已授权仓库读取失败'); }
+    finally { if (loadId === githubRepositoryLoadId.current) setGithubRepositoriesLoading(false); }
   };
 
   const load = async () => {
