@@ -265,7 +265,7 @@ export async function completeProjectGithubAuthorization(client, params, browser
 export async function handleProjectGithubAuth({ pathname, method, client, me, req }) {
   if (!pathname.startsWith('/api/project-github')) return null;
   if (pathname === '/api/project-github' && method === 'GET') {
-    const row = (await client.query('SELECT github_login,access_expires_at,refresh_expires_at FROM project_github_connections WHERE owner_id=$1', [me.id])).rows[0];
+    const row = (await client.query('SELECT github_login,access_expires_at,refresh_expires_at FROM project_github_connections WHERE owner_id=$1 AND refresh_expires_at>now()', [me.id])).rows[0];
     return { status: 200, data: { ...githubAppConfiguration(), webhookConfigured: Boolean(process.env.GITHUB_APP_WEBHOOK_SECRET), connected: Boolean(row), githubLogin: row?.github_login || null, accessExpiresAt: row?.access_expires_at || null, refreshExpiresAt: row?.refresh_expires_at || null } };
   }
   if (pathname === '/api/project-github/repositories' && method === 'GET') {
