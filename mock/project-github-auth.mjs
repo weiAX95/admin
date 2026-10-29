@@ -167,31 +167,50 @@ export async function assertGithubPrivateRepoAccess(client, ownerId, fullName, e
   return info;
 }
 
-async function listGithubRepositories(client, ownerId) {
-  const repositories = [];
-  let truncated = false;
-  const installationsResponse = await githubUserFetch(client, ownerId, 'https://api.github.com/user/installations?per_page=100');
-  if (!installationsResponse.ok) throw new Error('无法读取 GitHub App 安装列表');
-  const installations = await installationsResponse.json();
-  if (!Array.isArray(installations.installations)) throw new Error('GitHub App 安装列表无效');
-  if (installations.total_count > 100) truncated = true;
-  for (const installation of installations.installations) {
-    if (repositories.length >= 500) { truncated = true; break; }
-    if (!Number.isSafeInteger(installation.id)) continue;
-    for (let page = 1; page <= 5; page++) {
-      const response = await githubUserFetch(client, ownerId, `https://api.github.com/user/installations/${installation.id}/repositories?per_page=100&page=${page}`);
-      if (!response.ok) throw new Error('无法读取 GitHub App 已选仓库');
-      const data = await response.json();
-      if (!Array.isArray(data.repositories)) throw new Error('GitHub App 仓库列表无效');
-      for (const repo of data.repositories) {
-        if (typeof repo.full_name === 'string' && typeof repo.private === 'boolean') repositories.push({ fullName: repo.full_name, private: repo.private, defaultBranch: repo.default_branch || null });
-      }
-      if (repositories.length >= 500) { truncated = true; break; }
-      if (data.repositories.length < 100) break;
-      if (page === 5) truncated = true;
+function repositoryCursor(value) {
+  if (!value) return { installationPage: 1, installationIndex: 0, repositoryPage: 1 };
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(value)) throw new Error('仓库分页位置无效');
+  let cursor;
+  try { cursor = JSON.parse(Buffer.from(value,'base64url').toString('utf8')); }
+  catch { throw new Error('仓库分页位置无效'); }
+  if (![cursor?.installationPage,cursor?.installationIndex,cursor?.repositoryPage].every(Number.isSafeInteger)
+    || cursor.installationPage < 1 || cursor.installationPage > 1000 || cursor.installationIndex < 0 || cursor.installationIndex > 99
+    || cursor.repositoryPage < 1 || cursor.repositoryPage > 1000) throw new Error('仓库分页位置无效');
+  return cursor;
+}
+
+const encodeRepositoryCursor = cursor => Buffer.from(JSON.stringify(cursor)).toString('base64url');
+
+async function listGithubRepositories(client, ownerId, cursorValue) {
+  let { installationPage, installationIndex, repositoryPage } = repositoryCursor(cursorValue);
+  // Bound empty installations per request so one page cannot exhaust the upstream budget.
+  for (let visited = 0; visited < 10 && installationPage <= 1000; visited++) {
+    const installationsResponse = await githubUserFetch(client, ownerId, `https://api.github.com/user/installations?per_page=100&page=${installationPage}`);
+    if (!installationsResponse.ok) throw new Error('无法读取 GitHub App 安装列表');
+    const installations = await installationsResponse.json();
+    if (!Array.isArray(installations.installations)) throw new Error('GitHub App 安装列表无效');
+    if (installationIndex >= installations.installations.length) {
+      if (installationPage * 100 >= Number(installations.total_count || 0) || installations.installations.length < 100) return { items: [], nextCursor: null };
+      installationPage++; installationIndex = 0; repositoryPage = 1;
+      continue;
     }
+    const installation = installations.installations[installationIndex];
+    if (!Number.isSafeInteger(installation.id)) { installationIndex++; repositoryPage = 1; continue; }
+    const response = await githubUserFetch(client, ownerId, `https://api.github.com/user/installations/${installation.id}/repositories?per_page=100&page=${repositoryPage}`);
+    if (!response.ok) throw new Error('无法读取 GitHub App 已选仓库');
+    const data = await response.json();
+    if (!Array.isArray(data.repositories)) throw new Error('GitHub App 仓库列表无效');
+    const items = data.repositories.filter(repo => typeof repo.full_name === 'string' && typeof repo.private === 'boolean')
+      .map(repo => ({ fullName: repo.full_name, private: repo.private, defaultBranch: repo.default_branch || null }));
+    const moreInInstallation = data.repositories.length === 100 && repositoryPage * 100 < Number(data.total_count || Infinity);
+    const next = moreInInstallation ? { installationPage, installationIndex, repositoryPage: repositoryPage + 1 }
+      : installationIndex < installations.installations.length - 1 ? { installationPage, installationIndex: installationIndex + 1, repositoryPage: 1 }
+        : installationPage * 100 < Number(installations.total_count || 0) ? { installationPage: installationPage + 1, installationIndex: 0, repositoryPage: 1 } : null;
+    if (items.length) return { items, nextCursor: next ? encodeRepositoryCursor(next) : null };
+    if (!next) return { items: [], nextCursor: null };
+    ({ installationPage, installationIndex, repositoryPage } = next);
   }
-  return { items: repositories, truncated };
+  return { items: [], nextCursor: encodeRepositoryCursor({ installationPage, installationIndex, repositoryPage }) };
 }
 
 async function exchangeCode(code) {
@@ -250,8 +269,8 @@ export async function handleProjectGithubAuth({ pathname, method, client, me, re
     return { status: 200, data: { ...githubAppConfiguration(), connected: Boolean(row), githubLogin: row?.github_login || null, accessExpiresAt: row?.access_expires_at || null, refreshExpiresAt: row?.refresh_expires_at || null } };
   }
   if (pathname === '/api/project-github/repositories' && method === 'GET') {
-    try { return { status: 200, data: await listGithubRepositories(client, me.id) }; }
-    catch (error) { return fail(error instanceof GithubAuthorizationError ? 409 : 502, error instanceof GithubAuthorizationError ? error.message : 'GitHub 仓库列表暂不可用'); }
+    try { return { status: 200, data: await listGithubRepositories(client, me.id, new URL(req.url,'http://localhost').searchParams.get('cursor')) }; }
+    catch (error) { return fail(error instanceof GithubAuthorizationError ? 409 : error.message === '仓库分页位置无效' ? 400 : 502, error instanceof GithubAuthorizationError || error.message === '仓库分页位置无效' ? error.message : 'GitHub 仓库列表暂不可用'); }
   }
   if (pathname === '/api/project-github/start' && method === 'POST') {
     if (!configured()) return fail(503, 'GitHub App 尚未配置');

@@ -48,7 +48,7 @@ export default function ProjectAnalysis() {
   const [githubBusy, setGithubBusy] = useState(false);
   const [githubRepositories, setGithubRepositories] = useState<GithubAvailableRepository[]>([]);
   const [githubRepositoriesLoading, setGithubRepositoriesLoading] = useState(false);
-  const [githubRepositoriesTruncated, setGithubRepositoriesTruncated] = useState(false);
+  const [githubRepositoriesCursor, setGithubRepositoriesCursor] = useState<string | null>(null);
   const [selectedGithubRepository, setSelectedGithubRepository] = useState<string>();
 
   const loadGithubConnection = async () => {
@@ -69,16 +69,16 @@ export default function ProjectAnalysis() {
   };
   const disconnectGithub = async () => {
     setGithubBusy(true);
-    try { await disconnectProjectGithub(); setGithubRepositories([]); await loadGithubConnection(); message.success('GitHub 账号已断开'); }
+    try { await disconnectProjectGithub(); setGithubRepositories([]); setGithubRepositoriesCursor(null); await loadGithubConnection(); message.success('GitHub 账号已断开'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : '断开 GitHub 授权失败'); }
     finally { setGithubBusy(false); }
   };
-  const loadGithubRepositories = async () => {
+  const loadGithubRepositories = async (more = false) => {
     setGithubRepositoriesLoading(true);
     try {
-      const result = await listGithubAvailableRepositories();
-      setGithubRepositories(result.items);
-      setGithubRepositoriesTruncated(result.truncated);
+      const result = await listGithubAvailableRepositories(more ? githubRepositoriesCursor || undefined : undefined);
+      setGithubRepositories(current => more ? [...current, ...result.items.filter(item => !current.some(existing => existing.fullName === item.fullName))] : result.items);
+      setGithubRepositoriesCursor(result.nextCursor);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'GitHub 已授权仓库读取失败'); }
     finally { setGithubRepositoriesLoading(false); }
   };
@@ -235,7 +235,7 @@ export default function ProjectAnalysis() {
         {githubConnection?.connected && <>
           <Button loading={githubRepositoriesLoading} onClick={() => void loadGithubRepositories()}>查看已授权仓库</Button>
           {githubRepositories.length > 0 && <Space wrap><Select aria-label="选择 GitHub App 已授权仓库" showSearch optionFilterProp="label" value={selectedGithubRepository} onChange={setSelectedGithubRepository} style={{ minWidth: 320 }} options={githubRepositories.map(repo => ({ value: repo.fullName, label: `${repo.fullName} · ${repo.private ? '私有' : '公开'}` }))} /><Button disabled={!selectedGithubRepository} onClick={() => { const repo = githubRepositories.find(item => item.fullName === selectedGithubRepository); if (repo) form.setFieldsValue({ url: `https://github.com/${repo.fullName}`, branch: repo.defaultBranch || undefined, useGithubApp: repo.private }); }}>填入接入表单</Button></Space>}
-          {githubRepositoriesTruncated && <Typography.Text type="warning">授权仓库较多，当前仅展示前 500 个；后续提供分页选择。</Typography.Text>}
+          {githubRepositoriesCursor && <Button loading={githubRepositoriesLoading} onClick={() => void loadGithubRepositories(true)}>加载更多授权仓库</Button>}
         </>}
       </Space>
     </Card>

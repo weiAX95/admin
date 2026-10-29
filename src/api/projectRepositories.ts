@@ -30,7 +30,7 @@ export const getProjectGithubConnection = () => http.get<ProjectGithubConnection
 export const startProjectGithubConnection = () => http.post<{ url: string }>('/project-github/start', {});
 export const disconnectProjectGithub = () => http.del<{ connected: false }>('/project-github');
 export interface GithubAvailableRepository { fullName: string; private: boolean; defaultBranch: string | null }
-export const listGithubAvailableRepositories = () => http.get<{ items: GithubAvailableRepository[]; truncated: boolean }>('/project-github/repositories');
+export const listGithubAvailableRepositories = (cursor?: string) => http.get<{ items: GithubAvailableRepository[]; nextCursor: string | null }>(`/project-github/repositories${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
 export const createProjectRepository = (body: { url: string; branch?: string; goal: string; requirementBaseline?: string; useGithubApp?: boolean }) => http.post<ProjectRepository>('/project-repositories', body);
 export const updateProjectRepository = (item: ProjectRepository, body: { goal: string; requirementBaseline: string }) => http.patch<ProjectRepository>(`/project-repositories/${item.id}`, {
   ...body, expectedGoal: item.goal, expectedRequirementBaseline: item.requirementBaseline, expectedBaselineVersionId: item.baselineVersionId,
