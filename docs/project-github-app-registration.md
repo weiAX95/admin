@@ -1,10 +1,10 @@
 # GitHub App 接入准备
 
-本页记录 14.7 和 14.11 真实联调需要的外部配置。代码已提供授权、私有仓库读取和 Webhook 接收；**App 尚未安装，凭据与真实交付验收未完成，14.7／14.11 仍保持未完成**。
+本页记录 14.7 和 14.11 真实联调需要的外部配置。代码已提供授权、私有仓库读取和 Webhook 接收；**App 已安装到一个指定仓库，但管理端账号授权、私有仓库和真实 Webhook 交付尚未验收，14.7／14.11 仍保持未完成**。
 
 ## 注册 GitHub App
 
-2026-10-29 已在 `weiAX95` 账号注册 `Agent Admin Project Analysis`（App ID `5521573`，Client ID `Iv23li95mK2Vlb5gAY9W`）。安装范围限该账号，Contents 与 GitHub 必需的 Metadata 均为只读；用户回调为 `http://localhost:5176/api/project-github/callback`，令牌过期功能开启。当前没有公网 HTTPS 接收地址，Webhook 保持关闭。GitHub 凭据页目前尚无 Client Secret 或私钥；这两项生成和保存，以及安装时选择仓库，仍需完成。公开 Client ID 和回调已写入本机忽略提交的 `.env.local`，任何密钥都不应写入本文档。
+2026-10-29 已在 `weiAX95` 账号注册 `Agent Admin Project Analysis`（App ID `5521573`，Client ID `Iv23li95mK2Vlb5gAY9W`）。安装范围限该账号，Contents 与 GitHub 必需的 Metadata 均为只读；用户回调为 `http://localhost:5176/api/project-github/callback`，令牌过期功能开启。安装 ID 为 `176429406`，仅选择 `weiAX95/admin`，没有授予所有仓库权限。Client Secret、公开 Client ID、回调和本地加密主密钥已配置在本机被 Git 忽略的 `.env.local`；本项目当前只使用 GitHub App 用户令牌，不使用 App 私钥。当前没有公网 HTTPS 接收地址，Webhook 保持关闭。任何密钥都不应写入本文档。
 
 在 GitHub 的 Developer settings 创建 GitHub App。仓库权限只申请 **Contents: Read**；GitHub 会同时赋予必需的 **Metadata: Read**。不要申请仓库写权限。启用会过期的用户访问令牌，并在安装时选择需要接入的仓库。用户授权回调设置为本系统同源的 `/api/project-github/callback`；本地可使用 `http://localhost:5176/api/project-github/callback`，正式环境使用 HTTPS 域名。当前尚无公网 HTTPS 接收地址时，先关闭 **Webhook Active**；部署好接收地址后再填入正式环境的 `https://<域名>/api/project-github/webhook`、配置独立 Webhook secret、订阅 **Push** 事件并开启 Webhook，不能使用仅本机可访问的 localhost 地址。
 
