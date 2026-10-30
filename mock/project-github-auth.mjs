@@ -91,6 +91,7 @@ export async function getGithubUserToken(client, ownerId) {
     try {
       response = await fetch('https://github.com/login/oauth/access_token', {
         method: 'POST',
+        redirect: 'manual',
         headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({ client_id: process.env.GITHUB_APP_CLIENT_ID, client_secret: process.env.GITHUB_APP_CLIENT_SECRET, grant_type: 'refresh_token', refresh_token: openGithubSecret(row, 'refresh') }),
         signal: AbortSignal.timeout(10000),
@@ -134,6 +135,7 @@ export async function githubUserFetch(client, ownerId, url) {
     const current = await connection.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 AND access_tag=$2 FOR SHARE', [ownerId,accessTag]);
     if (!current.rowCount) throw new GithubAuthorizationError('GitHub 授权已变化，请重试');
     const upstream = await fetch(target, {
+      redirect: 'manual',
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' },
       signal: AbortSignal.timeout(10000),
     });
@@ -222,6 +224,7 @@ async function exchangeCode(code) {
   try {
     response = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
+      redirect: 'manual',
       headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ client_id: process.env.GITHUB_APP_CLIENT_ID, client_secret: process.env.GITHUB_APP_CLIENT_SECRET, redirect_uri: process.env.GITHUB_APP_CALLBACK_URL, code }),
       signal: AbortSignal.timeout(10000),
@@ -246,6 +249,7 @@ export async function completeProjectGithubAuthorization(client, params, browser
   let identityResponse;
   try {
     identityResponse = await fetch('https://api.github.com/user', {
+      redirect: 'manual',
       headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' },
       signal: AbortSignal.timeout(10000),
     });
