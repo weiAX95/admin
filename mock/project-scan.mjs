@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { GithubAuthorizationError, githubPublicFetch } from './project-github-auth.mjs';
+import { isProjectDeploymentConfigPath } from './project-deployment-config.mjs';
 
 const SHA = /^[a-f\d]{40}$/i;
 const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'vendor', 'target', '.venv', '__pycache__']);
@@ -11,6 +12,7 @@ export const isSensitiveProjectPath = path => SENSITIVE_NAMES.test(path) || cont
 const gitBlobSha = bytes => crypto.createHash('sha1').update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex');
 
 function classification(path) {
+  if (isProjectDeploymentConfigPath(path)) return 'config';
   if (/(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|\.)|\.(?:test|spec)\./i.test(path)) return 'test';
   if (/(?:^|\/)(?:README|CHANGELOG|CONTRIBUTING)(?:\.|$)|\.(?:md|mdx|rst)$/i.test(path)) return 'documentation';
   if (/(?:^|\/)(?:package\.json|requirements\.txt|go\.mod|pyproject\.toml|Cargo\.toml|Dockerfile|vite\.config\.[^/]+)$|\.prisma$/i.test(path)) return 'config';
@@ -143,9 +145,9 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
   const changes = [...priorityPaths].map(path => ({ kind: previous.has(path) ? 'modified' : 'added', path }));
   if (!unscannedSubtrees) for (const path of previous.keys()) if (!treePaths.has(path)) changes.push({ kind: 'deleted', path });
   let relatedPaths = new Set();
-  // New SQL migrations can affect existing computed queries even though the
-  // migration itself was absent from the previous scan's dependency graph.
-  const knownChanges = changes.filter(change => change.kind !== 'added' || /\.(?:sql|py)$/i.test(change.path));
+  // New SQL, Python and deployment files may affect old modules even though
+  // they were absent from the previous scan's dependency graph.
+  const knownChanges = changes.filter(change => change.kind !== 'added' || /\.(?:sql|py)$/i.test(change.path) || isProjectDeploymentConfigPath(change.path));
   if (knownChanges.length && typeof relatedPathsForChanges === 'function') {
     try { relatedPaths = new Set((relatedPathsForChanges(knownChanges) || []).filter(path => !priorityPaths.has(path))); }
     catch { /* A stale or unsupported dependency graph must not prevent the scan. */ }

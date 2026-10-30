@@ -2,6 +2,7 @@ import path from 'node:path';
 import { projectModuleKey, selectProjectEvidence } from './project-analysis-core.mjs';
 import { dynamicApiFiles, projectApiDependencyEdges } from './project-analysis-api-impact.mjs';
 import { changedSqlNeedsBroadReview, dynamicSqlFiles, projectSqlDependencyEdges } from './project-analysis-sql-impact.mjs';
+import { isProjectDeploymentConfigPath } from './project-deployment-config.mjs';
 
 const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
 const relativeImport = /\b(?:from\s*|import\s*\(|require\s*\()\s*['"](\.{1,2}\/[^'"\n]+)['"]/g;
@@ -715,3 +716,11 @@ export const selectProjectImpactEvidenceV19 = (files, changes) => selectImpactEv
 export const projectImpactPriorityPathsV19 = (files, changes) => selectProjectImpactEvidenceV19(files,changes).priorityPaths;
 export const selectProjectImpactEvidenceV20 = (files, changes) => selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true,true,true,true,true);
 export const projectImpactPriorityPathsV20 = (files, changes) => selectProjectImpactEvidenceV20(files,changes).priorityPaths;
+export function selectProjectImpactEvidenceV21(files, changes) {
+  const result = selectProjectImpactEvidenceV20(files,changes);
+  if (changes.some(change => isProjectDeploymentConfigPath(change.path) || isProjectDeploymentConfigPath(change.oldPath))) {
+    for (const file of files) result.impactedModules.add(projectModuleKey(file.path));
+  }
+  return result;
+}
+export const projectImpactPriorityPathsV21 = (files, changes) => selectProjectImpactEvidenceV21(files,changes).priorityPaths;
