@@ -612,17 +612,6 @@ async function handleRequest(req, res) {
 
   if (method === "OPTIONS") return send(res, 204, {});
 
-  if (pathname === '/api/project-github/callback' && method === 'GET') {
-    let connected = false;
-    const nonceCookies = String(req.headers.cookie || '').split(';').map(item => item.trim()).filter(item => item.startsWith('project_github_oauth_nonce='));
-    const browserNonce = nonceCookies.length === 1 ? nonceCookies[0].slice('project_github_oauth_nonce='.length) : null;
-    try { connected = await completeProjectGithubAuthorization(activeClient, url.searchParams, browserNonce); }
-    catch (error) { console.error('[project-github] authorization callback failed:', error instanceof GithubOAuthFailure ? error.stage : 'database_or_internal'); }
-    const secureCookie = process.env.GITHUB_APP_CALLBACK_URL?.startsWith('https:') ? '; Secure' : '';
-    res.__redirect = { status: 302, headers: { Location: `/project-analysis?github=${connected ? 'connected' : 'failed'}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Set-Cookie': `project_github_oauth_nonce=; Max-Age=0; HttpOnly; SameSite=Lax; Path=/api/project-github/callback${secureCookie}` } };
-    return;
-  }
-
   try {
     const publicShare = await handlePublicExperimentShare({ pathname, method, client: activeClient });
     if (publicShare) return send(res, publicShare.status, publicShare.data);
@@ -2242,6 +2231,20 @@ async function withData(work) {
 }
 
 function routeHttpRequest(req, res, pathname, method) {
+  if (pathname === '/api/project-github/callback' && method === 'GET') {
+    void (async () => {
+      const params = new URL(req.url, 'http://localhost').searchParams;
+      const nonceCookies = String(req.headers.cookie || '').split(';').map(item => item.trim()).filter(item => item.startsWith('project_github_oauth_nonce='));
+      const browserNonce = nonceCookies.length === 1 ? nonceCookies[0].slice('project_github_oauth_nonce='.length) : null;
+      let connected = false;
+      try { connected = await completeProjectGithubAuthorization(pool, params, browserNonce); }
+      catch (error) { console.error('[project-github] authorization callback failed:', error instanceof GithubOAuthFailure ? error.stage : 'database_or_internal'); }
+      const secureCookie = process.env.GITHUB_APP_CALLBACK_URL?.startsWith('https:') ? '; Secure' : '';
+      res.writeHead(302, { Location: `/project-analysis?github=${connected ? 'connected' : 'failed'}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Set-Cookie': `project_github_oauth_nonce=; Max-Age=0; HttpOnly; SameSite=Lax; Path=/api/project-github/callback${secureCookie}` });
+      res.end();
+    })().catch(() => { if (!res.headersSent) sendImmediate(res, 500, { error: 'GitHub 授权服务不可用' }); });
+    return;
+  }
   if (new URL(req.url, 'http://localhost').pathname === '/api/client-errors') {
     if (req.method === 'OPTIONS') return sendImmediate(res, 204, {});
     void (async () => {
