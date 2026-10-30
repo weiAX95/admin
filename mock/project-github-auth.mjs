@@ -47,6 +47,10 @@ export class GithubAuthorizationError extends Error {
   constructor(message) { super(message); this.name = 'GithubAuthorizationError'; }
 }
 
+export class GithubOAuthFailure extends Error {
+  constructor(stage) { super('GitHub OAuth 授权未完成'); this.name = 'GithubOAuthFailure'; this.stage = stage; }
+}
+
 async function stopPrivateGithubAutomation(client, ownerId) {
   await client.query('UPDATE project_repositories SET webhook_scan_enabled=false,auto_analysis_enabled=false,updated_at=now() WHERE owner_id=$1 AND is_private=true AND (webhook_scan_enabled=true OR auto_analysis_enabled=true)', [ownerId]);
   await client.query(`UPDATE project_scans s SET auto_analysis_state='skipped',auto_analysis_error='GitHub 授权已断开'
@@ -214,15 +218,21 @@ async function listGithubRepositories(client, ownerId, cursorValue) {
 }
 
 async function exchangeCode(code) {
-  const response = await fetch('https://github.com/login/oauth/access_token', {
-    method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ client_id: process.env.GITHUB_APP_CLIENT_ID, client_secret: process.env.GITHUB_APP_CLIENT_SECRET, redirect_uri: process.env.GITHUB_APP_CALLBACK_URL, code }),
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!response.ok) throw new Error('GitHub 授权交换失败');
-  const data = await response.json();
-  if (data.error || typeof data.access_token !== 'string' || !data.access_token || typeof data.refresh_token !== 'string' || !data.refresh_token || !Number.isFinite(Number(data.expires_in)) || Number(data.expires_in) <= 0 || !Number.isFinite(Number(data.refresh_token_expires_in)) || Number(data.refresh_token_expires_in) <= 0) throw new Error('GitHub App 必须启用会过期的用户令牌');
+  let response;
+  try {
+    response = await fetch('https://github.com/login/oauth/access_token', {
+      method: 'POST',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ client_id: process.env.GITHUB_APP_CLIENT_ID, client_secret: process.env.GITHUB_APP_CLIENT_SECRET, redirect_uri: process.env.GITHUB_APP_CALLBACK_URL, code }),
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch { throw new GithubOAuthFailure('token_network'); }
+  if (!response.ok) throw new GithubOAuthFailure(`token_http_${response.status}`);
+  let data;
+  try { data = await response.json(); }
+  catch { throw new GithubOAuthFailure('token_response_json'); }
+  if (data.error) throw new GithubOAuthFailure(`token_${/^[a-z_]{1,40}$/.test(data.error) ? data.error : 'rejected'}`);
+  if (typeof data.access_token !== 'string' || !data.access_token || typeof data.refresh_token !== 'string' || !data.refresh_token || !Number.isFinite(Number(data.expires_in)) || Number(data.expires_in) <= 0 || !Number.isFinite(Number(data.refresh_token_expires_in)) || Number(data.refresh_token_expires_in) <= 0) throw new GithubOAuthFailure('token_missing_expiring_credentials');
   return data;
 }
 
@@ -233,13 +243,18 @@ export async function completeProjectGithubAuthorization(client, params, browser
   const claim = (await client.query('SELECT owner_id FROM project_github_oauth_states WHERE state_hash=$1 AND browser_nonce_hash=$2 AND expires_at>now()', [hash(state),hash(browserNonce)])).rows[0];
   if (!claim) return false;
   const tokens = await exchangeCode(code);
-  const identityResponse = await fetch('https://api.github.com/user', {
-    headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' },
-    signal: AbortSignal.timeout(10000),
-  });
-  if (!identityResponse.ok) throw new Error('无法验证 GitHub 授权账号');
-  const identity = await identityResponse.json();
-  if (!Number.isSafeInteger(identity.id) || typeof identity.login !== 'string' || !identity.login) throw new Error('GitHub 账号信息无效');
+  let identityResponse;
+  try {
+    identityResponse = await fetch('https://api.github.com/user', {
+      headers: { Authorization: `Bearer ${tokens.access_token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch { throw new GithubOAuthFailure('identity_network'); }
+  if (!identityResponse.ok) throw new GithubOAuthFailure(`identity_http_${identityResponse.status}`);
+  let identity;
+  try { identity = await identityResponse.json(); }
+  catch { throw new GithubOAuthFailure('identity_response_json'); }
+  if (!Number.isSafeInteger(identity.id) || typeof identity.login !== 'string' || !identity.login) throw new GithubOAuthFailure('identity_invalid');
   const version = keyVersion();
   const access = seal(tokens.access_token, claim.owner_id, 'access', version);
   const refresh = seal(tokens.refresh_token, claim.owner_id, 'refresh', version);

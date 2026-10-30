@@ -77,7 +77,7 @@ import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
-import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, handleProjectGithubAuth, reconcileDisconnectedGithubAutomation } from './project-github-auth.mjs';
+import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, GithubOAuthFailure, handleProjectGithubAuth, reconcileDisconnectedGithubAutomation } from './project-github-auth.mjs';
 import { handleProjectGithubWebhook, processProjectGithubDeliveries } from './project-github-webhooks.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
@@ -617,7 +617,7 @@ async function handleRequest(req, res) {
     const nonceCookies = String(req.headers.cookie || '').split(';').map(item => item.trim()).filter(item => item.startsWith('project_github_oauth_nonce='));
     const browserNonce = nonceCookies.length === 1 ? nonceCookies[0].slice('project_github_oauth_nonce='.length) : null;
     try { connected = await completeProjectGithubAuthorization(activeClient, url.searchParams, browserNonce); }
-    catch { console.error('[project-github] authorization callback failed'); }
+    catch (error) { console.error('[project-github] authorization callback failed:', error instanceof GithubOAuthFailure ? error.stage : 'database_or_internal'); }
     const secureCookie = process.env.GITHUB_APP_CALLBACK_URL?.startsWith('https:') ? '; Secure' : '';
     res.__redirect = { status: 302, headers: { Location: `/project-analysis?github=${connected ? 'connected' : 'failed'}`, 'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'Set-Cookie': `project_github_oauth_nonce=; Max-Age=0; HttpOnly; SameSite=Lax; Path=/api/project-github/callback${secureCookie}` } };
     return;
