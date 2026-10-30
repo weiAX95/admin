@@ -1130,6 +1130,7 @@
 #### 第三阶段：持续指导，形成学习反馈
 
 - [ ] **14.11 提交后触发分析**
+  - [x] 已准备[真实交付联调方案](docs/project-github-webhook-live-check.md)：仅开放专用 HTTPS Webhook 路径，经回环 SSH 隧道送达本机 API；尚未启用或验收
   - [x] 账号连接状态另返回 Webhook 密钥是否已配置；页面在缺失时禁用开启提交后扫描并说明原因，关闭已有开关仍可操作，服务端保留独立校验
   - [x] 进展通知只与同项目、分支、需求版本和目标的最近一份已完成报告比较；最近报告不可比时抑制通知，不跳回更旧报告制造过时进展线索，见[报告对照](docs/project-report-comparison.md)
   - [x] GitHub App 入站 Webhook 以原始字节验签、交付 ID 去重；用户可按仓库／分支开启提交后扫描，合格 push 持久入队后由后台核对当前分支并更新 commit、排队扫描，见[GitHub App 授权边界](docs/project-github-app.md)
