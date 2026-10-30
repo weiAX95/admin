@@ -6,6 +6,8 @@
 
 2026-10-29 已在 `weiAX95` 账号注册 `Agent Admin Project Analysis`（App ID `5521573`，Client ID `Iv23li95mK2Vlb5gAY9W`）。安装范围限该账号，Contents 与 GitHub 必需的 Metadata 均为只读；用户回调为 `http://localhost:5176/api/project-github/callback`，令牌过期功能开启。安装 ID 为 `176429406`。2026-10-30 已保存并重新读取安装设置，确认使用“Only select repositories”，唯一选中 `weiAX95/admin`，权限为代码与元数据只读。Client Secret、公开 Client ID、回调和本地加密主密钥已配置在本机被 Git 忽略的 `.env.local`；本项目当前只使用 GitHub App 用户令牌，不使用 App 私钥。当前没有公网 HTTPS 接收地址，Webhook 保持关闭。任何密钥都不应写入本文档。
 
+2026-10-30 本地管理端账号已完成 GitHub App 用户 OAuth，数据库中该账号的连接含有效访问与刷新期限，连接页面显示 `weiAX95`。通过页面调用已授权仓库接口时，列表只返回 `weiAX95/admin`（公开仓库）。这验证了当前本地授权和仓库清单的实际读取路径；私有仓库、授权撤销及真实 Webhook 交付尚未联调。
+
 在 GitHub 的 Developer settings 创建 GitHub App。仓库权限只申请 **Contents: Read**；GitHub 会同时赋予必需的 **Metadata: Read**。不要申请仓库写权限。启用会过期的用户访问令牌，并在安装时选择需要接入的仓库。用户授权回调设置为本系统同源的 `/api/project-github/callback`；本地可使用 `http://localhost:5176/api/project-github/callback`，正式环境使用 HTTPS 域名。当前尚无公网 HTTPS 接收地址时，先关闭 **Webhook Active**；部署好接收地址后再填入正式环境的 `https://<域名>/api/project-github/webhook`、配置独立 Webhook secret、订阅 **Push** 事件并开启 Webhook，不能使用仅本机可访问的 localhost 地址。
 
 将 `GITHUB_APP_CLIENT_ID`、`GITHUB_APP_CLIENT_SECRET`、`GITHUB_APP_CALLBACK_URL`、`GITHUB_APP_MASTER_KEY` 配置在 API 服务环境中；启用 Webhook 时再配置 `GITHUB_APP_WEBHOOK_SECRET`。主密钥须是独立生成的 64 位十六进制值；Webhook secret 与主密钥分开。不要将密钥放入仓库、聊天消息或前端构建变量。服务重启后，项目分析页会显示缺失的授权配置项；提交后扫描的开关会单独检查 Webhook secret。
