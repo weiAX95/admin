@@ -1055,7 +1055,7 @@
   - [x] App 已安装到 `weiAX95` 账号，安装 ID 为 `176429406`，权限为代码和元数据只读；本机 Client Secret 已配置
   - [x] 重新读取 GitHub 安装设置确认仅选中 `weiAX95/admin`，没有授予所有仓库权限
   - [x] 本地管理端账号已通过 GitHub App OAuth 连接 `weiAX95`；数据库保存有效的加密访问／刷新令牌，授权仓库列表实际返回唯一的 `weiAX95/admin`
-  - [x] 所有携带 GitHub 令牌或 Client Secret 的服务端请求拒绝自动 HTTP 重定向，防止凭据请求离开预期地址
+  - [x] 带凭据的授权码／续期请求拒绝自动重定向；仓库 API 仅手动跟随限次同站跳转，拒绝跨域并继续核对不可变仓库 ID
   - [ ] 私有仓库授权与失权联调仍待选定私有仓库；当前安装只包含公开的 `weiAX95/admin`
   - [x] 已在 `weiAX95` 注册仅该账号可安装的只读 GitHub App；Client ID 与本地回调写入本机配置，见[接入准备](docs/project-github-app-registration.md)
   - [x] 连接状态不再把刷新令牌已过期的记录显示为已连接，避免页面继续提供失效仓库入口

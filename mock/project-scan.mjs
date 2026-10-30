@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { GithubAuthorizationError } from './project-github-auth.mjs';
+import { GithubAuthorizationError, githubPublicFetch } from './project-github-auth.mjs';
 
 const SHA = /^[a-f\d]{40}$/i;
 const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'vendor', 'target', '.venv', '__pycache__']);
@@ -74,9 +74,7 @@ function balancedIndexOrder(entries, maxFileBytes, priorityPaths = new Set(), re
   return changed.concat(related,ordered.filter(entry => !selected.has(entry.path)),excluded.sort((a,b) => String(a.path || '').localeCompare(String(b.path || ''))));
 }
 
-async function githubFetch(url) {
-  return fetch(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(10000) });
-}
+const githubFetch = githubPublicFetch;
 
 async function getJson(fetchGithub, url) {
   const response = await fetchGithub(url);

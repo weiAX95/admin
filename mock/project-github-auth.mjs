@@ -123,9 +123,34 @@ export async function getGithubUserToken(client, ownerId) {
   } finally { if (pooled) connection.release(); }
 }
 
-export async function githubUserFetch(client, ownerId, url) {
+function githubApiTarget(url) {
   const target = new URL(url);
   if (target.origin !== 'https://api.github.com' || target.username || target.password || target.hash) throw new Error('GitHub API 地址无效');
+  return target;
+}
+
+async function fetchGithubApi(url, token) {
+  let target = githubApiTarget(url);
+  const signal = AbortSignal.timeout(10000);
+  for (let redirects = 0; redirects <= 3; redirects++) {
+    const response = await fetch(target, {
+      redirect: 'manual',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' },
+      signal,
+    });
+    if (![301,302,303,307,308].includes(response.status)) return response;
+    const location = response.headers.get('location');
+    await response.body?.cancel();
+    if (!location || redirects === 3) throw new Error('GitHub API 重定向次数超限或缺少目标');
+    target = githubApiTarget(new URL(location,target));
+  }
+  throw new Error('GitHub API 重定向次数超限');
+}
+
+export const githubPublicFetch = url => fetchGithubApi(url,null);
+
+export async function githubUserFetch(client, ownerId, url) {
+  githubApiTarget(url);
   const { token, accessTag } = await getGithubUserToken(client, ownerId);
   const pooled = client instanceof pg.Pool;
   const connection = pooled ? await client.connect() : client;
@@ -134,11 +159,7 @@ export async function githubUserFetch(client, ownerId, url) {
     await connection.query('BEGIN');
     const current = await connection.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 AND access_tag=$2 FOR SHARE', [ownerId,accessTag]);
     if (!current.rowCount) throw new GithubAuthorizationError('GitHub 授权已变化，请重试');
-    const upstream = await fetch(target, {
-      redirect: 'manual',
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' },
-      signal: AbortSignal.timeout(10000),
-    });
+    const upstream = await fetchGithubApi(url,token);
     const chunks = [];
     let size = 0;
     if (upstream.body) for await (const chunk of upstream.body) {

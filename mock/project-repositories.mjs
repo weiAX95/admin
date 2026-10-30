@@ -5,7 +5,7 @@ import { parseProjectRequirements } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
-import { assertGithubPrivateRepoAccess, githubUserFetch, GithubAuthorizationError } from './project-github-auth.mjs';
+import { assertGithubPrivateRepoAccess, githubPublicFetch, githubUserFetch, GithubAuthorizationError } from './project-github-auth.mjs';
 import { modelUsable, supportedProvider } from './model-governance.mjs';
 import { modelConnectionAvailable } from './model-connections.mjs';
 
@@ -68,9 +68,7 @@ async function auditedWrite(client, req, me, action, targetId, work) {
   finally { if (pooled) connection.release(); }
 }
 
-async function githubFetch(url) {
-  return fetch(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(10000) });
-}
+const githubFetch = githubPublicFetch;
 
 async function readGithub(fetchGithub, url) {
   let response;

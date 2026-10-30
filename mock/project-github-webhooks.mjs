@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import pg from 'pg';
-import { assertGithubPrivateRepoAccess, GithubAuthorizationError, githubUserFetch } from './project-github-auth.mjs';
+import { assertGithubPrivateRepoAccess, GithubAuthorizationError, githubPublicFetch, githubUserFetch } from './project-github-auth.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA = /^[0-9a-f]{40}$/i;
@@ -33,7 +33,7 @@ async function currentBranchHead(pool, repository) {
   const info = repository.is_private
     ? await assertGithubPrivateRepoAccess(pool,repository.owner_id,repository.full_name,repository.github_repository_id)
     : await (async () => {
-      const response = await fetch(base,{ headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(10000) });
+      const response = await githubPublicFetch(base);
       if (!response.ok) throw new Error(`GITHUB_HEAD_${response.status}`);
       return response.json();
     })();
@@ -42,7 +42,7 @@ async function currentBranchHead(pool, repository) {
   const url = `https://api.github.com/repos/${canonicalName}/branches/${encodeURIComponent(repository.branch)}`;
   const response = repository.is_private
     ? await githubUserFetch(pool,repository.owner_id,url)
-    : await fetch(url,{ headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'agent-admin-project-analysis', 'X-GitHub-Api-Version': '2022-11-28' }, signal: AbortSignal.timeout(10000) });
+    : await githubPublicFetch(url);
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`GITHUB_HEAD_${response.status}`);
   const sha = (await response.json())?.commit?.sha;
