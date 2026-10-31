@@ -21,7 +21,7 @@ export function parseGitHubRepository(value) {
 
 const validBranch = value => typeof value === 'string' && value.length >= 1 && value.length <= 200 && /^[\w./-]+$/.test(value) && !value.startsWith('/') && !value.endsWith('/') && !value.includes('..') && !value.includes('//');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const publicRow = row => ({ id: row.id, ownerId: row.owner_id, fullName: row.full_name, url: `https://github.com/${row.full_name}`, private: row.is_private === true, githubRepositoryId: row.github_repository_id === null ? null : Number(row.github_repository_id), webhookScanEnabled: row.webhook_scan_enabled === true, autoAnalysisEnabled: row.auto_analysis_enabled === true, autoAnalysisModelId: row.auto_analysis_model_id || null, autoAnalysisTokenBudget: row.auto_analysis_token_budget, autoAnalysisCostBudgetUsd: row.auto_analysis_cost_budget_usd === null ? null : Number(row.auto_analysis_cost_budget_usd), branch: row.branch, goal: row.goal, requirementBaseline: row.requirement_baseline, baselineVersionId: row.baseline_version_id || null, commitSha: row.commit_sha.trim(), lastCheckedAt: row.last_checked_at, lastAnalysisAt: row.last_analysis_at || null, lastAnalyzedCommitSha: row.last_analyzed_commit_sha?.trim() || null, createdAt: row.created_at, updatedAt: row.updated_at });
+const publicRow = row => ({ id: row.id, ownerId: row.owner_id, fullName: row.full_name, url: `https://github.com/${row.full_name}`, private: row.is_private === true, githubRepositoryId: row.github_repository_id === null ? null : Number(row.github_repository_id), webhookScanEnabled: row.webhook_scan_enabled === true, autoAnalysisEnabled: row.auto_analysis_enabled === true, autoAnalysisModelId: row.auto_analysis_model_id || null, autoAnalysisTokenBudget: row.auto_analysis_token_budget, autoAnalysisCostBudgetUsd: row.auto_analysis_cost_budget_usd === null ? null : Number(row.auto_analysis_cost_budget_usd), branch: row.branch, goal: row.goal, externalContext: row.external_context, requirementBaseline: row.requirement_baseline, baselineVersionId: row.baseline_version_id || null, commitSha: row.commit_sha.trim(), lastCheckedAt: row.last_checked_at, lastAnalysisAt: row.last_analysis_at || null, lastAnalyzedCommitSha: row.last_analyzed_commit_sha?.trim() || null, createdAt: row.created_at, updatedAt: row.updated_at });
 const repositoryQuery = `SELECT r.*, latest.finished_at AS last_analysis_at, latest.commit_sha AS last_analyzed_commit_sha
   FROM project_repositories r LEFT JOIN LATERAL (
     SELECT finished_at, commit_sha FROM project_analyses
@@ -131,8 +131,9 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     let parsed;
     try { parsed = parseGitHubRepository(body?.url); } catch (error) { return fail(400, error.message); }
     const goal = typeof body.goal === 'string' ? body.goal.trim() : '';
+    const externalContext = body.externalContext === undefined ? '' : typeof body.externalContext === 'string' ? body.externalContext.trim() : null;
     const baseline = typeof body.requirementBaseline === 'string' ? body.requirementBaseline.trim() : '';
-    if (!goal || goal.length > 2000 || baseline.length > 200 || containsKnownSecret(goal) || containsKnownSecret(baseline) || (body.branch && !validBranch(body.branch))) return fail(400, '项目目标、需求基线或分支格式无效，且不得包含凭据');
+    if (!goal || goal.length > 2000 || externalContext === null || externalContext.length > 2000 || baseline.length > 200 || containsKnownSecret(goal) || containsKnownSecret(externalContext) || containsKnownSecret(baseline) || (body.branch && !validBranch(body.branch))) return fail(400, '项目目标、外部配置说明、需求基线或分支格式无效，且不得包含凭据');
     if (body.useGithubApp !== undefined && typeof body.useGithubApp !== 'boolean') return fail(400, 'GitHub 授权模式无效');
     const privateMode = body.useGithubApp === true;
     if (privateMode) {
@@ -145,7 +146,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     const { githubRepositoryId, fullName, branch, commitSha } = resolved.data;
     try {
       return await auditedWrite(client,req,me,'create',result=>result.data.id,async connection => {
-        const row = (await connection.query('INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,requirement_baseline,commit_sha,is_private,github_repository_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *', [crypto.randomUUID(),me.id,fullName,branch,goal,baseline,commitSha,privateMode,githubRepositoryId])).rows[0];
+        const row = (await connection.query('INSERT INTO project_repositories(id,owner_id,full_name,branch,goal,requirement_baseline,commit_sha,is_private,github_repository_id,external_context) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *', [crypto.randomUUID(),me.id,fullName,branch,goal,baseline,commitSha,privateMode,githubRepositoryId,externalContext])).rows[0];
         return { status: 201, data: publicRow(row) };
       });
     } catch (error) { if (error.code === '23505') return fail(409, '该分支已接入'); throw error; }
@@ -279,18 +280,19 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
   }
   if (method === 'PATCH' && pathname.endsWith(`/${id}`)) {
     const body = await readBody();
-    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['goal','requirementBaseline','expectedGoal','expectedRequirementBaseline','expectedBaselineVersionId'].includes(key))) return fail(400, '项目修改字段无效');
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).some(key => !['goal','externalContext','requirementBaseline','expectedGoal','expectedExternalContext','expectedRequirementBaseline','expectedBaselineVersionId'].includes(key))) return fail(400, '项目修改字段无效');
     const goal = typeof body.goal === 'string' ? body.goal.trim() : '';
+    const externalContext = typeof body.externalContext === 'string' ? body.externalContext.trim() : null;
     const baseline = body.requirementBaseline === undefined ? row.requirement_baseline : typeof body.requirementBaseline === 'string' ? body.requirementBaseline.trim() : null;
-    if (!goal || goal.length > 2000 || baseline === null || baseline.length > 200 || containsKnownSecret(goal) || containsKnownSecret(baseline)) return fail(400, '项目目标或需求基线无效，且不得包含凭据');
-    if (typeof body.expectedGoal !== 'string' || typeof body.expectedRequirementBaseline !== 'string' || body.expectedBaselineVersionId !== null && (typeof body.expectedBaselineVersionId !== 'string' || !UUID.test(body.expectedBaselineVersionId))) return fail(400, '缺少当前项目版本，请刷新后重试');
+    if (!goal || goal.length > 2000 || externalContext === null || externalContext.length > 2000 || baseline === null || baseline.length > 200 || containsKnownSecret(goal) || containsKnownSecret(externalContext) || containsKnownSecret(baseline)) return fail(400, '项目目标、外部配置说明或需求基线无效，且不得包含凭据');
+    if (typeof body.expectedGoal !== 'string' || typeof body.expectedExternalContext !== 'string' || typeof body.expectedRequirementBaseline !== 'string' || body.expectedBaselineVersionId !== null && (typeof body.expectedBaselineVersionId !== 'string' || !UUID.test(body.expectedBaselineVersionId))) return fail(400, '缺少当前项目版本，请刷新后重试');
     if (row.baseline_version_id && baseline !== row.requirement_baseline) return fail(409, '已有版本化需求文档，请通过新版本修改正文');
     return auditedWrite(client,req,me,'update',id,async connection => {
-      const changed = await connection.query(`UPDATE project_repositories SET goal=$3,requirement_baseline=$4,updated_at=now()
-        WHERE id=$1 AND owner_id=$2 AND goal=$5 AND requirement_baseline=$6
-          AND baseline_version_id IS NOT DISTINCT FROM $7::uuid
+      const changed = await connection.query(`UPDATE project_repositories SET goal=$3,requirement_baseline=$4,external_context=$5,updated_at=now()
+        WHERE id=$1 AND owner_id=$2 AND goal=$6 AND requirement_baseline=$7 AND external_context=$8
+          AND baseline_version_id IS NOT DISTINCT FROM $9::uuid
           AND (baseline_version_id IS NULL OR requirement_baseline=$4)
-        RETURNING *`, [id,me.id,goal,baseline,body.expectedGoal,body.expectedRequirementBaseline,body.expectedBaselineVersionId]);
+        RETURNING *`, [id,me.id,goal,baseline,externalContext,body.expectedGoal,body.expectedRequirementBaseline,body.expectedExternalContext,body.expectedBaselineVersionId]);
       if (!changed.rowCount) return fail(409, '项目目标或需求版本已变化，请刷新后重试');
       return { status: 200, data: publicRow({ ...changed.rows[0], last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) };
     });

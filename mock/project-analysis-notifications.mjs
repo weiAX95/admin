@@ -4,7 +4,7 @@ import { notifyUser } from './app-notifications.mjs';
 const reportView = (row, findings, suggestions) => ({
   meta: { id: row.id }, branch: row.branch,
   githubRepositoryId: row.github_repository_id,
-  baselineVersionId: row.baseline_version_id, goal: row.goal,
+  baselineVersionId: row.baseline_version_id, goal: row.goal, externalContext: row.external_context,
   analysisCoverageComplete: row.analysis_coverage_complete,
   selectedFileCount: row.selected_file_count,
   availableFileCount: row.available_file_count,
@@ -35,8 +35,8 @@ export async function processProjectAnalysisNotifications(pool) {
         WHERE a.repository_id=$1 AND a.status='completed' AND a.id<>$2
           AND (a.finished_at<$3 OR (a.finished_at=$3 AND a.id<$2))
           AND a.branch=$4 AND a.baseline_version_id IS NOT DISTINCT FROM $5
-          AND a.goal=$6
-        ORDER BY a.finished_at DESC,a.id DESC LIMIT 1`, [current.repository_id,current.id,current.finished_at,current.branch,current.baseline_version_id,current.goal])).rows[0];
+          AND a.goal=$6 AND a.external_context=$7
+        ORDER BY a.finished_at DESC,a.id DESC LIMIT 1`, [current.repository_id,current.id,current.finished_at,current.branch,current.baseline_version_id,current.goal,current.external_context])).rows[0];
       let notificationState = 'skipped';
       if (previous && current.analysis_coverage_complete) {
         const ids = [previous.id,current.id];

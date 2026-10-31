@@ -8,8 +8,8 @@ import { confirmProjectGithubIdentity, createProjectRepository, createProjectReq
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
-type FormValues = { url: string; branch?: string; goal: string; requirementBaseline?: string; useGithubApp?: boolean };
-type EditValues = { goal: string; requirementBaseline: string };
+type FormValues = { url: string; branch?: string; goal: string; externalContext?: string; requirementBaseline?: string; useGithubApp?: boolean };
+type EditValues = { goal: string; externalContext: string; requirementBaseline: string };
 
 export default function ProjectAnalysis() {
   const { message } = App.useApp();
@@ -148,7 +148,7 @@ export default function ProjectAnalysis() {
   const openEdit = (item: ProjectRepository) => {
     setEditing(item);
     setEditError('');
-    editForm.setFieldsValue({ goal: item.goal, requirementBaseline: item.requirementBaseline });
+    editForm.setFieldsValue({ goal: item.goal, externalContext: item.externalContext, requirementBaseline: item.requirementBaseline });
   };
   const saveEdit = async (values: EditValues) => {
     if (!editing) return;
@@ -158,7 +158,7 @@ export default function ProjectAnalysis() {
       await updateProjectRepository(editing, values);
       setEditing(null);
       await load();
-      message.success('项目目标已更新，已有报告保留原始快照');
+      message.success('项目分析基线已更新，已有报告保留原始快照');
     } catch (cause) {
       setEditError(cause instanceof ApiError && cause.status === 409 ? `${cause.message}。关闭弹窗后重新打开可加载最新内容。` : cause instanceof Error ? cause.message : '项目修改失败');
       if (cause instanceof ApiError && cause.status === 409) await load();
@@ -259,6 +259,7 @@ export default function ProjectAnalysis() {
         <Form.Item name="branch" label="分支（留空使用默认分支）"><Input placeholder="main" /></Form.Item>
         <Form.Item name="useGithubApp" valuePropName="checked"><Checkbox>使用已连接的 GitHub App 读取私有仓库</Checkbox></Form.Item>
         <Form.Item name="goal" label="项目目标" rules={[{ required: true, message: '请填写项目目标' }, { max: 2000 }]}><Input.TextArea rows={3} placeholder="希望这个项目实现什么？" /></Form.Item>
+        <Form.Item name="externalContext" label="仓库外配置说明（可选）" extra="描述无法从 GitHub commit 读取的部署环境或配置版本。此内容会发送给分析模型，请勿填写密钥。" rules={[{ max: 2000 }]}><Input.TextArea rows={3} maxLength={2000} showCount /></Form.Item>
         <Form.Item name="requirementBaseline" label="需求基线标记（可选）" rules={[{ max: 200 }]}><Input placeholder="接入后可在项目列表添加带正文的版本化需求文档" /></Form.Item>
         <Button type="primary" htmlType="submit" loading={saving}>接入仓库</Button>
       </Form>
@@ -289,6 +290,7 @@ export default function ProjectAnalysis() {
       <Typography.Paragraph type="secondary">修改后只影响后续分析；已有报告保留创建时的目标与需求快照。</Typography.Paragraph>
       <Form form={editForm} layout="vertical" onFinish={values => void saveEdit(values)}>
         <Form.Item name="goal" label="项目目标" rules={[{ required: true, whitespace: true, message: '请填写项目目标' }, { max: 2000 }]}><Input.TextArea rows={4} maxLength={2000} showCount /></Form.Item>
+        <Form.Item name="externalContext" label="仓库外配置说明" extra="更改后，旧报告与后续分析会使用不同基线。内容会发送给分析模型，请勿填写密钥。" rules={[{ max: 2000 }]}><Input.TextArea rows={3} maxLength={2000} showCount /></Form.Item>
         <Form.Item name="requirementBaseline" label="需求基线标记" rules={[{ max: 200 }]}><Input maxLength={200} disabled={Boolean(editing?.baselineVersionId)} /></Form.Item>
         {editing?.baselineVersionId && <Typography.Paragraph type="secondary">已有版本化需求文档。请使用“需求文档”入口保存新版本。</Typography.Paragraph>}
       </Form>

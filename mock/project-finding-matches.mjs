@@ -31,14 +31,14 @@ export async function handleProjectFindingMatches({ pathname, method, client, me
       await connection.query('COMMIT');
       return { status: 200, data: { removed: true } };
     }
-    const rows = (await connection.query(`SELECT a.id,a.branch,a.goal,a.commit_sha,a.finished_at,a.status,s.branch AS scan_branch,s.commit_sha AS scan_commit_sha,s.github_repository_id
+    const rows = (await connection.query(`SELECT a.id,a.branch,a.goal,a.external_context,a.commit_sha,a.finished_at,a.status,s.branch AS scan_branch,s.commit_sha AS scan_commit_sha,s.github_repository_id
       FROM project_analyses a JOIN project_scans s ON s.id=a.scan_id
       WHERE a.repository_id=$1 AND a.id=ANY($2::uuid[])`, [repositoryId, [olderId,newerId]])).rows;
     const older = rows.find(row => row.id === olderId), newer = rows.find(row => row.id === newerId);
     if (!older || !newer || older.status !== 'completed' || newer.status !== 'completed'
       || !(new Date(older.finished_at).getTime() < new Date(newer.finished_at).getTime())
       || !older.github_repository_id || older.github_repository_id !== newer.github_repository_id
-      || older.branch !== newer.branch || older.goal !== newer.goal
+      || older.branch !== newer.branch || older.goal !== newer.goal || older.external_context !== newer.external_context
       || rows.some(row => row.branch !== row.scan_branch || row.commit_sha.trim() !== row.scan_commit_sha.trim())) {
       await connection.query('ROLLBACK'); return fail(409, '两份报告来源不可核对，请重新选择同仓库、分支和目标的可信报告');
     }

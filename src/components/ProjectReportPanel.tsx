@@ -156,7 +156,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       if (!cancelled) setError(cause instanceof Error ? cause.message : '报告刷新失败');
     });
     return () => { cancelled = true; };
-  }, [repository.id, repository.githubRepositoryId, repository.branch, repository.goal, repository.requirementBaseline, repository.baselineVersionId, repository.commitSha]);
+  }, [repository.id, repository.githubRepositoryId, repository.branch, repository.goal, repository.externalContext, repository.requirementBaseline, repository.baselineVersionId, repository.commitSha]);
 
   const submit = async (selectedScan: string, selectedModel: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }, disclosure?: PrivateProjectDisclosure, autoApproval = false) => {
     setStarting(true);
@@ -180,7 +180,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       finally { setAutoSaving(false); }
     };
     if (!enabled) return void save();
-    Modal.confirm({ title: repository.private ? '确认开启提交后待审核分析？' : '确认开启持续模型分析？', content: repository.private ? `私有仓库收到对应分支提交后只会自动扫描。每次模型分析仍需查看代码范围并确认，确认后单次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}。` : `公开仓库每次收到对应分支的提交后，将在扫描完成时自动向所选模型发送代码摘录、项目目标和需求文档。每次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}；仍受账号每日预算和限流约束，重复提交可能持续产生费用。`, okText: '确认开启', onOk: save });
+    Modal.confirm({ title: repository.private ? '确认开启提交后待审核分析？' : '确认开启持续模型分析？', content: repository.private ? `私有仓库收到对应分支提交后只会自动扫描。每次模型分析仍需查看代码范围并确认，确认后单次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}。` : `公开仓库每次收到对应分支的提交后，将在扫描完成时自动向所选模型发送代码摘录、项目目标、仓库外配置说明和需求文档。每次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}；仍受账号每日预算和限流约束，重复提交可能持续产生费用。`, okText: '确认开启', onOk: save });
   };
   const start = async (selectedScan = scanId, selectedModel = modelId, budget = { tokenBudget, costBudgetUsd }, autoApproval = false) => {
     if (!selectedScan || !selectedModel) return;
@@ -361,7 +361,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       {repository.private && repository.autoAnalysisEnabled && scans.filter(item => item.githubRepositoryId !== null && item.githubRepositoryId === repository.githubRepositoryId && item.autoAnalysisState === 'approval_required').map(item => <div key={item.id} style={{ marginTop: 8 }}><Button loading={starting} onClick={() => void start(item.id, repository.autoAnalysisModelId || '', { tokenBudget: repository.autoAnalysisTokenBudget, costBudgetUsd: repository.autoAnalysisCostBudgetUsd }, true)}>审核 {item.commitSha.slice(0,10)} 的发送范围并分析</Button></div>)}
     </Card>
     {scans.some(scan => scan.githubRepositoryId === null) && <Alert type="info" showIcon message="旧扫描仅供查看" description="仓库身份绑定前的扫描无法证明来源，不能用于新报告；请核对仓库后重新扫描。" style={{ marginBottom: 16 }} />}
-    <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">选择已完成或部分覆盖的扫描及可用模型。分析固定该次 commit、项目目标、仓库外配置说明和需求基线；模型费用计入已配置的每日预算。静态代码证据不能证明功能在运行环境中通过。</Typography.Paragraph>
     <Space wrap style={{ marginBottom: 16 }}>
       <Select aria-label="扫描记录" placeholder="选择扫描记录" value={scanId || undefined} onChange={setScanId} style={{ minWidth: 230 }} options={scans.filter(scan => scan.githubRepositoryId !== null && scan.githubRepositoryId === repository.githubRepositoryId && scan.branch === repository.branch && scan.commitSha === repository.commitSha && ['completed', 'partial'].includes(scan.status)).map(scan => ({ value: scan.id, label: `${scan.commitSha.slice(0, 10)} · ${scan.status === 'partial' ? '部分覆盖' : '完整覆盖'}${scan.forceFull ? ' · 全量重扫' : ''}` }))} />
       <Select aria-label="分析模型" placeholder="选择分析模型" value={modelId || undefined} onChange={setModelId} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
@@ -372,10 +372,12 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     <Typography.Paragraph type="secondary">可选上限会固定到分析任务，重试累计计算已用量。提交前按输入字符保守预留 token 和费用；每次继续调用前重新核对，已发出的单次模型调用仍可能产生超出预估的用量。</Typography.Paragraph>
     <Modal title="确认私有代码分析范围" open={Boolean(privatePreview)} onCancel={() => { if (!starting) setPrivatePreview(null); }} footer={<Space><Button disabled={starting} onClick={() => setPrivatePreview(null)}>取消</Button><Button type="primary" loading={starting} onClick={() => { if (privatePreview) void submit(privatePreview.scanId,privatePreview.modelId,{ tokenBudget:privatePreview.tokenBudget,costBudgetUsd:privatePreview.costBudgetUsd },privatePreview.disclosure,privatePreview.autoApproval); }}>确认发送并生成报告</Button></Space>} width={700}>
       {privatePreview && <Space direction="vertical" style={{ width:'100%' }}>
-        <Alert type="warning" showIcon message="以下内容将发送给模型提供方" description="本次扫描中选出的代码／文档摘录、项目目标、需求文档和下列既有建议摘要会作为模型输入。仓库正文与注释只作为待分析材料，不会执行仓库脚本。" />
+        <Alert type="warning" showIcon message="以下内容将发送给模型提供方" description="本次扫描中选出的代码／文档摘录、项目目标、仓库外配置说明、需求文档和下列既有建议摘要会作为模型输入。仓库正文与注释只作为待分析材料，不会执行仓库脚本。" />
         <Typography.Text>提供方：{privatePreview.disclosure.provider} · 模型：{privatePreview.disclosure.model}</Typography.Text>
         <Typography.Text>数据目的地：<code>{privatePreview.disclosure.destination}</code></Typography.Text>
         <Typography.Text>固定 commit：{scans.find(item => item.id === privatePreview.scanId)?.commitSha.slice(0,10)}</Typography.Text>
+        <Typography.Text>仓库外配置说明：</Typography.Text>
+        <Typography.Paragraph style={{ whiteSpace:'pre-wrap', maxHeight:120, overflow:'auto', marginBottom:0 }}>{privatePreview.disclosure.externalContext || '（未填写）'}</Typography.Paragraph>
         {privatePreview.autoApproval && <Typography.Text>本次上限：{privatePreview.tokenBudget?.toLocaleString()} token、最多 ${privatePreview.costBudgetUsd?.toFixed(2)}</Typography.Text>}
         <Typography.Text>扫描预算：{privatePreview.disclosure.scanFileLimit} 个文件、{Math.round(privatePreview.disclosure.scanByteLimit / 1024 / 1024)} MiB；本次选中 {privatePreview.disclosure.fileCount} 个文件摘录，{privatePreview.disclosure.truncatedCount} 个摘录已截短。</Typography.Text>
         <Typography.Text>既有建议候选：{privatePreview.disclosure.duplicateCandidateCount} 条。以下文字也会发送给模型：</Typography.Text>
@@ -433,6 +435,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       <Alert type={report.scanScope.comparisonComplete ? 'info' : 'warning'} showIcon message={report.scanScope.baselineCommitSha ? `扫描基线 ${report.scanScope.baselineCommitSha.slice(0, 10)} → ${report.commitSha.slice(0, 10)}` : `首次扫描 ${report.commitSha.slice(0, 10)}`} description={<Space direction="vertical"><span>范围：{report.selectedFileCount}/{report.availableFileCount} 个可读文件进入分析；{report.scanScope.forceFull ? '全量重扫，未跨报告复用分析输出' : `复用 ${report.reusedCallCount} 次目录模块输出`}。</span>{report.scanScope.baselineCommitSha && <span>已索引文件差异：新增 {report.scanScope.changes.added || 0}、修改 {report.scanScope.changes.modified || 0}、删除 {report.scanScope.changes.deleted || 0}、重命名 {report.scanScope.changes.renamed || 0}。{!report.scanScope.comparisonComplete && '至少一侧扫描为部分覆盖，差异不代表完整仓库。'}</span>}</Space>} style={{ marginBottom: 12 }} />
       {report.reusedCalls.length > 0 && <Alert type="info" showIcon message={`复用 ${report.reusedCalls.length} 次已校验证据的模块输出`} description={<Space wrap>{report.reusedCalls.map(item => <Tag key={item.moduleKey}>{item.moduleKey.startsWith('@cross-module') ? '跨模块综合' : item.moduleKey} · 来源 commit {item.sourceCommitSha?.slice(0, 10) || '未知'}</Tag>)}</Space>} style={{ marginBottom: 12 }} />}
       <Typography.Paragraph><strong>项目目标：</strong>{report.goal}</Typography.Paragraph>
+      <Typography.Paragraph style={{ whiteSpace:'pre-wrap' }}><strong>仓库外配置说明：</strong>{report.externalContext || '未填写；分析未核验部署环境'}</Typography.Paragraph>
       <Typography.Paragraph><strong>需求基线：</strong>{report.requirementBaseline || '未指定'}</Typography.Paragraph>
       {report.baselineVersionId && <Button size="small" loading={requirementLoading} onClick={() => void showRequirement()}>查看本报告固定的需求正文</Button>}
       <Typography.Paragraph>{report.summary}</Typography.Paragraph>

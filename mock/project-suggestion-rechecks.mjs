@@ -48,6 +48,7 @@ function rankedCandidates(older,newer,sameBaseline) {
 function reportLimitations(older,newer) {
   const limitations = [];
   if (older.goal !== newer.goal) limitations.push('项目目标不同，建议仅供人工参考');
+  if (older.external_context !== newer.external_context) limitations.push('仓库外配置说明不同，建议仅供人工参考');
   if (!older.baseline_version_id || older.baseline_version_id !== newer.baseline_version_id)
     limitations.push('需求基线版本不同或缺失，候选建议不标记为同一需求，不能自动判断是否已解决');
   if (!older.analysis_coverage_complete || !newer.analysis_coverage_complete)
@@ -59,14 +60,14 @@ function reportLimitations(older,newer) {
 
 function currentReportStale(repository,newer) {
   return !repository.github_repository_id || repository.github_repository_id !== newer.github_repository_id
-    || repository.branch !== newer.branch || repository.goal !== newer.goal
+    || repository.branch !== newer.branch || repository.goal !== newer.goal || repository.external_context !== newer.external_context
     || repository.requirement_baseline !== newer.requirement_baseline
     || repository.baseline_version_id !== newer.baseline_version_id
     || sha(repository.commit_sha) !== sha(newer.commit_sha);
 }
 
 async function reportsForComparison(connection,repositoryId,olderId,newerId) {
-  const rows = (await connection.query(`SELECT a.id,a.status,a.branch,a.commit_sha,a.goal,a.requirement_baseline,
+  const rows = (await connection.query(`SELECT a.id,a.status,a.branch,a.commit_sha,a.goal,a.external_context,a.requirement_baseline,
       a.baseline_version_id,a.analysis_coverage_complete,a.selected_file_count,a.available_file_count,
       a.finished_at,s.github_repository_id,s.branch AS scan_branch,s.commit_sha AS scan_commit_sha
     FROM project_analyses a JOIN project_scans s ON s.id=a.scan_id AND s.repository_id=a.repository_id
@@ -116,7 +117,7 @@ export async function handleProjectSuggestionRechecks({ pathname, method, client
   const connection = pooled ? await client.connect() : client;
   try {
     await connection.query(olderSuggestionId ? 'BEGIN' : 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
-    const repository = (await connection.query(`SELECT id,owner_id,github_repository_id,branch,goal,
+    const repository = (await connection.query(`SELECT id,owner_id,github_repository_id,branch,goal,external_context,
       requirement_baseline,baseline_version_id,commit_sha FROM project_repositories
       WHERE id=$1 AND owner_id=$2${olderSuggestionId ? ' FOR SHARE' : ''}`,[repositoryId,me.id])).rows[0];
     if (!repository) { await connection.query('ROLLBACK'); return fail(404,'项目不存在'); }

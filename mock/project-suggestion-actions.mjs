@@ -36,8 +36,8 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
   try {
     await connection.query('BEGIN');
     await connection.query('SELECT pg_advisory_xact_lock(748201)');
-    const row = (await connection.query(`SELECT s.*,a.id AS analysis_id,a.status AS analysis_status,a.goal AS report_goal,a.requirement_baseline AS report_baseline,a.commit_sha,a.full_name,a.branch AS report_branch,
-      a.baseline_version_id AS report_baseline_version_id,r.owner_id AS repository_owner_id,r.goal AS current_goal,r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,r.commit_sha AS current_commit,r.branch AS current_branch,r.github_repository_id AS current_github_repository_id,
+    const row = (await connection.query(`SELECT s.*,a.id AS analysis_id,a.status AS analysis_status,a.goal AS report_goal,a.external_context AS report_external_context,a.requirement_baseline AS report_baseline,a.commit_sha,a.full_name,a.branch AS report_branch,
+      a.baseline_version_id AS report_baseline_version_id,r.owner_id AS repository_owner_id,r.goal AS current_goal,r.external_context AS current_external_context,r.requirement_baseline AS current_baseline,r.baseline_version_id AS current_baseline_version_id,r.commit_sha AS current_commit,r.branch AS current_branch,r.github_repository_id AS current_github_repository_id,
       scan.github_repository_id AS scan_github_repository_id,scan.branch AS scan_branch,scan.commit_sha AS scan_commit_sha,
       f.title AS finding_title,f.requirement_id AS finding_requirement_id,f.evidence_path,f.evidence_line
       FROM project_analysis_suggestions s JOIN project_analyses a ON a.id=s.analysis_id
@@ -59,7 +59,7 @@ export async function handleProjectSuggestionAction({ pathname, method, client, 
     if (action !== 'ignore' && (!row.current_github_repository_id || !row.scan_github_repository_id || row.scan_github_repository_id !== row.current_github_repository_id
       || row.report_branch !== row.current_branch || row.report_branch !== row.scan_branch
       || row.commit_sha.trim() !== row.current_commit?.trim() || row.commit_sha.trim() !== row.scan_commit_sha?.trim()
-      || row.report_goal !== row.current_goal || row.report_baseline !== row.current_baseline || row.report_baseline_version_id !== row.current_baseline_version_id)) {
+      || row.report_goal !== row.current_goal || row.report_external_context !== row.current_external_context || row.report_baseline !== row.current_baseline || row.report_baseline_version_id !== row.current_baseline_version_id)) {
       await connection.query('ROLLBACK');
       return fail(409,'报告的仓库身份、分支、commit、项目目标或需求基线已变化或无法核对，请重新扫描并分析后确认');
     }

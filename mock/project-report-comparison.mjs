@@ -12,6 +12,7 @@ export function compareProjectReports(older, newer) {
   if (older.branch !== newer.branch) limitations.push('分支不同');
   if (!older.baselineVersionId || older.baselineVersionId !== newer.baselineVersionId) limitations.push('需求基线版本不同或缺失');
   if (older.goal !== newer.goal) limitations.push('项目目标不同');
+  if (older.externalContext !== newer.externalContext) limitations.push('仓库外配置说明不同');
   if (!older.analysisCoverageComplete || !newer.analysisCoverageComplete) limitations.push('至少一份报告只覆盖部分扫描内容');
   if (older.selectedFileCount !== newer.selectedFileCount || older.availableFileCount !== newer.availableFileCount) limitations.push('进入分析的文件数量或可用文件数量不同');
   if (!older.selectedFilePaths || !newer.selectedFilePaths) limitations.push('至少一份旧报告未保存进入模型的文件路径，无法核对分析范围');
@@ -22,7 +23,7 @@ export function compareProjectReports(older, newer) {
 
   const changes = [];
   const findingReview = { sameStatusChanges: [], unmatchedGroups: [], featureKeyCandidates: [] };
-  if (sameRepositoryIdentity && older.branch === newer.branch && older.goal === newer.goal) {
+  if (sameRepositoryIdentity && older.branch === newer.branch && older.goal === newer.goal && older.externalContext === newer.externalContext) {
     const keyed = report => {
       const groups = new Map();
       for (const finding of report.findings) {
@@ -44,7 +45,7 @@ export function compareProjectReports(older, newer) {
     }
   }
   const canPairRequirements = sameRepositoryIdentity && older.baselineVersionId
-    && older.baselineVersionId === newer.baselineVersionId && older.branch === newer.branch && older.goal === newer.goal;
+    && older.baselineVersionId === newer.baselineVersionId && older.branch === newer.branch && older.goal === newer.goal && older.externalContext === newer.externalContext;
   if (canPairRequirements) {
     const group = report => {
       const result = new Map();

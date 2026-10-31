@@ -14,6 +14,7 @@ export interface ProjectRepository {
   url: string;
   branch: string;
   goal: string;
+  externalContext: string;
   requirementBaseline: string;
   baselineVersionId: string | null;
   commitSha: string;
@@ -31,9 +32,9 @@ export const startProjectGithubConnection = () => http.post<{ url: string }>('/p
 export const disconnectProjectGithub = () => http.del<{ connected: false }>('/project-github');
 export interface GithubAvailableRepository { fullName: string; private: boolean; defaultBranch: string | null }
 export const listGithubAvailableRepositories = (cursor?: string) => http.get<{ items: GithubAvailableRepository[]; nextCursor: string | null }>(`/project-github/repositories${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
-export const createProjectRepository = (body: { url: string; branch?: string; goal: string; requirementBaseline?: string; useGithubApp?: boolean }) => http.post<ProjectRepository>('/project-repositories', body);
-export const updateProjectRepository = (item: ProjectRepository, body: { goal: string; requirementBaseline: string }) => http.patch<ProjectRepository>(`/project-repositories/${item.id}`, {
-  ...body, expectedGoal: item.goal, expectedRequirementBaseline: item.requirementBaseline, expectedBaselineVersionId: item.baselineVersionId,
+export const createProjectRepository = (body: { url: string; branch?: string; goal: string; externalContext?: string; requirementBaseline?: string; useGithubApp?: boolean }) => http.post<ProjectRepository>('/project-repositories', body);
+export const updateProjectRepository = (item: ProjectRepository, body: { goal: string; externalContext: string; requirementBaseline: string }) => http.patch<ProjectRepository>(`/project-repositories/${item.id}`, {
+  ...body, expectedGoal: item.goal, expectedExternalContext: item.externalContext, expectedRequirementBaseline: item.requirementBaseline, expectedBaselineVersionId: item.baselineVersionId,
 });
 export const refreshProjectRepository = (id: string) => http.post<ProjectRepository>(`/project-repositories/${id}/refresh`, {});
 export interface ProjectGithubIdentityPreview {
@@ -102,6 +103,7 @@ export interface ProjectAnalysisJob {
   id: string; repositoryId: string; scanId: string; commitSha: string; branch: string;
   triggerSource: 'manual' | 'webhook';
   baselineVersionId: string | null;
+  externalContext: string;
   modelId: string; model: string; status: 'queued' | 'analyzing' | 'completed' | 'failed' | 'canceled';
   attempts: number; maxAttempts: number; canceledAt: string | null;
   errorCode: string | null; summary: string | null; selectedFileCount: number;
@@ -200,7 +202,7 @@ export const getProjectSuggestionReviews = (repositoryId: string, olderAnalysisI
   http.get<ProjectSuggestionReviewPair>(`/project-repositories/${repositoryId}/analyses/${newerAnalysisId}/suggestion-reviews`, { olderAnalysisId });
 export const saveProjectSuggestionReview = (repositoryId: string, olderAnalysisId: string, newerAnalysisId: string, olderSuggestionId: string, body: { newerSuggestionId: string | null; outcome: ProjectSuggestionReviewOutcome; note: string; expectedVersion: number }) =>
   http.post<NonNullable<ProjectSuggestionReviewPair['items'][number]['review']>>(`/project-repositories/${repositoryId}/analyses/${newerAnalysisId}/suggestion-reviews/${olderSuggestionId}`, { olderAnalysisId, ...body });
-export interface PrivateProjectDisclosure { digest: string; provider: string; model: string; destination: string; fileCount: number; paths: string[]; duplicateCandidateCount: number; duplicateCandidates: { taskId: string; title: string; topic: string; practice: string; acceptance: string }[]; truncatedCount: number; scanFileLimit: number; scanByteLimit: number; scanCoverageComplete: boolean }
+export interface PrivateProjectDisclosure { digest: string; provider: string; model: string; destination: string; externalContext: string; fileCount: number; paths: string[]; duplicateCandidateCount: number; duplicateCandidates: { taskId: string; title: string; topic: string; practice: string; acceptance: string }[]; truncatedCount: number; scanFileLimit: number; scanByteLimit: number; scanCoverageComplete: boolean }
 export const previewPrivateProjectAnalysis = (repositoryId: string, scanId: string, modelId: string) => http.post<PrivateProjectDisclosure>(`/project-repositories/${repositoryId}/analyses/disclosure`, { scanId, modelId });
 export const startProjectAnalysis = (repositoryId: string, scanId: string, modelId: string, budget: { tokenBudget: number | null; costBudgetUsd: number | null }, privateConsent?: { disclosureDigest: string }, autoApproval = false) => http.post<ProjectAnalysisJob>(`/project-repositories/${repositoryId}/analyses`, { scanId, modelId, ...budget, ...(privateConsent ? { privateConsent: true, disclosureDigest: privateConsent.disclosureDigest } : {}), ...(autoApproval ? { autoApproval: true } : {}) });
 export const getProjectAnalysis = (repositoryId: string, analysisId: string) => http.get<ProjectAnalysisReport>(`/project-repositories/${repositoryId}/analyses/${analysisId}`);
