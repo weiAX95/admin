@@ -548,7 +548,7 @@ function goModuleName(content) {
   return first?.match(/^module[ \t]+([^\s]+)(?:[ \t]*\/\/.*)?$/)?.[1] || null;
 }
 
-function goImportsV8(file, indexed, boundaries, packages) {
+function goImportsV8(file, indexed, boundaries, packages, replacements = null) {
   if (!file.path.endsWith('.go')) return [];
   const packageName = packages.get(file.path);
   const found = new Set();
@@ -570,20 +570,57 @@ function goImportsV8(file, indexed, boundaries, packages) {
     if (name) imported.push(name);
   }
   for (const name of imported.slice(0,200)) {
-    if (name !== boundary.name && !name.startsWith(`${boundary.name}/`)) continue;
-    const suffix = name.slice(boundary.name.length).replace(/^\//,'');
-    const directory = path.posix.join(boundary.directory,suffix);
-    for (const target of indexed) {
-      if (target === file.path || !target.endsWith('.go') || target.endsWith('_test.go') || path.posix.dirname(target) !== directory || boundaryFor(target)?.path !== boundary.path) continue;
-      if (packages.has(target)) found.add(target);
+    if (name === boundary.name || name.startsWith(`${boundary.name}/`)) {
+      const suffix = name.slice(boundary.name.length).replace(/^\//,'');
+      const directory = path.posix.join(boundary.directory,suffix);
+      for (const target of indexed) {
+        if (target === file.path || !target.endsWith('.go') || target.endsWith('_test.go') || path.posix.dirname(target) !== directory || boundaryFor(target)?.path !== boundary.path) continue;
+        if (packages.has(target)) found.add(target);
+      }
+    }
+    for (const replacement of replacements?.get(boundary.path) || []) {
+      if (name !== replacement.module && !name.startsWith(`${replacement.module}/`)) continue;
+      const suffix = name.slice(replacement.module.length).replace(/^\//,'');
+      const directory = path.posix.join(replacement.directory,suffix);
+      for (const target of indexed) {
+        if (target === file.path || !target.endsWith('.go') || target.endsWith('_test.go') || path.posix.dirname(target) !== directory || boundaryFor(target)?.path !== replacement.path) continue;
+        if (packages.has(target)) found.add(target);
+      }
     }
   }
   return [...found];
 }
 
-function importedPaths(file, indexed, goModules, aliasConfigs = [], includeSameDepth = false, goBoundaries = null, goPackages = null, pythonBoundaries = null) {
+function goLocalReplacements(files, boundaries) {
+  const indexed = new Map(files.map(file => [file.path,file]));
+  const workspaces = files.filter(file => /(?:^|\/)go\.work$/.test(file.path)).map(file => path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path));
+  const result = new Map();
+  for (const boundary of boundaries) {
+    const file = indexed.get(boundary.path);
+    if (!boundary.name || file?.status !== 'read' || typeof file.content !== 'string') continue;
+    if (workspaces.some(directory => !directory || boundary.directory === directory || boundary.directory.startsWith(`${directory}/`))) continue;
+    let inBlock = false;
+    for (const raw of file.content.split(/\r?\n/)) {
+      const line = raw.replace(/\s+\/\/.*$/, '').trim();
+      if (/^replace\s+\($/.test(line)) { inBlock = true; continue; }
+      if (inBlock && line === ')') { inBlock = false; continue; }
+      const spec = (inBlock ? line : line.startsWith('replace ') ? line.slice(8).trim() : '').match(/^([^\s]+)\s+=>\s+(\.{1,2}\/[^\s]+)$/);
+      if (!spec) continue; // Versioned or computed replacements are not a known edge.
+      const directory = path.posix.normalize(path.posix.join(boundary.directory,spec[2]));
+      if (directory === '.' || directory === '..' || directory.startsWith('../') || directory.startsWith('/')) continue;
+      const targetPath = `${directory}/go.mod`;
+      const target = indexed.get(targetPath);
+      if (target?.status !== 'read' || typeof target.content !== 'string' || goModuleName(target.content) !== spec[1]) continue;
+      if (!result.has(boundary.path)) result.set(boundary.path,[]);
+      result.get(boundary.path).push({ module: spec[1], directory, path: targetPath });
+    }
+  }
+  return result;
+}
+
+function importedPaths(file, indexed, goModules, aliasConfigs = [], includeSameDepth = false, goBoundaries = null, goPackages = null, pythonBoundaries = null, goReplacements = null) {
   if (typeof file.content !== 'string') return [];
-  return [...new Set([...javascriptImports(file,indexed,true),...javascriptAliasedImports(file,indexed,aliasConfigs,includeSameDepth),...pythonImports(file,indexed,pythonBoundaries),...(goBoundaries ? goImportsV8(file,indexed,goBoundaries,goPackages) : goImports(file,indexed,goModules))])];
+  return [...new Set([...javascriptImports(file,indexed,true),...javascriptAliasedImports(file,indexed,aliasConfigs,includeSameDepth),...pythonImports(file,indexed,pythonBoundaries),...(goBoundaries ? goImportsV8(file,indexed,goBoundaries,goPackages,goReplacements) : goImports(file,indexed,goModules))])];
 }
 
 export function selectProjectImpactEvidenceV3(files, changes) {
@@ -619,7 +656,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false, includePrisma = false, includeSqlAlchemy = false, includeWebpackAliases = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false, includePrisma = false, includeSqlAlchemy = false, includeWebpackAliases = false, includeGoLocalReplace = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -637,6 +674,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const goModules = files.filter(file => file.path.endsWith('go.mod') && file.status === 'read' && typeof file.content === 'string').map(file => ({ directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.content.match(/^module\s+([^\s]+)\s*$/m)?.[1] })).filter(item => item.name).sort((a,b) => b.directory.length - a.directory.length);
   const goPackages = includeNestedConfigs ? new Map(files.filter(file => file.path.endsWith('.go') && file.status === 'read' && typeof file.content === 'string').map(file => [file.path,goPackageName(file.content)]).filter(([,name]) => name)) : null;
   const goBoundaries = includeNestedConfigs ? files.filter(file => /(?:^|\/)go\.mod$/.test(file.path)).map(file => ({ path: file.path, directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.status === 'read' && typeof file.content === 'string' ? goModuleName(file.content) : null })).sort((a,b) => b.directory.length - a.directory.length) : null;
+  const goReplacements = includeGoLocalReplace ? goLocalReplacements(files,goBoundaries) : null;
   const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files) : null;
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
   const sqlEdges = includeSqlTables ? projectSqlDependencyEdges(files,includeSqlAlchemy) : new Map();
@@ -655,7 +693,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const uncertainViteImporters = new Set();
   for (const file of files) {
     if (file.status !== 'read') continue;
-    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages,pythonBoundaries),...(apiEdges.get(file.path) || []),...(sqlEdges.get(file.path) || []),...(prismaEdges.get(file.path) || [])])];
+    const imports = [...new Set([...importedPaths(file,indexed,goModules,aliasConfigs,includeExtends,goBoundaries,goPackages,pythonBoundaries,goReplacements),...(apiEdges.get(file.path) || []),...(sqlEdges.get(file.path) || []),...(prismaEdges.get(file.path) || [])])];
     if (viteConfigs && typeof file.content === 'string' && hasLiteralViteAliasImport(file,viteConfigs)) uncertainViteImporters.add(file.path);
     importsByPath.set(file.path,imports);
     for (const target of imports) {
@@ -739,3 +777,11 @@ export function selectProjectImpactEvidenceV23(files, changes) {
   }
   return result;
 }
+export function selectProjectImpactEvidenceV24(files, changes) {
+  const result = selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true,true,true,true,true,true,true);
+  if (changes.some(change => isProjectDeploymentConfigPath(change.path) || isProjectDeploymentConfigPath(change.oldPath))) {
+    for (const file of files) result.impactedModules.add(projectModuleKey(file.path));
+  }
+  return result;
+}
+export const projectImpactPriorityPathsV24 = (files, changes) => selectProjectImpactEvidenceV24(files,changes).priorityPaths;
