@@ -10,6 +10,14 @@ import ProjectScanPanel from '../components/ProjectScanPanel';
 
 type FormValues = { url: string; branch?: string; goal: string; externalContext?: string; requirementBaseline?: string; useGithubApp?: boolean };
 type EditValues = { goal: string; externalContext: string; requirementBaseline: string };
+const pollErrorLabel = (code: string) => ({
+  BRANCH_NOT_FOUND: 'GitHub 分支不存在，请检查项目分支设置',
+  GITHUB_AUTH_REQUIRED: 'GitHub 私有仓库授权已失效，定时检查已关闭',
+  GITHUB_REPOSITORY_IDENTITY_CHANGED: 'GitHub 仓库身份已变化，定时检查已关闭',
+  GITHUB_HEAD_403: 'GitHub 拒绝读取分支，请检查权限或请求配额',
+  GITHUB_HEAD_429: 'GitHub 请求限流，下次检查会重试',
+  POLL_FAILED: '检查失败，下次检查会重试',
+} as Record<string,string>)[code] || `检查失败（${code}）`;
 
 export default function ProjectAnalysis() {
   const { message } = App.useApp();
@@ -297,7 +305,7 @@ export default function ProjectAnalysis() {
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
         { title: '最近完成分析', render: (_, item: ProjectRepository) => item.lastAnalysisAt && item.lastAnalyzedCommitSha ? <Space direction="vertical" size={0}><span>{new Date(item.lastAnalysisAt).toLocaleString('zh-CN')}</span><a href={`${item.url}/commit/${item.lastAnalyzedCommitSha}`} target="_blank" rel="noopener noreferrer" title={item.lastAnalyzedCommitSha}><code>{item.lastAnalyzedCommitSha.slice(0, 10)}</code></a>{item.commitSha !== item.lastAnalyzedCommitSha && <Tag color="warning">有新提交待分析</Tag>}</Space> : '尚无完成的分析' },
-        { title: '定时检查', render: (_, item: ProjectRepository) => <Tooltip title="每 5 分钟核对一次 GitHub 分支；有新 commit 时自动建立扫描。此模式不自动调用分析模型。"><span><Switch aria-label={`${item.fullName} 定时检查`} checked={item.pollScanEnabled} disabled={item.githubRepositoryId === null} loading={pollSaving === item.id} onChange={enabled => void changePollScan(item,enabled)} /></span></Tooltip> },
+        { title: '定时检查', render: (_, item: ProjectRepository) => <Space direction="vertical" size={0}><Tooltip title="每 5 分钟核对一次 GitHub 分支；新 commit 自动扫描。开启自动模型分析后沿用已确认的费用上限。"><span><Switch aria-label={`${item.fullName} 定时检查`} checked={item.pollScanEnabled} disabled={item.githubRepositoryId === null} loading={pollSaving === item.id} onChange={enabled => void changePollScan(item,enabled)} /></span></Tooltip>{item.lastPollAt && <Typography.Text type="secondary" style={{ fontSize: 12 }}>{new Date(item.lastPollAt).toLocaleString('zh-CN')}</Typography.Text>}{item.lastPollError && <Tooltip title={pollErrorLabel(item.lastPollError)}><Tag color="error">最近检查失败</Tag></Tooltip>}</Space> },
         { title: '提交后扫描', render: (_, item: ProjectRepository) => <Tooltip title={item.githubRepositoryId === null ? '先核对 GitHub 仓库身份，再开启自动扫描' : !githubConnection?.webhookConfigured ? '服务端尚未配置 GitHub Webhook 密钥' : '收到已验证的 GitHub 分支提交事件后自动创建扫描；公开仓库可另行开启自动模型分析'}><span><Switch aria-label={`${item.fullName} 提交后自动扫描`} checked={item.webhookScanEnabled} disabled={item.githubRepositoryId === null || !item.webhookScanEnabled && !githubConnection?.webhookConfigured} loading={webhookSaving === item.id} onChange={enabled => void changeWebhookScan(item,enabled)} /></span></Tooltip> },
         { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button>{item.githubRepositoryId === null ? <Button type="link" loading={identityLoading === item.id} onClick={() => void previewIdentity(item)}>核对仓库身份</Button> : <><Button type="link" loading={refreshing === item.id} disabled={checkingAndScanning === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" loading={checkingAndScanning === item.id} disabled={refreshing === item.id} onClick={() => void checkAndScan(item)}>检查并扫描</Button></>}<Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />

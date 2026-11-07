@@ -7,6 +7,8 @@ export interface ProjectRepository {
   private: boolean;
   githubRepositoryId: number | null;
   pollScanEnabled: boolean;
+  lastPollAt: string | null;
+  lastPollError: string | null;
   webhookScanEnabled: boolean;
   autoAnalysisEnabled: boolean;
   autoAnalysisModelId: string | null;
