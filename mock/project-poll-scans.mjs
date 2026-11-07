@@ -35,12 +35,16 @@ export async function processProjectPollScans(pool) {
         } catch (error) { await client.query('ROLLBACK').catch(() => undefined); throw error; }
         finally { client.release(); }
       } catch (error) {
-        const code = error instanceof GithubAuthorizationError ? 'GITHUB_AUTH_REQUIRED'
+        const code = error?.rateLimited ? 'GITHUB_RATE_LIMIT'
+          : error instanceof GithubAuthorizationError ? 'GITHUB_AUTH_REQUIRED'
           : error instanceof GithubRepositoryIdentityError ? 'GITHUB_REPOSITORY_IDENTITY_CHANGED'
             : /^GITHUB_HEAD_(?:\d{3}|INVALID)$/.test(error?.message || '') ? error.message : 'POLL_FAILED';
-        await pool.query(`UPDATE project_repositories SET last_poll_at=now(),last_poll_error=$4
+        const retryAfterMs = error?.rateLimited ? Math.min(86_400_000,Math.max(300_000,error.retryAfterMs || 300_000)) : null;
+        await pool.query(`UPDATE project_repositories SET last_poll_at=now(),last_poll_error=$4,
+          next_poll_at=CASE WHEN $5::integer IS NULL OR NOT poll_scan_enabled THEN next_poll_at
+            ELSE now()+($5 * interval '1 millisecond') END
           WHERE id=$1 AND branch=$2 AND github_repository_id=$3`,
-        [repository.id,repository.branch,repository.github_repository_id,code]);
+        [repository.id,repository.branch,repository.github_repository_id,code,retryAfterMs]);
         if (error instanceof GithubAuthorizationError || error instanceof GithubRepositoryIdentityError) {
           await pool.query(`UPDATE project_repositories SET poll_scan_enabled=false,next_poll_at=NULL,updated_at=now()
             WHERE id=$1 AND poll_scan_enabled=true AND github_repository_id=$2 AND branch=$3`,

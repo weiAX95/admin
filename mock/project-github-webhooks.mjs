@@ -10,6 +10,18 @@ const MAX_ATTEMPTS = 4;
 let processingDeliveries = false;
 export class GithubRepositoryIdentityError extends Error {}
 
+function headResponseError(response) {
+  const limited = response.status === 429 || response.status === 403 && (response.headers?.get?.('x-ratelimit-remaining') === '0' || response.headers?.has?.('retry-after'));
+  const retrySeconds = Number(response.headers?.get?.('retry-after'));
+  const resetSeconds = Number(response.headers?.get?.('x-ratelimit-reset'));
+  const retryAfterMs = Number.isFinite(retrySeconds) && retrySeconds > 0 ? retrySeconds * 1000
+    : Number.isFinite(resetSeconds) && resetSeconds > 0 ? resetSeconds * 1000 - Date.now() + 1000 : 60_000;
+  return Object.assign(new Error(`GITHUB_HEAD_${response.status}`), {
+    rateLimited: limited,
+    retryAfterMs: Math.min(86_400_000,Math.max(60_000,retryAfterMs)),
+  });
+}
+
 async function rawBody(req) {
   const chunks = [];
   let size = 0;
@@ -34,7 +46,7 @@ export async function currentBranchHead(pool, repository) {
     ? await assertGithubPrivateRepoAccess(pool,repository.owner_id,repository.full_name,repository.github_repository_id)
     : await (async () => {
       const response = await githubPublicFetch(base);
-      if (!response.ok) throw new Error(`GITHUB_HEAD_${response.status}`);
+      if (!response.ok) throw headResponseError(response);
       return response.json();
     })();
   if (info.id !== Number(repository.github_repository_id) || info.private !== repository.is_private) throw new GithubRepositoryIdentityError('仓库身份已变化');
@@ -44,7 +56,7 @@ export async function currentBranchHead(pool, repository) {
     ? await githubUserFetch(pool,repository.owner_id,url)
     : await githubPublicFetch(url);
   if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`GITHUB_HEAD_${response.status}`);
+  if (!response.ok) throw headResponseError(response);
   const sha = (await response.json())?.commit?.sha;
   if (!SHA.test(sha || '')) throw new Error('GITHUB_HEAD_INVALID');
   return sha.toLowerCase();
