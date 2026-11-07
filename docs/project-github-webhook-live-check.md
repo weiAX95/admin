@@ -2,6 +2,8 @@
 
 本页是 14.11 的**临时联调方案**，不代表生产部署或验收完成。当前 API 与 PostgreSQL 在本机运行；公网主机只为 GitHub App 的 Webhook 提供一个 HTTPS 路径。域名、有效证书、GitHub App Webhook secret 和受限隧道账号准备好以后才能执行。
 
+当前 `cikelucky.com` 不可用于本项目，不能借用该域名或其证书配置。取得另一个明确授权的专用 HTTPS 地址之前，保持 GitHub App 的入站 Webhook 关闭，使用下文的定时检查或手动“检查并扫描”。
+
 ## 网络边界
 
 ```text
