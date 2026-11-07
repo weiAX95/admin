@@ -113,7 +113,7 @@ async function resolveStoredRepository(client, row, fetchGithub) {
 }
 
 export async function handleProjectRepositories({ pathname, method, client, me, readBody, req, fetchGithub = githubFetch }) {
-  if (pathname !== '/api/project-repositories' && !/^\/api\/project-repositories\/[0-9a-f-]{36}(?:\/refresh|\/identity-preview|\/identity-confirm|\/webhook-scan|\/auto-analysis|\/tasks(?:\/[^/]+)?)?$/i.test(pathname)) return null;
+  if (pathname !== '/api/project-repositories' && !/^\/api\/project-repositories\/[0-9a-f-]{36}(?:\/refresh|\/refresh-and-scan|\/identity-preview|\/identity-confirm|\/webhook-scan|\/auto-analysis|\/tasks(?:\/[^/]+)?)?$/i.test(pathname)) return null;
   if (pathname === '/api/project-repositories' && method === 'GET') {
     if (!canAccess(me,'project_repositories','read',{ownerId:me.id})) return fail(403,'无权查看项目仓库');
     const rows = (await client.query(`${repositoryQuery} WHERE r.owner_id=$1 ORDER BY r.updated_at DESC`, [me.id])).rows;
@@ -156,7 +156,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
   const row = (await client.query(`${repositoryQuery} WHERE r.id=$1 AND r.owner_id=$2`, [id,me.id])).rows[0];
   if (!row) return fail(404, '项目不存在');
   const taskRoute = pathname.includes('/tasks');
-  const operation = pathname.endsWith('/refresh') || pathname.endsWith('/identity-confirm') || pathname.endsWith('/webhook-scan') || pathname.endsWith('/auto-analysis') || (taskRoute && method !== 'GET')
+  const operation = pathname.endsWith('/refresh') || pathname.endsWith('/refresh-and-scan') || pathname.endsWith('/identity-confirm') || pathname.endsWith('/webhook-scan') || pathname.endsWith('/auto-analysis') || (taskRoute && method !== 'GET')
     ? 'manage' : method === 'PATCH' ? 'update' : 'read';
   if (!canAccess(me,'project_repositories',operation,{ownerId:row.owner_id})) return fail(403,'无权操作该项目仓库');
   if (pathname.endsWith('/identity-preview')) {
@@ -298,6 +298,26 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     });
   }
   if (method === 'GET' && pathname.endsWith(`/${id}`)) return { status: 200, data: publicRow(row) };
+  if (method === 'POST' && pathname.endsWith('/refresh-and-scan')) {
+    if (row.github_repository_id === null) return fail(409,'请先核对并绑定此项目的 GitHub 仓库身份');
+    const resolved = await resolveStoredRepository(client,row,fetchGithub);
+    if (resolved.error) return resolved.error;
+    if (resolved.data.githubRepositoryId !== Number(row.github_repository_id) || resolved.data.branch !== row.branch) return fail(409,'GitHub 仓库身份或分支已变化');
+    try {
+      return await auditedWrite(client,req,me,'refresh_and_scan',id,async connection => {
+        const current = (await connection.query('SELECT * FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR UPDATE',[id,me.id])).rows[0];
+        if (!current || current.github_repository_id !== resolved.data.githubRepositoryId || current.branch !== row.branch || current.is_private !== row.is_private) return fail(409,'仓库身份或分支已变化，请刷新后重试');
+        await connection.query('UPDATE project_repositories SET full_name=$2,commit_sha=$3,last_checked_at=now(),updated_at=now() WHERE id=$1',[id,resolved.data.fullName,resolved.data.commitSha]);
+        const existing = (await connection.query("SELECT * FROM project_scans WHERE repository_id=$1 AND branch=$2 AND commit_sha=$3 AND status IN ('queued','scanning') ORDER BY created_at LIMIT 1",[id,current.branch,resolved.data.commitSha])).rows[0];
+        if (existing) return { status: 202, data: { scanId: existing.id, commitSha: resolved.data.commitSha, alreadyQueued: true } };
+        const scanId = crypto.randomUUID();
+        const inserted = (await connection.query(`INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,github_repository_id,budget_file_limit,budget_byte_limit,force_full,status)
+          VALUES($1,$2,$3,$4,$5,$6,200,5242880,$7,'queued') ON CONFLICT DO NOTHING RETURNING id`,[scanId,id,resolved.data.fullName,current.branch,resolved.data.commitSha,resolved.data.githubRepositoryId,current.is_private])).rows[0];
+        if (!inserted) return fail(409,'该 commit 的扫描状态已变化，请刷新后重试');
+        return { status: 202, data: { scanId, commitSha: resolved.data.commitSha, alreadyQueued: false } };
+      });
+    } catch (error) { if (error.code === '23505') return fail(409,'当前账号已接入此仓库分支'); throw error; }
+  }
   if (method === 'POST' && pathname.endsWith('/refresh')) {
     if (row.github_repository_id === null) return fail(409,'请先核对并绑定此项目的 GitHub 仓库身份');
     const resolved = await resolveStoredRepository(client,row,fetchGithub);

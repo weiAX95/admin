@@ -37,6 +37,7 @@ export const updateProjectRepository = (item: ProjectRepository, body: { goal: s
   ...body, expectedGoal: item.goal, expectedExternalContext: item.externalContext, expectedRequirementBaseline: item.requirementBaseline, expectedBaselineVersionId: item.baselineVersionId,
 });
 export const refreshProjectRepository = (id: string) => http.post<ProjectRepository>(`/project-repositories/${id}/refresh`, {});
+export const refreshAndScanProjectRepository = (id: string) => http.post<{ scanId: string; commitSha: string; alreadyQueued: boolean }>(`/project-repositories/${id}/refresh-and-scan`, {});
 export interface ProjectGithubIdentityPreview {
   current: { fullName: string; commitSha: string };
   candidate: { githubRepositoryId: number; fullName: string; branch: string; commitSha: string };

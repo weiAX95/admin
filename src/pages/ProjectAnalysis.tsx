@@ -4,7 +4,7 @@ import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, 
 import { Link } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
-import { confirmProjectGithubIdentity, createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, previewProjectGithubIdentity, refreshProjectRepository, startProjectGithubConnection, startProjectScan, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, updateProjectWebhookScan, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectGithubIdentityPreview, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
+import { confirmProjectGithubIdentity, createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, previewProjectGithubIdentity, refreshAndScanProjectRepository, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, updateProjectWebhookScan, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectGithubIdentityPreview, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
@@ -120,11 +120,10 @@ export default function ProjectAnalysis() {
   const checkAndScan = async (item: ProjectRepository) => {
     setCheckingAndScanning(item.id);
     try {
-      await refreshProjectRepository(item.id);
+      const scan = await refreshAndScanProjectRepository(item.id);
       await load();
-      const scan = await startProjectScan(item.id, { budgetFileLimit: 200, budgetByteLimit: 5242880, forceFull: false });
       setSelectedRepositoryId(item.id);
-      message.success(`已为 ${scan.commitSha.slice(0, 10)} 创建扫描任务 ${scan.id.slice(0, 8)}`);
+      message.success(`${scan.alreadyQueued ? '已有' : '已创建'} ${scan.commitSha.slice(0, 10)} 的扫描任务 ${scan.scanId.slice(0, 8)}`);
     } catch (cause) { setError(cause instanceof Error ? cause.message : '检查并扫描失败'); }
     finally { setCheckingAndScanning(''); }
   };
