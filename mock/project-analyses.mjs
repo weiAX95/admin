@@ -189,7 +189,7 @@ async function saveReport(db, job, report, metadata) {
   const client = pooled ? await db.connect() : db;
   try {
     await client.query('BEGIN');
-    const updated = await client.query("UPDATE project_analyses SET status='completed',summary=$2,selected_file_count=$3,available_file_count=$4,analysis_coverage_complete=$5,error_code=NULL,finished_at=now(),change_notification_state=CASE WHEN trigger_source='webhook' THEN 'pending' ELSE 'none' END,selected_file_paths=$7 WHERE id=$1 AND attempts=$6 AND status='analyzing' RETURNING id", [job.id, report.summary, metadata.selectedCount, metadata.availableCount, metadata.coverageComplete, job.attempts, metadata.selectedFilePaths]);
+    const updated = await client.query("UPDATE project_analyses SET status='completed',summary=$2,selected_file_count=$3,available_file_count=$4,analysis_coverage_complete=$5,error_code=NULL,finished_at=now(),change_notification_state=CASE WHEN trigger_source IN ('webhook','poll') THEN 'pending' ELSE 'none' END,selected_file_paths=$7 WHERE id=$1 AND attempts=$6 AND status='analyzing' RETURNING id", [job.id, report.summary, metadata.selectedCount, metadata.availableCount, metadata.coverageComplete, job.attempts, metadata.selectedFilePaths]);
     if (!updated.rowCount) throw new Error('分析作业已失效');
     const moduleSummaries = new Map(metadata.results.map(result => [result.moduleKey,result.report.summary]));
     for (const module of metadata.modules) await client.query('INSERT INTO project_analysis_modules(analysis_id,module_key,indexed_count,read_count,selected_count,truncated_count,excluded_count,failed_count,unscanned_count,summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [job.id,module.moduleKey,module.indexedCount,module.readCount,module.selectedCount,module.truncatedCount,module.excludedCount,module.failedCount,module.unscannedCount,moduleSummaries.get(module.moduleKey) || null]);
@@ -610,16 +610,16 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   if (method !== 'POST' || analysisId) return fail(405,'不支持该操作');
   const body = await readBody();
   const autoApproval = body?.autoApproval === true;
-  const source = autoApproval ? 'webhook' : triggerSource;
   if (!UUID.test(body?.scanId || '') || typeof body?.modelId !== 'string' || !body.modelId) return fail(400,'请选择扫描记录和模型');
   const tokenBudget = body.tokenBudget ?? null;
   const costBudgetUsd = body.costBudgetUsd ?? null;
   if (tokenBudget !== null && !TOKEN_BUDGETS.includes(tokenBudget) || costBudgetUsd !== null && !COST_BUDGETS.includes(costBudgetUsd)) return fail(400,'分析预算选项无效');
   const scan = (await client.query("SELECT * FROM project_scans WHERE id=$1 AND repository_id=$2 AND status IN ('completed','partial')", [body.scanId,repositoryId])).rows[0];
   if (!scan) return fail(404,'已完成的扫描记录不存在');
+  const source = autoApproval ? scan.trigger_source : triggerSource;
   if (!scanMatchesCurrentRepository(repository,scan)) return fail(409,'扫描与当前仓库身份、分支或 commit 不一致，请重新扫描');
   if (autoApproval && (!repository.is_private || scan.auto_analysis_state !== 'approval_required')) return fail(409,'本次私有分析不在待审核状态');
-  if (source === 'webhook' && (scan.trigger_source !== 'webhook' || repository.is_private !== autoApproval || !repository.webhook_scan_enabled || !repository.auto_analysis_enabled || repository.auto_analysis_model_id !== body.modelId || repository.auto_analysis_token_budget !== tokenBudget || Number(repository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) return fail(409,'自动分析设置或扫描来源已变化');
+  if (['webhook','poll'].includes(source) && (scan.trigger_source !== source || repository.is_private !== autoApproval || !(source === 'poll' ? repository.poll_scan_enabled : repository.webhook_scan_enabled) || !repository.auto_analysis_enabled || repository.auto_analysis_model_id !== body.modelId || repository.auto_analysis_token_budget !== tokenBudget || Number(repository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) return fail(409,'自动分析设置或扫描来源已变化');
   const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1', [body.modelId])).rows[0];
   if (!modelUsable(model,me) || !supportedProvider.has(model.provider) || !model.capabilities?.output?.includes('text')) return fail(409,'模型不可用或没有访问权限');
   if (!await connectionAvailable(client,model)) return fail(409,'模型连接尚未配置');
@@ -654,9 +654,9 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
   try {
     await connection.query('BEGIN');
     await connection.query('SELECT pg_advisory_xact_lock(748204)');
-    const currentRepository = (await connection.query('SELECT github_repository_id,branch,goal,external_context,requirement_baseline,baseline_version_id,commit_sha,webhook_scan_enabled,auto_analysis_enabled,auto_analysis_model_id,auto_analysis_token_budget,auto_analysis_cost_budget_usd FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR SHARE',[repositoryId,me.id])).rows[0];
+    const currentRepository = (await connection.query('SELECT github_repository_id,branch,goal,external_context,requirement_baseline,baseline_version_id,commit_sha,webhook_scan_enabled,poll_scan_enabled,auto_analysis_enabled,auto_analysis_model_id,auto_analysis_token_budget,auto_analysis_cost_budget_usd FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR SHARE',[repositoryId,me.id])).rows[0];
     if (!scanMatchesCurrentRepository(currentRepository,scan) || currentRepository.goal !== repository.goal || currentRepository.external_context !== repository.external_context || currentRepository.requirement_baseline !== repository.requirement_baseline || currentRepository.baseline_version_id !== repository.baseline_version_id || currentRepository.commit_sha.trim() !== repository.commit_sha.trim()) { await connection.query('ROLLBACK'); return fail(409,'仓库身份、分支、commit、项目目标、外部配置或需求版本已变化，请重新扫描或提交分析'); }
-    if (source === 'webhook' && (!currentRepository.webhook_scan_enabled || !currentRepository.auto_analysis_enabled || currentRepository.auto_analysis_model_id !== model.id || currentRepository.auto_analysis_token_budget !== tokenBudget || Number(currentRepository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) { await connection.query('ROLLBACK'); return fail(409,'自动分析设置已变化'); }
+    if (['webhook','poll'].includes(source) && (!(source === 'poll' ? currentRepository.poll_scan_enabled : currentRepository.webhook_scan_enabled) || !currentRepository.auto_analysis_enabled || currentRepository.auto_analysis_model_id !== model.id || currentRepository.auto_analysis_token_budget !== tokenBudget || Number(currentRepository.auto_analysis_cost_budget_usd) !== costBudgetUsd)) { await connection.query('ROLLBACK'); return fail(409,'自动分析设置已变化'); }
     if (autoApproval && !(await connection.query("SELECT 1 FROM project_scans WHERE id=$1 AND auto_analysis_state='approval_required' FOR UPDATE",[scan.id])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'本次私有分析已处理，请刷新'); }
     if (repository.is_private && !(await connection.query('SELECT 1 FROM project_github_connections WHERE owner_id=$1 FOR SHARE',[me.id])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'GitHub 授权已断开，请重新连接'); }
     if (modelConnection && !(await connection.query('SELECT 1 FROM model_connections WHERE id=$1 AND version=$2 AND active=true',[modelConnection.id,modelConnection.version])).rowCount) { await connection.query('ROLLBACK'); return fail(409,'模型连接配置已变化，请重新提交分析'); }
@@ -665,8 +665,8 @@ export async function handleProjectAnalyses({ pathname, method, client, me, read
       if (autoApproval) await connection.query("UPDATE project_scans SET auto_analysis_state='queued',auto_analysis_id=$2,auto_analysis_error=NULL WHERE id=$1",[scan.id,active.id]);
       await connection.query('COMMIT'); return { status: 202, data: view(active) };
     }
-    if (source === 'webhook') {
-      const existing = (await connection.query("SELECT * FROM project_analyses WHERE scan_id=$1 AND trigger_source='webhook' LIMIT 1",[scan.id])).rows[0];
+    if (['webhook','poll'].includes(source)) {
+      const existing = (await connection.query("SELECT * FROM project_analyses WHERE scan_id=$1 AND trigger_source IN ('webhook','poll') LIMIT 1",[scan.id])).rows[0];
       if (existing) {
         if (autoApproval) await connection.query("UPDATE project_scans SET auto_analysis_state='queued',auto_analysis_id=$2,auto_analysis_error=NULL WHERE id=$1",[scan.id,existing.id]);
         await connection.query('COMMIT'); return { status: 202, data: view(existing) };

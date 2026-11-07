@@ -71,7 +71,7 @@ export async function queueScan(client, repository, commitSha, source = 'webhook
     }
   }
   const queued = await client.query(`INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,force_full,trigger_source,auto_analysis_state,github_repository_id,status)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'queued') ON CONFLICT DO NOTHING RETURNING id`,[crypto.randomUUID(),repository.id,repository.full_name,repository.branch,commitSha,repository.is_private,source,source === 'webhook' && repository.auto_analysis_enabled ? 'pending' : 'none',repository.github_repository_id]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'queued') ON CONFLICT DO NOTHING RETURNING id`,[crypto.randomUUID(),repository.id,repository.full_name,repository.branch,commitSha,repository.is_private,source,repository.auto_analysis_enabled ? 'pending' : 'none',repository.github_repository_id]);
   return queued.rowCount;
 }
 

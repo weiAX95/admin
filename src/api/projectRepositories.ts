@@ -104,7 +104,7 @@ export const getProjectScanFile = (repositoryId: string, scanId: string, path: s
 
 export interface ProjectAnalysisJob {
   id: string; repositoryId: string; scanId: string; commitSha: string; branch: string;
-  triggerSource: 'manual' | 'webhook';
+  triggerSource: 'manual' | 'webhook' | 'poll';
   baselineVersionId: string | null;
   externalContext: string;
   modelId: string; model: string; status: 'queued' | 'analyzing' | 'completed' | 'failed' | 'canceled';

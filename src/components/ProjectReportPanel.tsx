@@ -175,12 +175,12 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       try {
         await updateProjectAutoAnalysis(repository, { enabled, modelId: autoModelId, tokenBudget: autoTokenBudget, costBudgetUsd: autoCostBudgetUsd, confirmRecurringCost: enabled });
         onRepositoryChanged();
-        message.success(enabled ? '提交后自动分析已开启' : '提交后自动分析已关闭');
+        message.success(enabled ? '自动分析已开启' : '自动分析已关闭');
       } catch (cause) { setError(cause instanceof Error ? cause.message : '自动分析设置失败'); }
       finally { setAutoSaving(false); }
     };
     if (!enabled) return void save();
-    Modal.confirm({ title: repository.private ? '确认开启提交后待审核分析？' : '确认开启持续模型分析？', content: repository.private ? `私有仓库收到对应分支提交后只会自动扫描。每次模型分析仍需查看代码范围并确认，确认后单次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}。` : `公开仓库每次收到对应分支的提交后，将在扫描完成时自动向所选模型发送代码摘录、项目目标、仓库外配置说明和需求文档。每次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}；仍受账号每日预算和限流约束，重复提交可能持续产生费用。`, okText: '确认开启', onOk: save });
+    Modal.confirm({ title: repository.private ? '确认开启私有仓库待审核分析？' : '确认开启持续模型分析？', content: repository.private ? `私有仓库经 Webhook 或定时检查发现新提交后会自动扫描。每次模型分析仍需查看代码范围并确认，确认后单次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}。` : `公开仓库经 Webhook 或定时检查发现新提交后，将在扫描完成时自动向所选模型发送代码摘录、项目目标、仓库外配置说明和需求文档。每次最多 ${autoTokenBudget.toLocaleString()} token、$${autoCostBudgetUsd.toFixed(2)}；仍受账号每日预算和限流约束，重复提交可能持续产生费用。`, okText: '确认开启', onOk: save });
   };
   const start = async (selectedScan = scanId, selectedModel = modelId, budget = { tokenBudget, costBudgetUsd }, autoApproval = false) => {
     if (!selectedScan || !selectedModel) return;
@@ -349,15 +349,15 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const renderSnapshotTask = (task: ProjectAnalysisReport['linkedTasks'][number]) => <Space key={task.id} size="small" wrap><Tag>{taskStates[task.status] || task.status} · {task.progress === null ? '进度未知' : `${Math.round(task.progress)}%`}</Tag>{task.currentlyAvailable ? <Link to={`/tasks/${task.id}`}>{task.title}</Link> : <Typography.Text type="secondary">{task.title}（当前不可访问）</Typography.Text>}</Space>;
 
   return <Card title="项目分析报告">
-    <Card size="small" title={repository.private ? '提交后待确认分析' : '提交后自动分析'} style={{ marginBottom: 16 }}>
+    <Card size="small" title={repository.private ? '自动扫描后待确认分析' : '自动扫描后分析'} style={{ marginBottom: 16 }}>
       <Space wrap>
         <Select aria-label="自动分析模型" placeholder="选择模型" value={autoModelId || undefined} onChange={setAutoModelId} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
         <Select aria-label="自动分析 token 上限" value={autoTokenBudget} onChange={setAutoTokenBudget} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 170 }} options={[30000,60000,120000].map(value => ({ value, label: `${value.toLocaleString()} token` }))} />
         <Select aria-label="自动分析单次费用上限" value={autoCostBudgetUsd} onChange={setAutoCostBudgetUsd} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 170 }} options={[0.1,0.5,1,5].map(value => ({ value, label: `最多 $${value.toFixed(2)}` }))} />
-        <Switch aria-label="提交后自动模型分析" checked={repository.autoAnalysisEnabled} loading={autoSaving} disabled={!repository.autoAnalysisEnabled && (repository.githubRepositoryId === null || !repository.webhookScanEnabled || !autoModelId)} onChange={value => void setAutoAnalysis(value)} />
+        <Switch aria-label="自动模型分析" checked={repository.autoAnalysisEnabled} loading={autoSaving} disabled={!repository.autoAnalysisEnabled && (repository.githubRepositoryId === null || !(repository.webhookScanEnabled || repository.pollScanEnabled) || !autoModelId)} onChange={value => void setAutoAnalysis(value)} />
         <Typography.Text>{repository.autoAnalysisEnabled ? '已开启' : '未开启'}</Typography.Text>
       </Space>
-      <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>{repository.private ? '先开启“提交后扫描”。每次扫描结束后仍需查看私有代码发送范围，并由你确认本次模型调用。' : '先开启“提交后扫描”，再单独确认持续模型调用。'}已开启时如需更换模型或费用上限，请先关闭后重新配置。</Typography.Paragraph>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>{repository.private ? '先开启“提交后扫描”或“定时检查”。每次扫描结束后仍需查看私有代码发送范围，并由你确认本次模型调用。' : '先开启“提交后扫描”或“定时检查”，再单独确认持续模型调用。'}已开启时如需更换模型或费用上限，请先关闭后重新配置。</Typography.Paragraph>
       {repository.private && repository.autoAnalysisEnabled && scans.filter(item => item.githubRepositoryId !== null && item.githubRepositoryId === repository.githubRepositoryId && item.autoAnalysisState === 'approval_required').map(item => <div key={item.id} style={{ marginTop: 8 }}><Button loading={starting} onClick={() => void start(item.id, repository.autoAnalysisModelId || '', { tokenBudget: repository.autoAnalysisTokenBudget, costBudgetUsd: repository.autoAnalysisCostBudgetUsd }, true)}>审核 {item.commitSha.slice(0,10)} 的发送范围并分析</Button></div>)}
     </Card>
     {scans.some(scan => scan.githubRepositoryId === null) && <Alert type="info" showIcon message="旧扫描仅供查看" description="仓库身份绑定前的扫描无法证明来源，不能用于新报告；请核对仓库后重新扫描。" style={{ marginBottom: 16 }} />}
@@ -394,7 +394,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       { title: '分支', dataIndex: 'branch' },
       { title: 'commit', dataIndex: 'commitSha', render: (value: string) => <code>{value.slice(0, 10)}</code> },
       { title: '模型', dataIndex: 'model' },
-      { title: '来源', render: (_, item: ProjectAnalysisJob) => item.triggerSource === 'webhook' ? <Tag color="blue">提交事件</Tag> : '手动' },
+      { title: '来源', render: (_, item: ProjectAnalysisJob) => item.triggerSource === 'webhook' ? <Tag color="blue">提交事件</Tag> : item.triggerSource === 'poll' ? <Tag color="cyan">定时检查</Tag> : '手动' },
       { title: '状态', render: (_, item: ProjectAnalysisJob) => <Space><Tag color={item.status === 'completed' ? 'success' : item.status === 'failed' ? 'error' : item.status === 'canceled' ? 'default' : 'processing'}>{states[item.status]}</Tag><Typography.Text type="secondary">{item.attempts}/{item.maxAttempts} 次</Typography.Text></Space> },
       { title: '覆盖', render: (_, item: ProjectAnalysisJob) => item.status === 'completed' ? `${item.selectedFileCount}/${item.availableFileCount} 文件` : '—' },
       { title: '复用', render: (_, item: ProjectAnalysisJob) => item.reusedCallCount ? `${item.reusedCallCount} 次调用` : '—' },

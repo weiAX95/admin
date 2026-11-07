@@ -202,8 +202,10 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     }
     return auditedWrite(client,req,me,'update_poll_scan',id,async connection => {
       const updated = (await connection.query(`UPDATE project_repositories SET poll_scan_enabled=$3,
+        auto_analysis_enabled=CASE WHEN $3 OR webhook_scan_enabled THEN auto_analysis_enabled ELSE false END,
         next_poll_at=CASE WHEN $3 THEN now() ELSE NULL END,updated_at=now()
         WHERE id=$1 AND owner_id=$2 AND poll_scan_enabled=$4 RETURNING *`,[id,me.id,body.enabled,body.expectedEnabled])).rows[0];
+      if (updated && !body.enabled) await connection.query("UPDATE project_scans SET auto_analysis_state='skipped',auto_analysis_error='定时检查已关闭' WHERE repository_id=$1 AND trigger_source='poll' AND auto_analysis_state IN ('pending','approval_required')",[id]);
       return updated ? { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) }
         : fail(409,'定时扫描设置已变化，请刷新后重试');
     });
@@ -219,8 +221,8 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
       catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
     }
     return auditedWrite(client,req,me,'update_webhook_scan',id,async connection => {
-      const updated = (await connection.query('UPDATE project_repositories SET webhook_scan_enabled=$3,auto_analysis_enabled=CASE WHEN $3 THEN auto_analysis_enabled ELSE false END,updated_at=now() WHERE id=$1 AND owner_id=$2 AND webhook_scan_enabled=$4 RETURNING *',[id,me.id,body.enabled,body.expectedEnabled])).rows[0];
-      if (updated && !body.enabled) await connection.query("UPDATE project_scans SET auto_analysis_state='skipped',auto_analysis_error='提交后扫描已关闭' WHERE repository_id=$1 AND auto_analysis_state IN ('pending','approval_required')",[id]);
+      const updated = (await connection.query('UPDATE project_repositories SET webhook_scan_enabled=$3,auto_analysis_enabled=CASE WHEN $3 OR poll_scan_enabled THEN auto_analysis_enabled ELSE false END,updated_at=now() WHERE id=$1 AND owner_id=$2 AND webhook_scan_enabled=$4 RETURNING *',[id,me.id,body.enabled,body.expectedEnabled])).rows[0];
+      if (updated && !body.enabled) await connection.query("UPDATE project_scans SET auto_analysis_state='skipped',auto_analysis_error='提交后扫描已关闭' WHERE repository_id=$1 AND trigger_source='webhook' AND auto_analysis_state IN ('pending','approval_required')",[id]);
       return updated ? { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) } : fail(409,'自动扫描设置已变化，请刷新后重试');
     });
   }
@@ -230,7 +232,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.enabled !== 'boolean' || typeof body.expectedEnabled !== 'boolean' || Object.keys(body).some(key => !['enabled','expectedEnabled','modelId','tokenBudget','costBudgetUsd','confirmRecurringCost'].includes(key))) return fail(400,'自动分析设置无效');
     if (body.enabled) {
       if (row.github_repository_id === null) return fail(409,'请先核对并绑定此项目的 GitHub 仓库身份');
-      if (!row.webhook_scan_enabled) return fail(409,'请先开启提交后扫描');
+      if (!row.webhook_scan_enabled && !row.poll_scan_enabled) return fail(409,'请先开启提交后扫描或定时检查');
       if (row.is_private) {
         try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name,row.github_repository_id); }
         catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
@@ -244,7 +246,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
         auto_analysis_model_id=CASE WHEN $3 THEN $4 ELSE auto_analysis_model_id END,
         auto_analysis_token_budget=CASE WHEN $3 THEN $5 ELSE auto_analysis_token_budget END,
         auto_analysis_cost_budget_usd=CASE WHEN $3 THEN $6 ELSE auto_analysis_cost_budget_usd END,
-        updated_at=now() WHERE id=$1 AND owner_id=$2 AND auto_analysis_enabled=$7 AND ($3=false OR webhook_scan_enabled=true)
+        updated_at=now() WHERE id=$1 AND owner_id=$2 AND auto_analysis_enabled=$7 AND ($3=false OR webhook_scan_enabled=true OR poll_scan_enabled=true)
         RETURNING *`,[id,me.id,body.enabled,body.modelId || null,body.tokenBudget || null,body.costBudgetUsd || null,body.expectedEnabled])).rows[0];
       if (updated && !body.enabled) await connection.query("UPDATE project_scans SET auto_analysis_state='skipped',auto_analysis_error='提交后分析已关闭' WHERE repository_id=$1 AND auto_analysis_state IN ('pending','approval_required')",[id]);
       return updated ? { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) } : fail(409,'自动分析设置已变化，请刷新后重试');
