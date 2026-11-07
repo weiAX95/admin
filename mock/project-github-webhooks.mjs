@@ -28,7 +28,7 @@ function validSignature(body, signature, secret) {
   return supplied.length === expected.length && crypto.timingSafeEqual(supplied,expected);
 }
 
-async function currentBranchHead(pool, repository) {
+export async function currentBranchHead(pool, repository) {
   const base = `https://api.github.com/repos/${repository.full_name}`;
   const info = repository.is_private
     ? await assertGithubPrivateRepoAccess(pool,repository.owner_id,repository.full_name,repository.github_repository_id)
@@ -50,12 +50,12 @@ async function currentBranchHead(pool, repository) {
   return sha.toLowerCase();
 }
 
-async function queueScan(client, repository, commitSha) {
+export async function queueScan(client, repository, commitSha, source = 'webhook') {
   await client.query('UPDATE project_repositories SET commit_sha=$2,last_checked_at=now(),updated_at=now() WHERE id=$1',[repository.id,commitSha]);
   const previous = await client.query("SELECT 1 FROM project_scans WHERE repository_id=$1 AND branch=$2 AND commit_sha=$3 AND github_repository_id=$4 AND status IN ('queued','scanning','completed','partial') LIMIT 1",[repository.id,repository.branch,commitSha,repository.github_repository_id]);
   if (previous.rowCount) return 0;
-  const queuedScan = (await client.query(`SELECT id FROM project_scans WHERE repository_id=$1 AND github_repository_id=$2 AND branch=$3 AND trigger_source='webhook' AND status='queued'
-    AND created_at>now()-interval '2 minutes' ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE SKIP LOCKED`,[repository.id,repository.github_repository_id,repository.branch])).rows[0];
+  const queuedScan = source === 'webhook' ? (await client.query(`SELECT id FROM project_scans WHERE repository_id=$1 AND github_repository_id=$2 AND branch=$3 AND trigger_source='webhook' AND status='queued'
+    AND created_at>now()-interval '2 minutes' ORDER BY created_at DESC,id DESC LIMIT 1 FOR UPDATE SKIP LOCKED`,[repository.id,repository.github_repository_id,repository.branch])).rows[0] : null;
   if (queuedScan) {
     await client.query('SAVEPOINT webhook_coalesce_scan');
     try {
@@ -71,7 +71,7 @@ async function queueScan(client, repository, commitSha) {
     }
   }
   const queued = await client.query(`INSERT INTO project_scans(id,repository_id,full_name,branch,commit_sha,force_full,trigger_source,auto_analysis_state,github_repository_id,status)
-    VALUES($1,$2,$3,$4,$5,$6,'webhook',$7,$8,'queued') ON CONFLICT DO NOTHING RETURNING id`,[crypto.randomUUID(),repository.id,repository.full_name,repository.branch,commitSha,repository.is_private,repository.auto_analysis_enabled ? 'pending' : 'none',repository.github_repository_id]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'queued') ON CONFLICT DO NOTHING RETURNING id`,[crypto.randomUUID(),repository.id,repository.full_name,repository.branch,commitSha,repository.is_private,source,source === 'webhook' && repository.auto_analysis_enabled ? 'pending' : 'none',repository.github_repository_id]);
   return queued.rowCount;
 }
 

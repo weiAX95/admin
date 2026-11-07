@@ -79,6 +79,7 @@ import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webh
 import { handleProjectRepositories } from './project-repositories.mjs';
 import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, GithubOAuthFailure, handleProjectGithubAuth, reconcileDisconnectedGithubAutomation } from './project-github-auth.mjs';
 import { handleProjectGithubWebhook, processProjectGithubDeliveries } from './project-github-webhooks.mjs';
+import { processProjectPollScans } from './project-poll-scans.mjs';
 import { handleProjectScans, resumeProjectScans } from './project-scan-jobs.mjs';
 import { handleProjectAnalyses, resumeProjectAnalyses } from './project-analyses.mjs';
 import { processProjectAutoAnalyses } from './project-auto-analyses.mjs';
@@ -2581,6 +2582,8 @@ try {
     console.log(`[mock] PostgreSQL API listening on http://127.0.0.1:${PORT}`);
     void processProjectGithubDeliveries(pool).catch(error => console.error('[project-github] delivery processing failed:',error));
     setInterval(() => { void processProjectGithubDeliveries(pool).catch(error => console.error('[project-github] delivery processing failed:',error)); }, 5000).unref();
+    void processProjectPollScans(pool).catch(error => console.error('[project-poll-scans] processing failed:',error));
+    setInterval(() => { void processProjectPollScans(pool).catch(error => console.error('[project-poll-scans] processing failed:',error)); }, 60_000).unref();
     setInterval(() => { void reconcileDisconnectedGithubAutomation(pool).catch(error => console.error('[project-github] authorization cleanup failed:',error)); }, 60_000).unref();
     setInterval(() => { void resumeProjectScans(pool, undefined, false).catch(error => console.error('[project-scans] resume failed:',error)); }, 5000).unref();
     setInterval(() => { void resumeProjectAnalyses(pool).catch(error => console.error('[project-analyses] resume failed:',error)); }, 5000).unref();

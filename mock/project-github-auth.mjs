@@ -52,7 +52,7 @@ export class GithubOAuthFailure extends Error {
 }
 
 async function stopPrivateGithubAutomation(client, ownerId) {
-  await client.query('UPDATE project_repositories SET webhook_scan_enabled=false,auto_analysis_enabled=false,updated_at=now() WHERE owner_id=$1 AND is_private=true AND (webhook_scan_enabled=true OR auto_analysis_enabled=true)', [ownerId]);
+  await client.query('UPDATE project_repositories SET webhook_scan_enabled=false,poll_scan_enabled=false,next_poll_at=NULL,auto_analysis_enabled=false,updated_at=now() WHERE owner_id=$1 AND is_private=true AND (webhook_scan_enabled=true OR poll_scan_enabled=true OR auto_analysis_enabled=true)', [ownerId]);
   await client.query(`UPDATE project_scans s SET auto_analysis_state='skipped',auto_analysis_error='GitHub 授权已断开'
     FROM project_repositories r WHERE s.repository_id=r.id AND r.owner_id=$1 AND r.is_private=true
     AND s.auto_analysis_state IN ('pending','approval_required')`, [ownerId]);
@@ -61,8 +61,8 @@ async function stopPrivateGithubAutomation(client, ownerId) {
 // Run outside GitHub request/refresh transactions: the webhook worker may hold
 // a repository row lock while it checks the current GitHub head.
 export async function reconcileDisconnectedGithubAutomation(pool) {
-  await pool.query(`UPDATE project_repositories r SET webhook_scan_enabled=false,auto_analysis_enabled=false,updated_at=now()
-    WHERE r.is_private=true AND (r.webhook_scan_enabled=true OR r.auto_analysis_enabled=true)
+  await pool.query(`UPDATE project_repositories r SET webhook_scan_enabled=false,poll_scan_enabled=false,next_poll_at=NULL,auto_analysis_enabled=false,updated_at=now()
+    WHERE r.is_private=true AND (r.webhook_scan_enabled=true OR r.poll_scan_enabled=true OR r.auto_analysis_enabled=true)
     AND NOT EXISTS (SELECT 1 FROM project_github_connections c WHERE c.owner_id=r.owner_id AND c.refresh_expires_at>now())`);
   await pool.query(`UPDATE project_scans s SET auto_analysis_state='skipped',auto_analysis_error='GitHub 授权已失效'
     FROM project_repositories r WHERE s.repository_id=r.id AND r.is_private=true

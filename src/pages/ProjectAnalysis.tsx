@@ -4,7 +4,7 @@ import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, 
 import { Link } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
-import { confirmProjectGithubIdentity, createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, previewProjectGithubIdentity, refreshAndScanProjectRepository, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectRepository, updateProjectWebhookScan, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectGithubIdentityPreview, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
+import { confirmProjectGithubIdentity, createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, previewProjectGithubIdentity, refreshAndScanProjectRepository, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectPollScan, updateProjectRepository, updateProjectWebhookScan, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectGithubIdentityPreview, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
 import type { AuthUser, LearningTask } from '../types';
 import ProjectScanPanel from '../components/ProjectScanPanel';
 
@@ -28,6 +28,7 @@ export default function ProjectAnalysis() {
   const [identityPreview, setIdentityPreview] = useState<{ item: ProjectRepository; preview: ProjectGithubIdentityPreview } | null>(null);
   const [identityConfirmed, setIdentityConfirmed] = useState(false);
   const [webhookSaving, setWebhookSaving] = useState('');
+  const [pollSaving, setPollSaving] = useState('');
   const [selectedRepositoryId, setSelectedRepositoryId] = useState(() => new URLSearchParams(window.location.search).get('repositoryId') || '');
   const [baselineRepositoryId, setBaselineRepositoryId] = useState('');
   const [baselineVersions, setBaselineVersions] = useState<ProjectRequirementBaseline[]>([]);
@@ -155,6 +156,18 @@ export default function ProjectAnalysis() {
       if (cause instanceof ApiError && cause.status === 409) await load();
       setError(cause instanceof Error ? cause.message : '自动扫描设置失败');
     } finally { setWebhookSaving(''); }
+  };
+  const changePollScan = async (item: ProjectRepository, enabled: boolean) => {
+    setPollSaving(item.id);
+    try {
+      const updated = await updateProjectPollScan(item,enabled);
+      setItems(current => current.map(repository => repository.id === item.id ? updated : repository));
+      setError('');
+      message.success(enabled ? '定时检查已开启' : '定时检查已关闭');
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 409) await load();
+      setError(cause instanceof Error ? cause.message : '定时检查设置失败');
+    } finally { setPollSaving(''); }
   };
   const openEdit = (item: ProjectRepository) => {
     setEditing(item);
@@ -284,6 +297,7 @@ export default function ProjectAnalysis() {
         { title: '需求基线', dataIndex: 'requirementBaseline', render: value => value || '未指定' },
         { title: '最近读取', dataIndex: 'lastCheckedAt', render: value => new Date(value).toLocaleString('zh-CN') },
         { title: '最近完成分析', render: (_, item: ProjectRepository) => item.lastAnalysisAt && item.lastAnalyzedCommitSha ? <Space direction="vertical" size={0}><span>{new Date(item.lastAnalysisAt).toLocaleString('zh-CN')}</span><a href={`${item.url}/commit/${item.lastAnalyzedCommitSha}`} target="_blank" rel="noopener noreferrer" title={item.lastAnalyzedCommitSha}><code>{item.lastAnalyzedCommitSha.slice(0, 10)}</code></a>{item.commitSha !== item.lastAnalyzedCommitSha && <Tag color="warning">有新提交待分析</Tag>}</Space> : '尚无完成的分析' },
+        { title: '定时检查', render: (_, item: ProjectRepository) => <Tooltip title="每 5 分钟核对一次 GitHub 分支；有新 commit 时自动建立扫描。此模式不自动调用分析模型。"><span><Switch aria-label={`${item.fullName} 定时检查`} checked={item.pollScanEnabled} disabled={item.githubRepositoryId === null} loading={pollSaving === item.id} onChange={enabled => void changePollScan(item,enabled)} /></span></Tooltip> },
         { title: '提交后扫描', render: (_, item: ProjectRepository) => <Tooltip title={item.githubRepositoryId === null ? '先核对 GitHub 仓库身份，再开启自动扫描' : !githubConnection?.webhookConfigured ? '服务端尚未配置 GitHub Webhook 密钥' : '收到已验证的 GitHub 分支提交事件后自动创建扫描；公开仓库可另行开启自动模型分析'}><span><Switch aria-label={`${item.fullName} 提交后自动扫描`} checked={item.webhookScanEnabled} disabled={item.githubRepositoryId === null || !item.webhookScanEnabled && !githubConnection?.webhookConfigured} loading={webhookSaving === item.id} onChange={enabled => void changeWebhookScan(item,enabled)} /></span></Tooltip> },
         { title: '操作', render: (_, item: ProjectRepository) => <Space wrap><Button type="link" onClick={() => openEdit(item)}>编辑目标</Button>{item.githubRepositoryId === null ? <Button type="link" loading={identityLoading === item.id} onClick={() => void previewIdentity(item)}>核对仓库身份</Button> : <><Button type="link" loading={refreshing === item.id} disabled={checkingAndScanning === item.id} onClick={() => void refresh(item.id)}>更新 commit</Button><Button type="link" loading={checkingAndScanning === item.id} disabled={refreshing === item.id} onClick={() => void checkAndScan(item)}>检查并扫描</Button></>}<Button type="link" onClick={() => void openBaseline(item)}>需求文档</Button><Button type="link" onClick={() => void openTaskLinks(item.id)}>关联任务</Button><Button type="link" onClick={() => setSelectedRepositoryId(item.id)}>扫描记录</Button></Space> },
       ]} />

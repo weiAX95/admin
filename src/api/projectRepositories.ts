@@ -6,6 +6,7 @@ export interface ProjectRepository {
   fullName: string;
   private: boolean;
   githubRepositoryId: number | null;
+  pollScanEnabled: boolean;
   webhookScanEnabled: boolean;
   autoAnalysisEnabled: boolean;
   autoAnalysisModelId: string | null;
@@ -49,6 +50,7 @@ export const confirmProjectGithubIdentity = (id: string, candidate: ProjectGithu
   expectedCommitSha: candidate.commitSha,
 });
 export const updateProjectWebhookScan = (item: ProjectRepository, enabled: boolean) => http.patch<ProjectRepository>(`/project-repositories/${item.id}/webhook-scan`, { enabled, expectedEnabled: item.webhookScanEnabled });
+export const updateProjectPollScan = (item: ProjectRepository, enabled: boolean) => http.patch<ProjectRepository>(`/project-repositories/${item.id}/poll-scan`, { enabled, expectedEnabled: item.pollScanEnabled });
 export const updateProjectAutoAnalysis = (item: ProjectRepository, config: { enabled: boolean; modelId?: string; tokenBudget?: number; costBudgetUsd?: number; confirmRecurringCost?: boolean }) => http.patch<ProjectRepository>(`/project-repositories/${item.id}/auto-analysis`, { ...config, expectedEnabled: item.autoAnalysisEnabled });
 export interface ProjectLinkedTask { id: string; title: string; status: string; progress: number | null; ownerId?: string; requirementId: string | null }
 export const listProjectLinkedTasks = (repositoryId: string) => http.get<{ items: ProjectLinkedTask[]; requirements: { id: string; text: string }[]; baselineVersionId: string | null }>(`/project-repositories/${repositoryId}/tasks`);
@@ -70,7 +72,7 @@ export interface ProjectScan {
   status: 'queued' | 'scanning' | 'completed' | 'partial' | 'failed';
   coverageComplete: boolean;
   forceFull: boolean;
-  triggerSource: 'manual' | 'webhook';
+  triggerSource: 'manual' | 'webhook' | 'poll';
   autoAnalysisState: 'none' | 'pending' | 'processing' | 'approval_required' | 'queued' | 'skipped' | 'failed';
   autoAnalysisError: string | null;
   autoAnalysisId: string | null;
