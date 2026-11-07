@@ -8,7 +8,7 @@ const REPOSITORY = /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/;
 const MAX_BODY_BYTES = 1024 * 1024;
 const MAX_ATTEMPTS = 4;
 let processingDeliveries = false;
-class GithubRepositoryIdentityError extends Error {}
+export class GithubRepositoryIdentityError extends Error {}
 
 async function rawBody(req) {
   const chunks = [];
