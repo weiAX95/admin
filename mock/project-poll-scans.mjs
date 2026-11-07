@@ -27,7 +27,8 @@ export async function processProjectPollScans(pool) {
           const current = (await client.query(`SELECT r.*,u.status AS owner_status FROM project_repositories r
             JOIN users u ON u.id=r.owner_id WHERE r.id=$1 FOR UPDATE OF r`,[repository.id])).rows[0];
           if (current?.poll_scan_enabled && current.branch === repository.branch
-            && current.github_repository_id === repository.github_repository_id && current.owner_status === 'active') {
+            && current.github_repository_id === repository.github_repository_id && current.owner_status === 'active'
+            && current.commit_sha.trim() === repository.commit_sha.trim()) {
             await queueScan(client,current,head,'poll');
             await client.query('UPDATE project_repositories SET last_poll_at=now(),last_poll_error=NULL WHERE id=$1',[repository.id]);
           }

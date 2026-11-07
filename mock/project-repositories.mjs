@@ -326,7 +326,8 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     try {
       return await auditedWrite(client,req,me,'refresh_and_scan',id,async connection => {
         const current = (await connection.query('SELECT * FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR UPDATE',[id,me.id])).rows[0];
-        if (!current || Number(current.github_repository_id) !== resolved.data.githubRepositoryId || current.branch !== row.branch || current.is_private !== row.is_private) return fail(409,'仓库身份或分支已变化，请刷新后重试');
+        if (!current || Number(current.github_repository_id) !== resolved.data.githubRepositoryId || current.branch !== row.branch || current.is_private !== row.is_private
+          || current.commit_sha.trim() !== row.commit_sha.trim()) return fail(409,'仓库身份、分支或 commit 已变化，请刷新后重试');
         await connection.query('UPDATE project_repositories SET full_name=$2,commit_sha=$3,last_checked_at=now(),updated_at=now() WHERE id=$1',[id,resolved.data.fullName,resolved.data.commitSha]);
         const existing = (await connection.query("SELECT * FROM project_scans WHERE repository_id=$1 AND branch=$2 AND commit_sha=$3 AND status IN ('queued','scanning') ORDER BY created_at LIMIT 1",[id,current.branch,resolved.data.commitSha])).rows[0];
         if (existing) return { status: 202, data: { scanId: existing.id, commitSha: resolved.data.commitSha, alreadyQueued: true } };
@@ -346,9 +347,9 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     try {
       return await auditedWrite(client,req,me,'refresh',id,async connection => {
         const updated = (await connection.query(`UPDATE project_repositories SET full_name=$1,commit_sha=$2,last_checked_at=now(),updated_at=now()
-          WHERE id=$3 AND owner_id=$4 AND github_repository_id=$5 RETURNING *`,
-        [resolved.data.fullName,resolved.data.commitSha,id,me.id,resolved.data.githubRepositoryId])).rows[0];
-        if (!updated) return fail(409, 'GitHub 仓库身份已变化');
+          WHERE id=$3 AND owner_id=$4 AND github_repository_id=$5 AND branch=$6 AND commit_sha=$7 RETURNING *`,
+        [resolved.data.fullName,resolved.data.commitSha,id,me.id,resolved.data.githubRepositoryId,row.branch,row.commit_sha])).rows[0];
+        if (!updated) return fail(409, '仓库身份、分支或 commit 已变化，请刷新后重试');
         return { status: 200, data: publicRow({ ...updated, last_analysis_at: row.last_analysis_at, last_analyzed_commit_sha: row.last_analyzed_commit_sha }) };
       });
     } catch (error) { if (error.code === '23505') return fail(409,'当前账号已接入此仓库分支'); throw error; }
