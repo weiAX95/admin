@@ -306,7 +306,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     try {
       return await auditedWrite(client,req,me,'refresh_and_scan',id,async connection => {
         const current = (await connection.query('SELECT * FROM project_repositories WHERE id=$1 AND owner_id=$2 FOR UPDATE',[id,me.id])).rows[0];
-        if (!current || current.github_repository_id !== resolved.data.githubRepositoryId || current.branch !== row.branch || current.is_private !== row.is_private) return fail(409,'仓库身份或分支已变化，请刷新后重试');
+        if (!current || Number(current.github_repository_id) !== resolved.data.githubRepositoryId || current.branch !== row.branch || current.is_private !== row.is_private) return fail(409,'仓库身份或分支已变化，请刷新后重试');
         await connection.query('UPDATE project_repositories SET full_name=$2,commit_sha=$3,last_checked_at=now(),updated_at=now() WHERE id=$1',[id,resolved.data.fullName,resolved.data.commitSha]);
         const existing = (await connection.query("SELECT * FROM project_scans WHERE repository_id=$1 AND branch=$2 AND commit_sha=$3 AND status IN ('queued','scanning') ORDER BY created_at LIMIT 1",[id,current.branch,resolved.data.commitSha])).rows[0];
         if (existing) return { status: 202, data: { scanId: existing.id, commitSha: resolved.data.commitSha, alreadyQueued: true } };
