@@ -143,7 +143,7 @@ export default function Experiments() {
   const [definitionOpen, setDefinitionOpen] = useState(false);
   const [trialPrompt,setTrialPrompt]=useState<{promptId:string;versionId:string}|null>(null);
   const [editingDefinition, setEditingDefinition] = useState<ExperimentDefinition | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(() => searchParams.get('settings') === '1');
   const [compareIds, setCompareIds] = useState<React.Key[]>([]);
   const currentUser = getStoredUser<AuthUser>();
 

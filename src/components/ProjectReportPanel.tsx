@@ -386,7 +386,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <div style={{ maxHeight:180,overflow:'auto',background:'rgba(127,127,127,0.06)',borderRadius:6,padding:8 }}>{privatePreview.disclosure.paths.map(path => <div key={path}><code>{path}</code></div>)}</div>
       </Space>}
     </Modal>
-    {!models.length && <Alert type="info" showIcon message="暂无可用的文本模型；请先在模型中心配置模型、连接和预算" style={{ marginBottom: 16 }} />}
+    {!models.length && <Alert type="info" showIcon message="暂无可用的文本模型" description={canEditTasks ? <>请先<Link to="/experiments?settings=1">配置模型、连接和预算</Link>，再返回生成报告。</> : '请联系管理员配置模型、连接和预算。'} style={{ marginBottom: 16 }} />}
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
     <Table rowKey="id" size="small" dataSource={items} pagination={{ pageSize: 5 }} scroll={{ x: 720 }} columns={[
       { title: '创建时间', dataIndex: 'createdAt', render: value => new Date(value).toLocaleString('zh-CN') },
