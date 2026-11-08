@@ -192,14 +192,20 @@ export async function githubUserFetch(client, ownerId, url) {
 export async function assertGithubPrivateRepoAccess(client, ownerId, fullName, expectedRepositoryId = null) {
   if (!/^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(fullName || '')) throw new GithubAuthorizationError('仓库名称无效');
   const response = await githubUserFetch(client, ownerId, `https://api.github.com/repos/${fullName}`);
-  if ([403,429].includes(response.status) && (response.status === 429 || response.headers.get('x-ratelimit-remaining') === '0' || response.headers.get('retry-after'))) {
-    const wait = Number(response.headers.get('retry-after'));
-    throw Object.assign(new Error('GitHub 请求受限'), { rateLimited: true, retryAfterMs: Number.isFinite(wait) && wait > 0 ? wait * 1000 : 60_000 });
+  const info = await response.json().catch(() => ({}));
+  const remaining = response.headers.get('x-ratelimit-remaining');
+  const retryAfter = response.headers.get('retry-after');
+  if (response.status === 429 || response.status === 403 && (remaining === '0' || retryAfter || /rate limit/i.test(info?.message || ''))) {
+    const seconds = Number(retryAfter);
+    const reset = Number(response.headers.get('x-ratelimit-reset'));
+    const retryWait = retryAfter ? Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : Date.parse(retryAfter) - Date.now() : NaN;
+    const wait = Number.isFinite(retryWait) && retryWait > 0 ? retryWait
+      : remaining === '0' && Number.isFinite(reset) && reset > 0 ? reset * 1000 - Date.now() + 1000 : 60_000;
+    throw Object.assign(new Error('GitHub 请求受限'), { rateLimited: true, retryAfterMs: Math.min(86_400_000,Math.max(1000,wait)) });
   }
   if ([403,404].includes(response.status)) throw new GithubAuthorizationError('GitHub App 当前无权访问该私有仓库');
   if (!response.ok) throw new Error('暂时无法核验 GitHub 仓库权限');
-  const info = await response.json();
-  if (info.private !== true || (expectedRepositoryId === null
+  if (info?.private !== true || (expectedRepositoryId === null
     ? info.full_name?.toLowerCase() !== fullName.toLowerCase()
     : info.id !== Number(expectedRepositoryId))) throw new GithubAuthorizationError('该仓库已不属于当前私有授权范围');
   return info;
