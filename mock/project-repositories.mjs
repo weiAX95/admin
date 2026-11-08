@@ -105,7 +105,7 @@ async function resolveRepository(fetchGithub, parsed, requestedBranch, expectPri
 async function resolveStoredRepository(client, row, fetchGithub) {
   if (row.is_private) {
     try { await assertGithubPrivateRepoAccess(client,row.owner_id,row.full_name,row.github_repository_id); }
-    catch (error) { return { error: error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限') }; }
+    catch (error) { return { error: error instanceof GithubAuthorizationError ? fail(403,error.message) : error.rateLimited ? fail(429,'GitHub 请求受限，请稍后重试') : fail(502,'暂时无法核验私有仓库权限') }; }
   }
   const [owner, repo] = row.full_name.split('/');
   return resolveRepository(row.is_private ? url => githubUserFetch(client,row.owner_id,url) : fetchGithub,
@@ -121,7 +121,10 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     for (const row of rows) {
       if (!row.is_private) { visible.push(row); continue; }
       try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name,row.github_repository_id); visible.push(row); }
-      catch { /* 失去当前 GitHub 授权时隐藏私有仓库元数据。 */ }
+      catch (error) {
+        if (error instanceof GithubAuthorizationError) continue;
+        return error.rateLimited ? fail(429,'GitHub 请求受限，暂时无法核验私有仓库列表') : fail(502,'暂时无法核验私有仓库列表');
+      }
     }
     return { status: 200, data: { items: visible.map(publicRow) } };
   }
