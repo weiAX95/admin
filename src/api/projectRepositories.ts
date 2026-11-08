@@ -99,7 +99,7 @@ export interface ProjectScan {
   finishedAt: string | null;
 }
 export interface ProjectScanFile { path: string; gitSha: string; size: number | null; category: string; status: 'read' | 'excluded' | 'failed' | 'unscanned'; reason: string | null; contentSha256: string | null }
-export const listProjectScans = (repositoryId: string) => http.get<{ items: ProjectScan[] }>(`/project-repositories/${repositoryId}/scans`);
+export const listProjectScans = (repositoryId: string, before?: string) => http.get<{ items: ProjectScan[]; nextCursor: string | null }>(`/project-repositories/${repositoryId}/scans`, { before });
 export type ProjectScanChange = { kind: 'added' | 'modified' | 'deleted' | 'renamed'; path: string; oldPath: string | null; oldGitSha: string | null; newGitSha: string | null };
 export const startProjectScan = (repositoryId: string, budget: { budgetFileLimit: number; budgetByteLimit: number; forceFull: boolean }) => http.post<ProjectScan>(`/project-repositories/${repositoryId}/scans`, budget);
 export const getProjectScan = (repositoryId: string, scanId: string) => http.get<ProjectScan & { files: ProjectScanFile[]; changes: ProjectScanChange[] }>(`/project-repositories/${repositoryId}/scans/${scanId}`);

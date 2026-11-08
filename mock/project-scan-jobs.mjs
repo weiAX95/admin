@@ -105,8 +105,14 @@ export async function handleProjectScans({ pathname, method, client, me, url, re
   const operation = method === 'POST' && !scanId ? 'create' : 'read';
   if (!canAccess(me,'project_scans',operation,{ownerId:repository.owner_id})) return fail(403,'无权访问仓库扫描');
   if (method === 'GET' && !scanId) {
-    const rows = (await client.query('SELECT * FROM project_scans WHERE repository_id=$1 ORDER BY created_at DESC LIMIT 20', [repositoryId])).rows;
-    return { status: 200, data: { items: rows.map(view) } };
+    const before = url?.searchParams.get('before');
+    if (before && !UUID.test(before)) return fail(400,'扫描历史游标无效');
+    const cursor = before ? (await client.query('SELECT created_at,id FROM project_scans WHERE repository_id=$1 AND id=$2',[repositoryId,before])).rows[0] : null;
+    if (before && !cursor) return fail(400,'扫描历史游标已失效');
+    const rows = (await client.query(`SELECT * FROM project_scans WHERE repository_id=$1
+      AND ($2::timestamptz IS NULL OR (created_at,id)<($2::timestamptz,$3::uuid))
+      ORDER BY created_at DESC,id DESC LIMIT 21`,[repositoryId,cursor?.created_at || null,cursor?.id || null])).rows;
+    return { status: 200, data: { items: rows.slice(0,20).map(view), nextCursor: rows.length>20 ? rows[19].id : null } };
   }
   if (method === 'GET' && scanId && fileRoute) {
     const path = url?.searchParams.get('path');

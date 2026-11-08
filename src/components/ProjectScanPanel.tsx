@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Checkbox, Modal, Select, Space, Table, Tag, Typography } from 'antd';
 import { getProjectScan, getProjectScanFile, listProjectScans, startProjectScan, type ProjectRepository, type ProjectScan, type ProjectScanChange, type ProjectScanFile } from '../api/projectRepositories';
 import ProjectReportPanel from './ProjectReportPanel';
@@ -10,6 +10,9 @@ const changeLabels: Record<ProjectScanChange['kind'], string> = { added: '新增
 export default function ProjectScanPanel({ repository, onAnalysisCompleted, onRepositoryChanged }: { repository: ProjectRepository; onAnalysisCompleted: () => void; onRepositoryChanged: () => void }) {
   const { message } = App.useApp();
   const [items, setItems] = useState<ProjectScan[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const historyExhausted = useRef(false);
   const [detail, setDetail] = useState<(ProjectScan & { files: ProjectScanFile[]; changes: ProjectScanChange[] }) | null>(null);
   const [starting, setStarting] = useState(false);
   const [budgetFileLimit, setBudgetFileLimit] = useState(200);
@@ -24,13 +27,36 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted, onRe
     const load = async () => {
       try {
         const result = await listProjectScans(repository.id);
-        if (!cancelled) { setItems(result.items); setError(''); }
+        if (!cancelled) {
+          setItems(current => {
+            const seen = new Set(result.items.map(item => item.id));
+            return [...result.items,...current.filter(item => !seen.has(item.id))];
+          });
+          setNextCursor(current => current === null && !historyExhausted.current ? result.nextCursor : current);
+          setError('');
+        }
       } catch (cause) { if (!cancelled) setError(cause instanceof Error ? cause.message : '扫描记录读取失败'); }
     };
     void load();
     const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 4000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [repository.id]);
+
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const result = await listProjectScans(repository.id,nextCursor);
+      setItems(current => {
+        const seen = new Set(current.map(item => item.id));
+        return [...current,...result.items.filter(item => !seen.has(item.id))];
+      });
+      if (!result.nextCursor) historyExhausted.current = true;
+      setNextCursor(result.nextCursor);
+      setError('');
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '扫描历史读取失败'); }
+    finally { setLoadingMore(false); }
+  };
 
   const start = async () => {
     setStarting(true);
@@ -79,6 +105,7 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted, onRe
       { title: '未扫描目录', dataIndex: 'unscannedSubtrees' },
       { title: '操作', render: (_, item: ProjectScan) => <Button type="link" onClick={() => void show(item.id)}>查看文件</Button> },
     ]} />
+    {nextCursor && <Button block loading={loadingMore} onClick={() => void loadMore()} style={{ marginTop: 12 }}>加载更多扫描记录</Button>}
     {detail && <Card size="small" title={`文件索引 · ${detail.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setDetail(null)}>关闭</Button>}>
       <Typography.Paragraph type="secondary">扫描预算：最多 {detail.budgetFileLimit} 个文件、读取 {detail.budgetByteLimit / 1024 / 1024} MiB；实际纳入预算 {detail.attemptedCount} 个文件、{(detail.totalBytes / 1024 / 1024).toFixed(2)} MiB。单文件上限固定为 256 KiB。{detail.reusedCount > 0 && <>其中 {detail.reusedCount} 个文件复用此前扫描的相同 Git blob（来源 commit {detail.cacheSourceCommitSha?.slice(0, 10)}）；本次文件路径和覆盖结论仍按当前 commit 计算。</>}</Typography.Paragraph>
       <Typography.Paragraph type="secondary">{detail.forceFull ? '全量重扫：重新读取 GitHub blob，后续分析不复用旧报告输出。' : '增量扫描：相同 Git blob 可复用正文，未变化的目录模块可复用已校验证据的输出。'}{detail.baselineCommitSha && ` 差异基线 commit：${detail.baselineCommitSha.slice(0, 10)}。差异只覆盖两次已索引的文件，部分覆盖时不代表完整仓库差异。`}</Typography.Paragraph>
