@@ -74,6 +74,7 @@ export interface ProjectScan {
   treeSha: string | null;
   status: 'queued' | 'scanning' | 'completed' | 'partial' | 'failed';
   coverageComplete: boolean;
+  indexComplete: boolean;
   forceFull: boolean;
   triggerSource: 'manual' | 'webhook' | 'poll';
   autoAnalysisState: 'none' | 'pending' | 'processing' | 'approval_required' | 'queued' | 'skipped' | 'failed';

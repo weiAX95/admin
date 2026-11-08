@@ -108,8 +108,8 @@ export default function ProjectScanPanel({ repository, onAnalysisCompleted, onRe
     {nextCursor && <Button block loading={loadingMore} onClick={() => void loadMore()} style={{ marginTop: 12 }}>加载更多扫描记录</Button>}
     {detail && <Card size="small" title={`文件索引 · ${detail.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setDetail(null)}>关闭</Button>}>
       <Typography.Paragraph type="secondary">扫描预算：最多 {detail.budgetFileLimit} 个文件、读取 {detail.budgetByteLimit / 1024 / 1024} MiB；实际纳入预算 {detail.attemptedCount} 个文件、{(detail.totalBytes / 1024 / 1024).toFixed(2)} MiB。单文件上限固定为 256 KiB。{detail.reusedCount > 0 && <>其中 {detail.reusedCount} 个文件复用此前扫描的相同 Git blob（来源 commit {detail.cacheSourceCommitSha?.slice(0, 10)}）；本次文件路径和覆盖结论仍按当前 commit 计算。</>}</Typography.Paragraph>
-      <Typography.Paragraph type="secondary">{detail.forceFull ? '全量重扫：重新读取 GitHub blob，后续分析不复用旧报告输出。' : '增量扫描：相同 Git blob 可复用正文，未变化的目录模块可复用已校验证据的输出。'}{detail.baselineCommitSha && ` 差异基线 commit：${detail.baselineCommitSha.slice(0, 10)}。差异只覆盖两次已索引的文件，部分覆盖时不代表完整仓库差异。`}</Typography.Paragraph>
-      {detail.baselineCommitSha && <Table rowKey={change => `${change.kind}:${change.path}`} size="small" dataSource={detail.changes} pagination={{ pageSize: 8 }} scroll={{ x: 600 }} locale={{ emptyText: '已索引文件没有差异' }} columns={[
+      <Typography.Paragraph type="secondary">{detail.forceFull ? '全量重扫：重新读取 GitHub blob，后续分析不复用旧报告输出。' : '增量扫描：相同 Git blob 可复用正文，未变化的目录模块可复用已校验证据的输出。'}目录索引{detail.indexComplete ? '完整' : '不完整'}。{detail.baselineCommitSha && ` 差异基线 commit：${detail.baselineCommitSha.slice(0, 10)}。新增、删除及重命名只在相应索引完整时记录；部分覆盖时不代表完整仓库差异。`}</Typography.Paragraph>
+      {detail.baselineCommitSha && <Table rowKey={change => `${change.kind}:${change.path}`} size="small" dataSource={detail.changes} pagination={{ pageSize: 8 }} scroll={{ x: 600 }} locale={{ emptyText: '未记录可确认的差异；索引不完整时可能遗漏变化' }} columns={[
         { title: '变化', dataIndex: 'kind', render: (value: ProjectScanChange['kind']) => changeLabels[value] },
         { title: '当前路径', dataIndex: 'path' },
         { title: '原路径', dataIndex: 'oldPath', render: (value: string | null) => value || '—' },

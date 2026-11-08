@@ -152,13 +152,15 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
     unscannedSubtrees += queue.length;
   }
   const previous = new Map(previousFiles.filter(file => typeof file.path === 'string' && SHA.test(file.gitSha || '')).map(file => [file.path,file.gitSha.toLowerCase()]));
+  const indexComplete = unscannedSubtrees === 0 && overflowEntries === 0 && entries.length <= maxIndexEntries
+    && entries.every(entry => typeof entry.path === 'string' && SHA.test(entry.sha || ''));
   const priorityPaths = new Set(entries.filter(entry => {
     const before = previous.get(entry.path);
     return before ? before !== String(entry.sha || '').toLowerCase() : previousCoverageComplete;
   }).map(entry => entry.path));
   const treePaths = new Set(entries.map(entry => entry.path));
   const changes = [...priorityPaths].map(path => ({ kind: previous.has(path) ? 'modified' : 'added', path }));
-  if (!unscannedSubtrees && !overflowEntries) for (const path of previous.keys()) if (!treePaths.has(path)) changes.push({ kind: 'deleted', path });
+  if (indexComplete) for (const path of previous.keys()) if (!treePaths.has(path)) changes.push({ kind: 'deleted', path });
   let relatedPaths = new Set();
   // New SQL, Python and deployment files may affect old modules even though
   // they were absent from the previous scan's dependency graph.
@@ -206,5 +208,5 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
       files.push({ ...file, status: 'failed', reason: 'blob_unavailable_or_invalid' }); failedCount++;
     }
   }
-  return { commitSha, treeSha, files, readCount, attemptedCount, reusedCount, failedCount, excludedCount, unscannedCount, unscannedSubtrees, totalBytes, coverageComplete: failedCount === 0 && unscannedCount === 0 && unscannedSubtrees === 0 };
+  return { commitSha, treeSha, files, readCount, attemptedCount, reusedCount, failedCount, excludedCount, unscannedCount, unscannedSubtrees, totalBytes, indexComplete, coverageComplete: indexComplete && failedCount === 0 && unscannedCount === 0 };
 }
