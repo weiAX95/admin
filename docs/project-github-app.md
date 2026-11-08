@@ -35,3 +35,5 @@ GitHub App 的 Webhook URL 设为公网同源 `/api/project-github/webhook`，�
 进展通知链接包含仓库 ID 和分析 ID。页面直接按 ID 读取报告详情，因此旧报告无需先翻到所在分页；同页打开另一条通知也会切换报告，失效链接会显示读取原因。
 
 读取 GitHub App 的安装和已选仓库清单时，GitHub 返回 429，或以 403 携带配额耗尽／重试时间信息时，本地接口返回 429 并提示稍后重试。其他临时上游故障返回 502；本地不会把这些响应解释为“没有已授权仓库”。
+
+开启提交后扫描须同时配置独立 Webhook secret 和 `GITHUB_APP_WEBHOOK_URL`。URL 必须是无凭据、无查询参数、无片段的专用公网 HTTPS 地址，路径固定为 `/api/project-github/webhook`；本机地址不能作为 GitHub 的交付目标。配置仅证明服务端具备接收地址设置，不证明 DNS、证书、反向代理和 GitHub App 交付已经正常，真实交付仍单独验收。未配置时可用五分钟分支检查或手动“检查并扫描”。

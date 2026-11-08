@@ -1,9 +1,19 @@
 import crypto from 'node:crypto';
+import { isIP } from 'node:net';
 import pg from 'pg';
 import { appendSecurityAudit } from './account-audit.mjs';
 
 const fail = (status, error) => ({ status, data: { error } });
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
+export function githubWebhookEndpointConfigured() {
+  let url;
+  try { url = new URL(process.env.GITHUB_APP_WEBHOOK_URL); }
+  catch { return false; }
+  return url.protocol === 'https:' && url.pathname === '/api/project-github/webhook'
+    && !url.port && !url.username && !url.password && !url.search && !url.hash
+    && !isIP(url.hostname) && url.hostname.includes('.') && !url.hostname.endsWith('.local')
+    && !url.hostname.endsWith('.localhost');
+}
 function githubAppConfiguration() {
   const issues = [];
   if (!process.env.GITHUB_APP_CLIENT_ID) issues.push('GITHUB_APP_CLIENT_ID');
@@ -312,7 +322,7 @@ export async function handleProjectGithubAuth({ pathname, method, client, me, re
   if (!pathname.startsWith('/api/project-github')) return null;
   if (pathname === '/api/project-github' && method === 'GET') {
     const row = (await client.query('SELECT github_login,access_expires_at,refresh_expires_at FROM project_github_connections WHERE owner_id=$1 AND refresh_expires_at>now()', [me.id])).rows[0];
-    return { status: 200, data: { ...githubAppConfiguration(), webhookConfigured: Boolean(process.env.GITHUB_APP_WEBHOOK_SECRET), connected: Boolean(row), githubLogin: row?.github_login || null, accessExpiresAt: row?.access_expires_at || null, refreshExpiresAt: row?.refresh_expires_at || null } };
+    return { status: 200, data: { ...githubAppConfiguration(), webhookConfigured: Boolean(process.env.GITHUB_APP_WEBHOOK_SECRET), webhookEndpointConfigured: githubWebhookEndpointConfigured(), connected: Boolean(row), githubLogin: row?.github_login || null, accessExpiresAt: row?.access_expires_at || null, refreshExpiresAt: row?.refresh_expires_at || null } };
   }
   if (pathname === '/api/project-github/repositories' && method === 'GET') {
     try { return { status: 200, data: await listGithubRepositories(client, me.id, new URL(req.url,'http://localhost').searchParams.get('cursor')) }; }

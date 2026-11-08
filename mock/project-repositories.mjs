@@ -5,7 +5,7 @@ import { parseProjectRequirements } from './project-analysis-core.mjs';
 import { containsKnownSecret } from './project-scan.mjs';
 import { appendSecurityAudit } from './account-audit.mjs';
 import { canAccess } from './permissions.mjs';
-import { assertGithubPrivateRepoAccess, githubPublicFetch, githubUserFetch, GithubAuthorizationError } from './project-github-auth.mjs';
+import { assertGithubPrivateRepoAccess, githubPublicFetch, githubUserFetch, githubWebhookEndpointConfigured, GithubAuthorizationError } from './project-github-auth.mjs';
 import { modelUsable, supportedProvider } from './model-governance.mjs';
 import { modelConnectionAvailable } from './model-connections.mjs';
 
@@ -219,6 +219,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.enabled !== 'boolean' || typeof body.expectedEnabled !== 'boolean' || Object.keys(body).some(key => !['enabled','expectedEnabled'].includes(key))) return fail(400,'自动扫描设置无效');
     if (body.enabled && row.github_repository_id === null) return fail(409,'请先核对并绑定此项目的 GitHub 仓库身份');
     if (body.enabled && !process.env.GITHUB_APP_WEBHOOK_SECRET) return fail(409,'服务端尚未配置 GitHub Webhook 密钥');
+    if (body.enabled && !githubWebhookEndpointConfigured()) return fail(409,'服务端尚未配置专用的公网 HTTPS Webhook 接收地址，请先使用定时检查');
     if (body.enabled && row.is_private) {
       try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name,row.github_repository_id); }
       catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }

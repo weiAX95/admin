@@ -22,6 +22,7 @@ GitHub Push Webhook
 
 1. 在本机 API 的私有环境文件设置 `GITHUB_APP_WEBHOOK_SECRET`，使用独立随机值；在 GitHub App 的 Webhook 设置中填入相同值。此值不写入仓库、命令历史或联调记录。
 2. GitHub App Webhook URL 填 `https://<专用域名>/api/project-github/webhook`，只订阅 `Push`，确认安装仍只覆盖用户允许的仓库。
+   同一 URL 还需写入本机 API 的 `GITHUB_APP_WEBHOOK_URL`；未配置时页面和接口不允许开启提交后扫描。
 3. 为专用域名取得有效 HTTPS 证书。在公网主机上创建只允许远程端口转发的隧道账号，检查 SSH 服务允许该账号转发，并让本机以受限密钥连接。
 4. 在公网主机为专用域名配置 Nginx。下面只展示关键 `location`，应放在该域名自己的 TLS `server` 中；该 `server` 的其他路径返回 404：
 
