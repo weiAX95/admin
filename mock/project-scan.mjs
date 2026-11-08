@@ -112,26 +112,41 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
   const commit = await getJson(fetchGithub, `${base}/commits/${commitSha}`);
   const treeSha = commit?.tree?.sha;
   if (!SHA.test(treeSha || '')) throw new Error('commit 没有可用的树对象');
-  const recursive = await getJson(fetchGithub, `${base}/trees/${treeSha}?recursive=1`);
-  if (!Array.isArray(recursive.tree)) throw new Error('GitHub 目录响应无效');
-  let entries = recursive.tree;
+  let recursive;
+  try { recursive = await getJson(fetchGithub, `${base}/trees/${treeSha}?recursive=1`); }
+  catch (error) {
+    if (error.code !== 'GITHUB_RESPONSE_TOO_LARGE') throw error;
+  }
+  if (recursive && !Array.isArray(recursive.tree)) throw new Error('GitHub 目录响应无效');
+  let entries = recursive?.tree || [];
   let unscannedSubtrees = 0;
-  if (recursive.truncated === true) {
+  let overflowEntries = 0;
+  if (!recursive || recursive.truncated === true) {
     entries = [];
     const queue = [{ sha: treeSha, prefix: '' }];
     let requests = 0;
     while (queue.length && requests < maxTreeRequests) {
       const current = queue.shift();
       requests++;
-      const tree = await getJson(fetchGithub, `${base}/trees/${current.sha}`);
+      let tree;
+      try { tree = await getJson(fetchGithub, `${base}/trees/${current.sha}`); }
+      catch (error) {
+        if (error.code !== 'GITHUB_RESPONSE_TOO_LARGE' || !current.prefix) throw error;
+        unscannedSubtrees++;
+        continue;
+      }
       if (!Array.isArray(tree.tree)) throw new Error('GitHub 子目录响应无效');
       if (tree.truncated) { unscannedSubtrees++; continue; }
       for (const entry of tree.tree) {
         const name = `${current.prefix}${entry.path}`;
         if (entry.type === 'tree' && SHA.test(entry.sha || '')) {
-          if (name.split('/').some(part => SKIP_DIRS.has(part))) entries.push({ ...entry, path: name, skippedTree: true });
-          else queue.push({ sha: entry.sha, prefix: `${name}/` });
-        } else entries.push({ ...entry, path: name });
+          if (name.split('/').some(part => SKIP_DIRS.has(part))) {
+            if (entries.length < maxIndexEntries) entries.push({ ...entry, path: name, skippedTree: true });
+            else overflowEntries++;
+          } else if (queue.length < maxIndexEntries) queue.push({ sha: entry.sha, prefix: `${name}/` });
+          else unscannedSubtrees++;
+        } else if (entries.length < maxIndexEntries) entries.push({ ...entry, path: name });
+        else overflowEntries++;
       }
     }
     unscannedSubtrees += queue.length;
@@ -143,7 +158,7 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
   }).map(entry => entry.path));
   const treePaths = new Set(entries.map(entry => entry.path));
   const changes = [...priorityPaths].map(path => ({ kind: previous.has(path) ? 'modified' : 'added', path }));
-  if (!unscannedSubtrees) for (const path of previous.keys()) if (!treePaths.has(path)) changes.push({ kind: 'deleted', path });
+  if (!unscannedSubtrees && !overflowEntries) for (const path of previous.keys()) if (!treePaths.has(path)) changes.push({ kind: 'deleted', path });
   let relatedPaths = new Set();
   // New SQL, Python and deployment files may affect old modules even though
   // they were absent from the previous scan's dependency graph.
@@ -154,7 +169,7 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
   }
   entries = balancedIndexOrder(entries,maxFileBytes,priorityPaths,relatedPaths,maxFiles,maxTotalBytes);
   const files = [];
-  let readCount = 0, attemptedCount = 0, reusedCount = 0, failedCount = 0, excludedCount = 0, totalBytes = 0, unscannedCount = Math.max(0, entries.length - maxIndexEntries);
+  let readCount = 0, attemptedCount = 0, reusedCount = 0, failedCount = 0, excludedCount = 0, totalBytes = 0, unscannedCount = overflowEntries + Math.max(0, entries.length - maxIndexEntries);
   for (const entry of entries.slice(0,maxIndexEntries)) {
     if (typeof entry.path !== 'string' || !SHA.test(entry.sha || '')) { unscannedCount++; continue; }
     const file = { path: entry.path, gitSha: entry.sha, size: Number.isSafeInteger(entry.size) ? entry.size : null, category: classification(entry.path) };
