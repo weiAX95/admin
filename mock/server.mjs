@@ -2379,7 +2379,10 @@ function routeHttpRequest(req, res, pathname, method) {
           || req.method === 'PATCH' && /^\/api\/project-repositories\/[0-9a-f-]{36}\/(?:webhook-scan|auto-analysis)$/i.test(pathname);
         if (privateRepository && !authCleanup) {
           try { await assertGithubPrivateRepoAccess(pool,me.id,privateRepository.full_name,privateRepository.github_repository_id); }
-          catch (error) { return sendImmediate(res,error instanceof GithubAuthorizationError ? 403 : 502,{ error: error instanceof GithubAuthorizationError ? error.message : '暂时无法核验 GitHub 私有仓库权限' }); }
+          catch (error) {
+            if (error.rateLimited) return sendImmediate(res,429,{ error: 'GitHub 请求受限，暂时无法核验私有仓库权限', retryAfterSeconds: Math.max(1,Math.ceil((error.retryAfterMs || 60_000) / 1000)) });
+            return sendImmediate(res,error instanceof GithubAuthorizationError ? 403 : 502,{ error: error instanceof GithubAuthorizationError ? error.message : '暂时无法核验 GitHub 私有仓库权限' });
+          }
         }
       }
       const response = await handleProjectRequirementBaselines({ pathname, method: req.method, client: pool, me, readBody: () => readProjectBody(req), req })
