@@ -1,7 +1,7 @@
 import { isAdministrator } from '../utils/roles';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Checkbox, Form, Input, Modal, Select, Space, Switch, Table, Tag, Tooltip, Typography } from 'antd';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { ApiError, getStoredUser } from '../api/client';
 import { listTasks } from '../api/tasks';
 import { confirmProjectGithubIdentity, createProjectRepository, createProjectRequirementBaseline, disconnectProjectGithub, getProjectGithubConnection, getProjectRequirementBaseline, linkProjectTask, listGithubAvailableRepositories, listProjectLinkedTasks, listProjectRepositories, listProjectRequirementBaselines, previewProjectGithubIdentity, refreshAndScanProjectRepository, refreshProjectRepository, startProjectGithubConnection, unlinkProjectTask, updateProjectLinkedTaskRequirement, updateProjectPollScan, updateProjectRepository, updateProjectWebhookScan, type GithubAvailableRepository, type ProjectGithubConnection, type ProjectGithubIdentityPreview, type ProjectLinkedTask, type ProjectRepository, type ProjectRequirementBaseline } from '../api/projectRepositories';
@@ -21,6 +21,7 @@ const pollErrorLabel = (code: string) => ({
 } as Record<string,string>)[code] || `检查失败（${code}）`;
 
 export default function ProjectAnalysis() {
+  const location = useLocation();
   const { message } = App.useApp();
   const [form] = Form.useForm<FormValues>();
   const [editForm] = Form.useForm<EditValues>();
@@ -38,7 +39,7 @@ export default function ProjectAnalysis() {
   const [identityConfirmed, setIdentityConfirmed] = useState(false);
   const [webhookSaving, setWebhookSaving] = useState('');
   const [pollSaving, setPollSaving] = useState('');
-  const [selectedRepositoryId, setSelectedRepositoryId] = useState(() => new URLSearchParams(window.location.search).get('repositoryId') || '');
+  const [selectedRepositoryId, setSelectedRepositoryId] = useState(() => new URLSearchParams(location.search).get('repositoryId') || '');
   const [baselineRepositoryId, setBaselineRepositoryId] = useState('');
   const [baselineVersions, setBaselineVersions] = useState<ProjectRequirementBaseline[]>([]);
   const [baselineContent, setBaselineContent] = useState('');
@@ -62,6 +63,11 @@ export default function ProjectAnalysis() {
   const [githubRepositoriesCursor, setGithubRepositoriesCursor] = useState<string | null>(null);
   const [selectedGithubRepository, setSelectedGithubRepository] = useState<string>();
   const githubRepositoryLoadId = useRef(0);
+
+  useEffect(() => {
+    const repositoryId = new URLSearchParams(location.search).get('repositoryId');
+    if (repositoryId) setSelectedRepositoryId(repositoryId);
+  }, [location.search]);
 
   const loadGithubConnection = async () => {
     try {

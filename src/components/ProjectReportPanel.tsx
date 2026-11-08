@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Alert, App, Button, Card, Empty, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Tree, Typography } from 'antd';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
 import { listTasks } from '../api/tasks';
 import { addProjectFindingFeedback, adjustProjectSuggestion, cancelProjectAnalysis, compareProjectAnalyses, decideProjectSuggestion, getProjectAnalysis, getProjectRequirementBaseline, listProjectAnalyses, listProjectModuleFiles, previewPrivateProjectAnalysis, previewProjectSuggestionTask, retryProjectAnalysis, startProjectAnalysis, updateProjectAutoAnalysis, type PrivateProjectDisclosure, type ProjectAnalysisJob, type ProjectAnalysisReport, type ProjectModuleFile, type ProjectReportComparison as Comparison, type ProjectRepository, type ProjectScan, type ProjectSuggestionTaskPreview } from '../api/projectRepositories';
@@ -47,6 +47,7 @@ function moduleTree(files: ProjectModuleFile[], moduleKey: string, sourceLink: (
 }
 
 export default function ProjectReportPanel({ repository, scans, onAnalysisCompleted, onRepositoryChanged }: { repository: ProjectRepository; scans: ProjectScan[]; onAnalysisCompleted: () => void; onRepositoryChanged: () => void }) {
+  const location = useLocation();
   const canEditTasks = isAdministrator(getStoredUser<AuthUser>());
   const { message } = App.useApp();
   const [items, setItems] = useState<ProjectAnalysisJob[]>([]);
@@ -60,6 +61,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const [autoCostBudgetUsd, setAutoCostBudgetUsd] = useState(repository.autoAnalysisCostBudgetUsd || 0.1);
   const [autoSaving, setAutoSaving] = useState(false);
   const [report, setReport] = useState<ProjectAnalysisReport | null>(null);
+  const [linkedReportLoading, setLinkedReportLoading] = useState(false);
+  const [linkedReportError, setLinkedReportError] = useState('');
   const [moduleFiles, setModuleFiles] = useState<Record<string, ModuleFilePage>>({});
   const loadingModuleFiles = useRef(new Set<string>());
   const [scopeJob, setScopeJob] = useState<ProjectAnalysisReport | null>(null);
@@ -102,15 +105,6 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     setScanId(current => eligible.some(scan => scan.id === current) ? current : eligible[0]?.id || '');
   }, [scans, repository.githubRepositoryId, repository.branch, repository.commitSha]);
   useEffect(() => {
-    const analysisId = new URLSearchParams(window.location.search).get('analysisId');
-    if (!analysisId) return;
-    let cancelled = false;
-    void getProjectAnalysis(repository.id,analysisId).then(result => { if (!cancelled) setReport(result); }).catch(cause => {
-      if (!cancelled) setError(cause instanceof Error ? cause.message : '通知中的报告无法读取');
-    });
-    return () => { cancelled = true; };
-  }, [repository.id]);
-  useEffect(() => {
     setItems([]);
     setNextCursor(null);
     setReport(null);
@@ -145,6 +139,30 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     const timer = window.setInterval(() => { if (!document.hidden) void load(); }, 4000);
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [repository.id]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const analysisId = params.get('analysisId');
+    if (!analysisId || params.get('repositoryId') !== repository.id) return;
+    let cancelled = false;
+    setReport(null);
+    setLinkedReportLoading(true);
+    setLinkedReportError('');
+    void getProjectAnalysis(repository.id, analysisId).then(result => {
+      if (!cancelled) setReport(result);
+    }).catch(cause => {
+      if (!cancelled) setLinkedReportError(cause instanceof Error ? cause.message : '通知中的报告无法读取');
+    }).finally(() => {
+      if (!cancelled) setLinkedReportLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [repository.id, location.search]);
+
+  useEffect(() => {
+    if (!report || new URLSearchParams(location.search).get('analysisId') !== report.id) return;
+    const frame = window.requestAnimationFrame(() => document.getElementById('project-analysis-report')?.scrollIntoView({ block: 'start' }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [report?.id, location.search]);
 
   useEffect(() => {
     if (!report) return;
@@ -388,6 +406,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     </Modal>
     {!models.length && <Alert type="info" showIcon message="暂无可用的文本模型" description={canEditTasks ? <>请先<Link to="/experiments?settings=1">配置模型、连接和预算</Link>，再返回生成报告。</> : '请联系管理员配置模型、连接和预算。'} style={{ marginBottom: 16 }} />}
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
+    {linkedReportLoading && <Alert type="info" showIcon message="正在打开通知中的报告…" style={{ marginBottom: 16 }} />}
+    {linkedReportError && <Alert type="error" showIcon message={`通知中的报告无法打开：${linkedReportError}`} style={{ marginBottom: 16 }} />}
     <Table rowKey="id" size="small" dataSource={items} pagination={{ pageSize: 5 }} scroll={{ x: 720 }} columns={[
       { title: '创建时间', dataIndex: 'createdAt', render: value => new Date(value).toLocaleString('zh-CN') },
       { title: '完成时间', dataIndex: 'finishedAt', render: (value: string | null) => value ? new Date(value).toLocaleString('zh-CN') : '—' },
@@ -429,7 +449,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <Typography.Paragraph type="secondary">这里的模块计划不等于仓库全部内容。扫描未读和分析文件选择缺口需结合扫描详情查看；完成次数仅统计最近一次尝试，实际费用累计所有尝试。</Typography.Paragraph>
       </>}
     </Modal>
-    {report && <Card size="small" title={`报告 · ${report.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setReport(null)}>关闭</Button>}>
+    {report && <Card id="project-analysis-report" size="small" title={`报告 · ${report.commitSha.slice(0, 10)}`} extra={<Button type="text" onClick={() => setReport(null)}>关闭</Button>}>
       {report.staleReasons.length > 0 && <Alert type="warning" showIcon message="报告基线已变化，旧建议需重审" description={<Space direction="vertical"><span>{report.staleReasons.join('；')}</span>{reviewScan && reviewModelAvailable ? <Popconfirm title="按当前基线重新分析？" description="会重新调用模型，可能产生费用；旧报告和人工处理记录仍保留。" onConfirm={() => void start(reviewScan.id, report.modelId)}><Button size="small" loading={starting}>重新分析当前扫描</Button></Popconfirm> : <span>{reviewScan ? '原模型当前不可用，请选择其他模型生成报告。' : '请先扫描当前 commit，再生成新报告。'}</span>}</Space>} style={{ marginBottom: 12 }} />}
       {!report.analysisCoverageComplete && <Alert type="warning" showIcon message="本次报告只覆盖部分内容；未发现实现不代表整个仓库没有实现" description={`可读文件中有 ${Math.max(0,report.availableFileCount - report.selectedFileCount)} 个未进入模型，另有 ${report.modules.reduce((sum,module) => sum + module.truncatedCount,0)} 个输入文件被截断；扫描阶段还有文件数预算未读 ${report.scanScope.gaps.fileBudget}、字节预算未读 ${report.scanScope.gaps.byteBudget}、旧版未区分预算未读 ${report.scanScope.gaps.legacyBudget}、读取失败 ${report.scanScope.gaps.failed}、索引外或无效目录项 ${report.scanScope.gaps.unindexed}、未展开目录 ${report.scanScope.gaps.unscannedSubtrees}。`} style={{ marginBottom: 12 }} />}
       <Alert type={report.scanScope.comparisonComplete ? 'info' : 'warning'} showIcon message={report.scanScope.baselineCommitSha ? `扫描基线 ${report.scanScope.baselineCommitSha.slice(0, 10)} → ${report.commitSha.slice(0, 10)}` : `首次扫描 ${report.commitSha.slice(0, 10)}`} description={<Space direction="vertical"><span>范围：{report.selectedFileCount}/{report.availableFileCount} 个可读文件进入分析；{report.scanScope.forceFull ? '全量重扫，未跨报告复用分析输出' : `复用 ${report.reusedCallCount} 次目录模块输出`}。</span>{report.scanScope.baselineCommitSha && <span>已索引文件差异：新增 {report.scanScope.changes.added || 0}、修改 {report.scanScope.changes.modified || 0}、删除 {report.scanScope.changes.deleted || 0}、重命名 {report.scanScope.changes.renamed || 0}。{!report.scanScope.comparisonComplete && '至少一侧扫描为部分覆盖，差异不代表完整仓库。'}</span>}</Space>} style={{ marginBottom: 12 }} />
