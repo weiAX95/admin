@@ -164,7 +164,63 @@ function relatedRoutes(left, right) {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
-export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false, ignoreNonCode = false, ignoreDirectJsComments = false) {
+function nextPackageRoots(files) {
+  const roots = [];
+  for (const file of files) {
+    if (!/(?:^|\/)package\.json$/.test(file.path)) continue;
+    const directory = path.posix.dirname(file.path);
+    const root = directory === '.' ? '' : directory;
+    let isNext = false;
+    try {
+      if (file.status === 'read' && typeof file.content === 'string') {
+        const manifest = JSON.parse(file.content);
+        isNext = ['dependencies','devDependencies'].some(key => typeof manifest[key]?.next === 'string');
+      }
+    } catch { /* Unreadable manifests cannot establish a Next.js package boundary. */ }
+    roots.push({ root, isNext });
+  }
+  return roots.sort((a,b) => b.root.length - a.root.length);
+}
+
+function nextPackageFor(filePath, roots) {
+  const nearest = roots.find(({root}) => !root || filePath.startsWith(`${root}/`));
+  return nearest?.isNext ? nearest.root : undefined;
+}
+
+function nextRouteSegments(filePath, packageRoot) {
+  const relative = packageRoot ? filePath.slice(packageRoot.length + 1) : filePath;
+  let parts = relative.split('/');
+  if (parts[0] === 'src') parts = parts.slice(1);
+  if (parts[0] === 'app' && /^route\.(?:js|ts)$/.test(parts.at(-1))) {
+    parts = parts.slice(1,-1).filter(segment => !/^\([^)]+\)$/.test(segment));
+  } else if (parts[0] === 'pages' && parts[1] === 'api' && /\.(?:js|ts)$/.test(parts.at(-1))) {
+    parts = parts.slice(1);
+    parts[parts.length - 1] = parts.at(-1).replace(/\.(?:js|ts)$/,'');
+    if (parts.at(-1) === 'index') parts.pop();
+  } else return null;
+  if (parts[0] !== 'api' || parts.length < 2) return null;
+  for (const [index, segment] of parts.entries()) {
+    if (/^[A-Za-z0-9_-]+$/.test(segment) || /^\[[A-Za-z0-9_-]+\]$/.test(segment)) continue;
+    if (index === parts.length - 1 && /^(?:\[\.\.\.[A-Za-z0-9_-]+\]|\[\[\.\.\.[A-Za-z0-9_-]+\]\])$/.test(segment)) continue;
+    return null;
+  }
+  return parts;
+}
+
+function nextRouteMatches(segments, request) {
+  const requested = request.split('/').filter(Boolean);
+  for (let index = 0; index < segments.length; index++) {
+    const segment = segments[index];
+    if (/^\[\[\.\.\.[A-Za-z0-9_-]+\]\]$/.test(segment)) return requested.length >= index;
+    if (/^\[\.\.\.[A-Za-z0-9_-]+\]$/.test(segment)) return requested.length > index;
+    if (index >= requested.length) return false;
+    if (/^\[[A-Za-z0-9_-]+\]$/.test(segment)) continue;
+    if (segment !== requested[index]) return false;
+  }
+  return requested.length === segments.length;
+}
+
+export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false, ignoreNonCode = false, ignoreDirectJsComments = false, includeNextFileRoutes = false) {
   const endpoints = files.filter(file => file.status === 'read' && typeof file.content === 'string' && sourcePath.test(file.path)).map(file => ({
     path: file.path,
     ...routePrefixes(file,ignoreDirectJsComments && /\.(?:[cm]?[jt]sx?)$/.test(file.path) ? codePositions(file.content) : null)
@@ -181,12 +237,28 @@ export function projectApiDependencyEdges(files, includeRouterMounts = false, in
     if (!servers.has(key)) servers.set(key,[]);
     servers.get(key).push(endpoint);
   }
+  const nextRoots = includeNextFileRoutes ? nextPackageRoots(files) : [];
+  const nextRoutes = nextRoots.length ? files.filter(file => file.status === 'read' && typeof file.content === 'string').flatMap(file => {
+    const packageRoot = nextPackageFor(file.path,nextRoots);
+    if (packageRoot === undefined) return [];
+    const segments = nextRouteSegments(file.path,packageRoot);
+    return segments ? [{ path:file.path, packageRoot, segments }] : [];
+  }) : [];
   const edges = new Map();
   for (const client of endpoints) {
     for (const request of client.client) for (const server of servers.get(root(request)) || []) {
       if (client.path === server.path || !relatedRoutes(request,server.route)) continue;
       if (!edges.has(client.path)) edges.set(client.path,new Set());
       edges.get(client.path).add(server.path);
+    }
+    if (nextRoutes.length) {
+      const packageRoot = nextPackageFor(client.path,nextRoots);
+      if (packageRoot === undefined) continue;
+      for (const request of client.client) for (const route of nextRoutes) {
+        if (client.path === route.path || route.packageRoot !== packageRoot || !nextRouteMatches(route.segments,request)) continue;
+        if (!edges.has(client.path)) edges.set(client.path,new Set());
+        edges.get(client.path).add(route.path);
+      }
     }
   }
   return edges;
