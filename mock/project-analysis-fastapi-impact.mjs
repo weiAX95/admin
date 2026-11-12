@@ -68,6 +68,7 @@ function declarations(content, positions, pattern) {
     const prefix = literalPrefix(callArguments(content,opening,positions),positions);
     if (prefix !== null) found.set(match[1],prefix);
   }
+  found.incomplete = count > 100;
   return found;
 }
 
@@ -117,6 +118,7 @@ function importsFor(file, indexed, positions, includeAbsoluteImports, includeAli
       else if (memberPath && !modulePath) imports.set(alias,{ path:memberPath, member:item[1] });
     }
   }
+  let incomplete = count > 100;
   if (includeAliasedImports) {
     aliasedImport.lastIndex = 0;
     count = 0;
@@ -125,7 +127,9 @@ function importsFor(file, indexed, positions, includeAbsoluteImports, includeAli
       const target = uniqueAbsoluteModule(file.path,match[1].replaceAll('.','/'),indexed);
       if (target && !imports.has(match[2])) imports.set(match[2],{ path:target, member:null });
     }
+    incomplete ||= count > 100;
   }
+  imports.incomplete = incomplete;
   return imports;
 }
 
@@ -136,6 +140,7 @@ function operationPaths(content, positions, routerName) {
   while ((match = pattern.exec(content)) && count++ < 200) {
     if (inCode(match,positions)) paths.push(match[1].split('/{')[0]);
   }
+  paths.incomplete = count > 200;
   return paths;
 }
 
@@ -158,11 +163,13 @@ export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, i
   const routers = new Map([...indexed].map(([name,file]) => [name,declarations(file.content,positions.get(name),routerDeclaration)]));
   const routerKey = (name, router) => `${name}\0${router}`;
   const nestedMounts = new Map();
+  let incomplete = includeNestedRouters && [...routers.values()].some(declared => declared.incomplete);
   if (includeNestedRouters) for (const file of indexed.values()) {
     const declared = routers.get(file.path);
     if (!declared.size) continue;
     const sourcePositions = positions.get(file.path);
     const imports = importsFor(file,indexed,sourcePositions,includeAbsoluteImports,includeAliasedImports);
+    incomplete ||= imports.incomplete;
     includeRouter.lastIndex = 0;
     let match, count = 0;
     while ((match = includeRouter.exec(file.content)) && count++ < 100) {
@@ -175,20 +182,27 @@ export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, i
       if (!nestedMounts.has(key)) nestedMounts.set(key,[]);
       nestedMounts.get(key).push({ ...child, prefix });
     }
+    incomplete ||= count > 100;
   }
   const endpoints = [];
   let nestedCount = 0;
   function appendNested(parentPath, parentRouter, prefixParts, trace, seen, depth) {
-    if (depth >= 4 || nestedCount >= 2000 || endpoints.length >= 10000) return;
-    for (const mount of nestedMounts.get(routerKey(parentPath,parentRouter)) || []) {
-      if (nestedCount >= 2000 || endpoints.length >= 10000) break;
+    const children = nestedMounts.get(routerKey(parentPath,parentRouter)) || [];
+    if (depth >= 4 || nestedCount >= 2000 || endpoints.length >= 10000) {
+      if (children.length) incomplete = true;
+      return;
+    }
+    for (const mount of children) {
+      if (nestedCount >= 2000 || endpoints.length >= 10000) { incomplete = true; break; }
       const key = routerKey(mount.target.path,mount.routerName);
       if (seen.has(key)) continue;
       nestedCount++;
       const parts = [...prefixParts,mount.prefix,routers.get(mount.target.path).get(mount.routerName)];
       const paths = [...new Set([...trace,mount.target.path])];
-      for (const operation of operationPaths(mount.target.content,positions.get(mount.target.path),mount.routerName)) {
-        if (endpoints.length >= 10000) break;
+      const operations = operationPaths(mount.target.content,positions.get(mount.target.path),mount.routerName);
+      incomplete ||= operations.incomplete;
+      for (const operation of operations) {
+        if (endpoints.length >= 10000) { incomplete = true; break; }
         const route = routePath([...parts,operation]);
         if (route) for (const name of paths) endpoints.push({ path:name, route });
       }
@@ -198,8 +212,10 @@ export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, i
   for (const file of indexed.values()) {
     const sourcePositions = positions.get(file.path);
     const apps = declarations(file.content,sourcePositions,appDeclaration);
+    if (includeNestedRouters) incomplete ||= apps.incomplete;
     if (!apps.size) continue;
     const imports = importsFor(file,indexed,sourcePositions,includeAbsoluteImports,includeAliasedImports);
+    if (includeNestedRouters) incomplete ||= imports.incomplete;
     includeRouter.lastIndex = 0;
     let match, count = 0;
     while ((match = includeRouter.exec(file.content)) && count++ < 100) {
@@ -211,7 +227,9 @@ export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, i
       if (!mounted) continue;
       const { target, routerName } = mounted;
       const routerPrefix = routers.get(target.path).get(routerName);
-      for (const operation of operationPaths(target.content,positions.get(target.path),routerName)) {
+      const operations = operationPaths(target.content,positions.get(target.path),routerName);
+      if (includeNestedRouters) incomplete ||= operations.incomplete;
+      for (const operation of operations) {
         const route = routePath([mountPrefix,routerPrefix,operation]);
         if (!route) continue;
         endpoints.push({ path:target.path, route });
@@ -219,6 +237,8 @@ export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, i
       }
       if (includeNestedRouters) appendNested(target.path,routerName,[mountPrefix,routerPrefix],[file.path,target.path],new Set([routerKey(target.path,routerName)]),0);
     }
+    if (includeNestedRouters) incomplete ||= count > 100;
   }
+  endpoints.incomplete = includeNestedRouters && incomplete;
   return endpoints;
 }

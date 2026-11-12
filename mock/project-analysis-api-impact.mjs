@@ -238,10 +238,15 @@ export function projectApiDependencyEdges(files, includeRouterMounts = false, in
     if (!servers.has(key)) servers.set(key,[]);
     servers.get(key).push(endpoint);
   }
-  if (includeFastApiRouters) for (const endpoint of fastApiMountedEndpoints(files,includeFastApiAbsoluteImports,includeFastApiAliasedImports,includeFastApiNestedRouters)) {
-    const key = root(endpoint.route);
-    if (!servers.has(key)) servers.set(key,[]);
-    servers.get(key).push(endpoint);
+  let incompleteFastApi = false;
+  if (includeFastApiRouters) {
+    const mounted = fastApiMountedEndpoints(files,includeFastApiAbsoluteImports,includeFastApiAliasedImports,includeFastApiNestedRouters);
+    incompleteFastApi = mounted.incomplete === true;
+    for (const endpoint of mounted) {
+      const key = root(endpoint.route);
+      if (!servers.has(key)) servers.set(key,[]);
+      servers.get(key).push(endpoint);
+    }
   }
   const nextRoots = includeNextFileRoutes ? nextPackageRoots(files) : [];
   const nextRoutes = nextRoots.length ? files.filter(file => file.status === 'read' && typeof file.content === 'string').flatMap(file => {
@@ -267,6 +272,7 @@ export function projectApiDependencyEdges(files, includeRouterMounts = false, in
       }
     }
   }
+  edges.incompleteFastApi = incompleteFastApi;
   return edges;
 }
 

@@ -1103,7 +1103,7 @@
 - [ ] **14.9 按 commit 增量分析**
   - [x] 第 33 版识别 FastAPI 常见 `from app.routers import users` 等绝对导入；只在当前索引中唯一且位于调用文件的目录祖先链下时连接路由，重名或未扫描目标不推断，见[增量分析影响范围](docs/project-analysis-impact.md)
   - [x] 第 34 版识别 `import app.routers.users as users` 后的 `app.include_router(users.router)`；仅在已读取索引中唯一定位模块时建立跨文件路由边，见[增量分析影响范围](docs/project-analysis-impact.md)
-  - [x] 第 35 版沿可确认的 `APIRouter.include_router` 关系最多追踪四层嵌套路由，组合字面量前缀并关联客户端请求、路由定义和各挂载文件；循环、未读取目标和动态前缀不推断，见[增量分析影响范围](docs/project-analysis-impact.md)
+  - [x] 第 35 版沿可确认的 `APIRouter.include_router` 关系最多追踪四层嵌套路由，组合字面量前缀并关联客户端请求、路由定义和各挂载文件；解析达到深度或数量上限时保守重审全部已索引模块，循环、未读取目标和动态前缀不推断，见[增量分析影响范围](docs/project-analysis-impact.md)
   - [x] 第 32 版把 FastAPI 中可读的本地相对导入、字面量 `APIRouter(prefix=...)`、`include_router(..., prefix=...)` 与子路由路径组合为跨前后端影响线索；动态前缀和复杂导入不推断，见[增量分析影响范围](docs/project-analysis-impact.md)
   - [x] 第 31 版在明确使用 Next.js 的同一项目包内，将 `app/api/**/route.ts|js` 和 `pages/api/**.ts|js` 文件路由与字面量客户端请求关联；支持单段、必选／可选剩余路径及路由组，未知重写和未读取配置不推断，见[增量分析影响范围](docs/project-analysis-impact.md)
   - [x] 第 30 版直接 API 路径与动态调用的 JS／TS 扫描排除注释和字符串示例，避免示例代码触发错误跨模块重审；Python／Go 和复杂语法仍受原覆盖边界限制，见[增量分析影响范围](docs/project-analysis-impact.md)

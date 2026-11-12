@@ -776,7 +776,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   // Dynamic API targets and Vite aliases are uncertain on any change;
   // computed SQL is uncertain when a SQL file changes.
   const uncertainLayers = [];
-  const uncertainSources = new Set([...uncertainViteImporters,...unknownApi,...unknownSql,...unknownPythonPaths,...unknownPrisma]);
+  const uncertainSources = new Set([...uncertainViteImporters,...unknownApi,...unknownSql,...unknownPythonPaths,...unknownPrisma,...(apiEdges.incompleteFastApi ? files.map(file => file.path) : [])]);
   if (changedPaths.size && uncertainSources.size) {
     let pending = [...uncertainSources].filter(name => !visited.has(name));
     for (const name of uncertainSources) impactedModules.add(projectModuleKey(name));
