@@ -76,7 +76,12 @@ async function readGithub(fetchGithub, url) {
   catch (error) { return { error: error instanceof GithubAuthorizationError ? fail(409,error.message) : fail(502, '无法连接 GitHub，请稍后重试') }; }
   if (response.status === 404) return { error: fail(404, '仓库或分支不存在，或当前无权访问') };
   if (response.status === 409) return { error: fail(422, '仓库尚无提交，暂不能分析') };
-  if (response.status === 403 || response.status === 429) return { error: fail(429, 'GitHub 请求受限，请稍后重试') };
+  if (response.status === 403 || response.status === 429) {
+    const message = (await response.json().catch(() => ({})))?.message || '';
+    const limited = response.status === 429 || response.headers.get('x-ratelimit-remaining') === '0'
+      || response.headers.has('retry-after') || /rate limit/i.test(message);
+    return { error: limited ? fail(429, 'GitHub 请求受限，请稍后重试') : fail(403, 'GitHub 拒绝访问该仓库或分支') };
+  }
   if (!response.ok) return { error: fail(502, `GitHub 返回错误（${response.status}）`) };
   try { return { data: await response.json() }; }
   catch { return { error: fail(502, 'GitHub 返回了无效数据') }; }
