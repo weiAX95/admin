@@ -63,7 +63,12 @@ export async function runProjectScan(db, id, scanRepository = scanPublicReposito
     }
     const fetchGithub = repository.is_private ? async url => {
       const response = await githubUserFetch(db,repository.owner_id,url);
-      if (response.status === 404 || response.status === 403 && response.headers?.get?.('x-ratelimit-remaining') !== '0' && !response.headers?.get?.('retry-after')) throw new GithubAuthorizationError('GitHub App 已失去仓库读取权限');
+      if (response.status === 403) {
+        const message = (await response.clone().json().catch(() => ({})))?.message || '';
+        const limited = response.headers.get('x-ratelimit-remaining') === '0'
+          || response.headers.has('retry-after') || /rate limit/i.test(message);
+        if (!limited) throw new GithubAuthorizationError('GitHub App 已失去仓库读取权限');
+      }
       return response;
     } : undefined;
     const result = await scanRepository({ fullName: job.full_name, commitSha: job.commit_sha.trim(), expectedRepositoryId: repository.github_repository_id, fetchGithub, cachedBlobs, previousFiles: sourceFiles || [], previousCoverageComplete: Boolean(source?.index_complete), relatedPathsForChanges: sourceFiles ? changes => projectImpactPriorityPathsV26(sourceFiles,changes) : null, maxFiles: job.budget_file_limit, maxTotalBytes: job.budget_byte_limit });
