@@ -27,11 +27,13 @@ try {
   const migration = await client.query("SELECT 1 FROM schema_migrations WHERE version='108_security_audit_retention'");
   if (!migration.rowCount) throw new Error('请先以迁移账号运行 npm run db:migrate');
   const existing = (await client.query('SELECT rolsuper,rolcreaterole,rolcreatedb,rolreplication FROM pg_roles WHERE rolname=$1', [role])).rows[0];
+  const quotedPassword = (await client.query('SELECT quote_literal($1) AS value', [password])).rows[0].value;
   if (!existing) {
-    const quotedPassword = (await client.query('SELECT quote_literal($1) AS value', [password])).rows[0].value;
     await client.query(`CREATE ROLE ${quotedRole} LOGIN PASSWORD ${quotedPassword} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT`);
   } else if (existing.rolsuper || existing.rolcreaterole || existing.rolcreatedb || existing.rolreplication) {
     throw new Error('运行账号已有高权限，请改用独立的普通角色');
+  } else {
+    await client.query(`ALTER ROLE ${quotedRole} PASSWORD ${quotedPassword}`);
   }
   const inheritsOwner = (await client.query("SELECT pg_has_role($1::name,current_user,'member') AS member", [role])).rows[0].member;
   if (inheritsOwner) throw new Error('运行账号不能继承迁移账号权限');
