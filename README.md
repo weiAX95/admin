@@ -34,7 +34,7 @@ npm run db:import
 npm run dev
 ```
 
-`db:import` 仅用于从现有 `mock/db.json` 一次性迁移数据。如果没有旧数据，先运行 `npm run db:migrate`，再按需准备账号；服务不会从空库自动生成演示数据。导入要求目标库为空，在一个事务中保留旧记录 ID 与时间、转换账号密码，并核对记录及关联数量。导入前会将原文件备份到 `mock/db-backups/`，原文件也保留；再次导入会因目标库非空而失败。迁移完成后 API 只读写 PostgreSQL，不再回退或写入 JSON。
+`db:import` 仅用于从现有 `mock/db.json` 一次性迁移数据。如果没有旧数据，先运行 `npm run db:migrate`，再按需准备账号；服务不会从空库自动生成演示数据。导入要求目标库为空，在一个事务中保留旧记录 ID 与时间、转换账号密码，并核对记录及关联数量。导入前会将原文件备份到 `mock/db-backups/`，原文件也保留；再次导入会因目标库非空而失败。迁移完成后 API 只读写 PostgreSQL，不再回退或写入 JSON。**已有 PostgreSQL 数据的工作区切换不能使用旧 JSON 代替数据库备份**：GitHub App 授权、项目扫描与报告等新记录只在 PostgreSQL 中。Docker Compose 项目名不同会使用不同数据卷；切换前核对数据库和卷，先保存原库快照，再恢复到目标库并运行迁移。恢复 GitHub 授权时还须沿用原 `GITHUB_APP_MASTER_KEY`，否则已加密令牌无法解密，见[GitHub 授权边界](docs/project-github-app.md)。
 
 `104_super_admin.sql` 在已有数据库中将创建时间最早的启用管理员提升为唯一 SuperAdmin；旧 JSON 导入时也执行此规则。该账号不可停用、降级或删除；普通 Admin 不能修改它。若已有账号却无启用管理员，迁移会明确失败，需先核对账号状态。
 `105_super_admin_candidates.sql` 允许 SuperAdmin 在账号编辑页提名或撤销 Admin 候选人；提名仅作登记，候选人保持 Admin 权限。完整权限矩阵仍在后续开发中。
