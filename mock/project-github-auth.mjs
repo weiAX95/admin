@@ -120,14 +120,14 @@ export async function getGithubUserToken(client, ownerId) {
         signal: AbortSignal.timeout(10000),
       });
     } catch { await connection.query('ROLLBACK'); throw new Error('暂时无法续期 GitHub 授权'); }
-    if (!response.ok) { await connection.query('ROLLBACK'); throw new Error('暂时无法续期 GitHub 授权'); }
-    const data = await response.json();
-    if (data.error === 'bad_refresh_token' || data.error === 'invalid_grant') {
+    const data = await response.json().catch(() => null);
+    if (data?.error === 'bad_refresh_token' || data?.error === 'invalid_grant') {
       await connection.query('DELETE FROM project_github_connections WHERE owner_id=$1', [ownerId]);
       await connection.query('COMMIT');
       throw new GithubAuthorizationError('GitHub 授权已失效，请重新连接');
     }
-    if (data.error || typeof data.access_token !== 'string' || !data.access_token || typeof data.refresh_token !== 'string' || !data.refresh_token || !Number.isFinite(Number(data.expires_in)) || Number(data.expires_in) <= 0 || !Number.isFinite(Number(data.refresh_token_expires_in)) || Number(data.refresh_token_expires_in) <= 0) {
+    if (!response.ok) { await connection.query('ROLLBACK'); throw new Error('暂时无法续期 GitHub 授权'); }
+    if (data?.error || typeof data?.access_token !== 'string' || !data.access_token || typeof data.refresh_token !== 'string' || !data.refresh_token || !Number.isFinite(Number(data.expires_in)) || Number(data.expires_in) <= 0 || !Number.isFinite(Number(data.refresh_token_expires_in)) || Number(data.refresh_token_expires_in) <= 0) {
       await connection.query('ROLLBACK');
       throw new Error('GitHub 续期响应无效');
     }

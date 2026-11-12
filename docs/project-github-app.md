@@ -12,7 +12,7 @@ GitHub 授权、已接入仓库和扫描记录属于 PostgreSQL 状态，不包�
 
 当前 `/project-analysis` 新增账号连接入口。管理员先在 GitHub 建立 GitHub App，设置用户授权回调为同源的 `/api/project-github/callback`，仅申请仓库 Metadata read 与 Contents read，并启用会过期的用户访问令牌。服务端配置 `GITHUB_APP_CLIENT_ID`、`GITHUB_APP_CLIENT_SECRET`、`GITHUB_APP_CALLBACK_URL` 与独立的 `GITHUB_APP_MASTER_KEY`。本地开发启动命令会生成主密钥；正式环境应由密钥管理系统提供，API 和后续扫描 worker 使用同一密钥。主密钥轮换可通过版本和旧密钥映射读取旧记录，完成逐条重加密后再移除旧密钥。
 
-连接流程生成 256 位随机 `state` 和独立的 256 位浏览器标记，数据库只存两者的 SHA-256。浏览器标记作为十分钟有效的 HttpOnly、SameSite=Lax Cookie，只发往回调路径；HTTPS 回调附加 Secure。回调同时核对 `state` 和浏览器标记，二者都匹配后才能将 GitHub 身份绑定到发起授权的管理端账号；状态仅可使用一次。[123_project_github_browser_binding.sql](../db/migrations/123_project_github_browser_binding.sql) 使旧的待完成授权状态失效。GitHub 授权码只在服务端交换。服务端用用户访问令牌读取 `/user` 验证 GitHub 身份，并以 AES-256-GCM 加密保存访问与刷新令牌。加密附加数据绑定管理端账号、字段和密钥版本。状态接口只返回 GitHub 登录名和到期时间；断开连接删除该账号保存的令牌及未完成授权状态。管理端账号删除时通过外键清理凭证。调用 GitHub 前，服务端在访问令牌接近到期时以刷新令牌续期；刷新令牌失效或 GitHub 返回 401 时清除连接，要求重新授权。数据库行锁防止同一账号并发续期互相覆盖。
+连接流程生成 256 位随机 `state` 和独立的 256 位浏览器标记，数据库只存两者的 SHA-256。浏览器标记作为十分钟有效的 HttpOnly、SameSite=Lax Cookie，只发往回调路径；HTTPS 回调附加 Secure。回调同时核对 `state` 和浏览器标记，二者都匹配后才能将 GitHub 身份绑定到发起授权的管理端账号；状态仅可使用一次。[123_project_github_browser_binding.sql](../db/migrations/123_project_github_browser_binding.sql) 使旧的待完成授权状态失效。GitHub 授权码只在服务端交换。服务端用用户访问令牌读取 `/user` 验证 GitHub 身份，并以 AES-256-GCM 加密保存访问与刷新令牌。加密附加数据绑定管理端账号、字段和密钥版本。状态接口只返回 GitHub 登录名和到期时间；断开连接删除该账号保存的令牌及未完成授权状态。管理端账号删除时通过外键清理凭证。调用 GitHub 前，服务端在访问令牌接近到期时以刷新令牌续期；续期响应即使是 HTTP 错误，也先识别 `bad_refresh_token` 或 `invalid_grant` 并清除连接，其他临时错误保留连接以便重试。GitHub 仓库 API 返回 401 时同样清除连接，要求重新授权。数据库行锁防止同一账号并发续期互相覆盖。
 
 GitHub 授权码与令牌续期请求禁止自动跟随 HTTP 重定向。仓库 API 请求只在 `api.github.com` 内手动跟随最多三次重定向，跨域、缺少目标或循环跳转均拒绝；私有请求的访问令牌不会发往其他主机。仓库改名后仍以 GitHub 不可变仓库 ID 核对身份。
 
