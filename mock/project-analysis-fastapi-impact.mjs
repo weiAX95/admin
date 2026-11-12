@@ -157,7 +157,7 @@ function routePath(parts) {
   return /^\/api\/[A-Za-z0-9_/-]+$/.test(route) ? route : null;
 }
 
-export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, includeAliasedImports = false, includeNestedRouters = false) {
+export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, includeAliasedImports = false, includeNestedRouters = false, includeDirectAppRoutes = false) {
   const indexed = new Map(files.filter(file => file.path.endsWith('.py') && file.status === 'read' && typeof file.content === 'string').map(file => [file.path,file]));
   const positions = new Map([...indexed].map(([name,file]) => [name,codePositions(file.content)]));
   const routers = new Map([...indexed].map(([name,file]) => [name,declarations(file.content,positions.get(name),routerDeclaration)]));
@@ -214,6 +214,15 @@ export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, i
     const apps = declarations(file.content,sourcePositions,appDeclaration);
     if (includeNestedRouters) incomplete ||= apps.incomplete;
     if (!apps.size) continue;
+    if (includeDirectAppRoutes) for (const appName of apps.keys()) {
+      const operations = operationPaths(file.content,sourcePositions,appName);
+      incomplete ||= operations.incomplete;
+      for (const operation of operations) {
+        if (endpoints.length >= 10000) { incomplete = true; break; }
+        const route = routePath([operation]);
+        if (route) endpoints.push({ path:file.path, route });
+      }
+    }
     const imports = importsFor(file,indexed,sourcePositions,includeAbsoluteImports,includeAliasedImports);
     if (includeNestedRouters) incomplete ||= imports.incomplete;
     includeRouter.lastIndex = 0;

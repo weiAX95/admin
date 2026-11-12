@@ -221,7 +221,7 @@ function nextRouteMatches(segments, request) {
   return requested.length === segments.length;
 }
 
-export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false, ignoreNonCode = false, ignoreDirectJsComments = false, includeNextFileRoutes = false, includeFastApiRouters = false, includeFastApiAbsoluteImports = false, includeFastApiAliasedImports = false, includeFastApiNestedRouters = false) {
+export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false, ignoreNonCode = false, ignoreDirectJsComments = false, includeNextFileRoutes = false, includeFastApiRouters = false, includeFastApiAbsoluteImports = false, includeFastApiAliasedImports = false, includeFastApiNestedRouters = false, includeFastApiDirectAppRoutes = false) {
   const endpoints = files.filter(file => file.status === 'read' && typeof file.content === 'string' && sourcePath.test(file.path)).map(file => ({
     path: file.path,
     ...routePrefixes(file,ignoreDirectJsComments && /\.(?:[cm]?[jt]sx?)$/.test(file.path) ? codePositions(file.content) : null)
@@ -240,7 +240,7 @@ export function projectApiDependencyEdges(files, includeRouterMounts = false, in
   }
   let incompleteFastApi = false;
   if (includeFastApiRouters) {
-    const mounted = fastApiMountedEndpoints(files,includeFastApiAbsoluteImports,includeFastApiAliasedImports,includeFastApiNestedRouters);
+    const mounted = fastApiMountedEndpoints(files,includeFastApiAbsoluteImports,includeFastApiAliasedImports,includeFastApiNestedRouters,includeFastApiDirectAppRoutes);
     incompleteFastApi = mounted.incomplete === true;
     for (const endpoint of mounted) {
       const key = root(endpoint.route);

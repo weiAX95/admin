@@ -1104,6 +1104,7 @@
   - [x] 展示实际分析范围、token／费用用量和扫描／模型输入预算造成的未覆盖内容
   - [ ] AC：刷新页面不丢失任务状态；失败可恢复；达到预算上限不会无限重试或继续消耗
 - [ ] **14.9 按 commit 增量分析**
+  - [x] 第 36 版识别同文件 `app = FastAPI()` 与字面量 `@app.get/post/put/patch/delete/options/head('/api/...')` 的直接路由，把前端请求与该后端文件连接；注释、字符串和动态路径不推断，真实样例留待统一验收
   - [x] 第 33 版识别 FastAPI 常见 `from app.routers import users` 等绝对导入；只在当前索引中唯一且位于调用文件的目录祖先链下时连接路由，重名或未扫描目标不推断，见[增量分析影响范围](docs/project-analysis-impact.md)
   - [x] 第 34 版识别 `import app.routers.users as users` 后的 `app.include_router(users.router)`；仅在已读取索引中唯一定位模块时建立跨文件路由边，见[增量分析影响范围](docs/project-analysis-impact.md)
   - [x] 第 35 版沿可确认的 `APIRouter.include_router` 关系最多追踪四层嵌套路由，组合字面量前缀并关联客户端请求、路由定义和各挂载文件；解析达到深度或数量上限时保守重审全部已索引模块，循环、未读取目标和动态前缀不推断，见[增量分析影响范围](docs/project-analysis-impact.md)
