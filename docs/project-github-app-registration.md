@@ -10,6 +10,8 @@
 
 2026-11-12 已创建私有联调仓库 [`weiAX95/admin-private-integration-fixture`](https://github.com/weiAX95/admin-private-integration-fixture)，并加入 `requirements.md`、`backend/app.py`、`frontend/Tasks.tsx` 三个合成样例文件；固定基线 commit 为 `66e3aa702e1c96869b5ee1c2001a354386ced822`，不含 admin 项目代码或密钥。`REQ-CREATE` 在 API 和页面均有源码线索，`REQ-FILTER` 在 API 和页面均有源码线索，`REQ-DELETE` 在该完整小样例中没有实现。这里的预期仅供最终逐条评审，尚未运行扫描或模型分析，不能视为实际报告验收。**创建仓库不等于授予 App 访问权**：当前 App 安装仍只选中 `weiAX95/admin`。GitHub 在打开安装配置时要求账号重新验证身份；验证完成后，须单独确认只新增这个联调仓库，保持 Contents／Metadata 只读，不选择所有仓库。实际授权、私有读取和撤销结果尚未取得，不能将 14.7 标记完成。
 
+该小仓库已经有提交，但 GitHub 仓库元数据仍返回 `size: 0`；接入逻辑已改为先读取目标分支，只有分支缺失时才额外查询提交接口以辨别空仓库。`size` 不再充当是否存在提交的依据。此处仅核对了元数据和静态代码，私有 App 读取仍待授权后验收。
+
 在 GitHub 的 Developer settings 创建 GitHub App。仓库权限只申请 **Contents: Read**；GitHub 会同时赋予必需的 **Metadata: Read**。不要申请仓库写权限。启用会过期的用户访问令牌，并在安装时选择需要接入的仓库。用户授权回调设置为本系统同源的 `/api/project-github/callback`；本地可使用 `http://localhost:5176/api/project-github/callback`，正式环境使用 HTTPS 域名。当前尚无公网 HTTPS 接收地址时，先关闭 **Webhook Active**；部署好接收地址后再填入正式环境的 `https://<域名>/api/project-github/webhook`、配置独立 Webhook secret、订阅 **Push** 事件并开启 Webhook，不能使用仅本机可访问的 localhost 地址。
 
 将 `GITHUB_APP_CLIENT_ID`、`GITHUB_APP_CLIENT_SECRET`、`GITHUB_APP_CALLBACK_URL`、`GITHUB_APP_MASTER_KEY` 配置在 API 服务环境中；启用 Webhook 时再配置 `GITHUB_APP_WEBHOOK_SECRET` 和 `GITHUB_APP_WEBHOOK_URL=https://<专用公网域名>/api/project-github/webhook`。主密钥须是独立生成的 64 位十六进制值；Webhook secret 与主密钥分开。不要将密钥放入仓库、聊天消息或前端构建变量。服务重启后，项目分析页会显示缺失的授权配置项；提交后扫描的开关会分别检查 Webhook secret 和公网 HTTPS 地址。URL 格式校验不证明 GitHub 能实际送达，仍须按真实交付记录验收。

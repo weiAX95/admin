@@ -102,12 +102,17 @@ async function resolveRepository(fetchGithub, parsed, requestedBranch, expectPri
   const info = repository.data;
   if (!Number.isSafeInteger(info.id) || info.id <= 0) return { error: fail(502, 'GitHub 仓库身份无效') };
   if (expectPrivate ? info.private !== true : info.private !== false) return { error: fail(403, expectPrivate ? '请选择当前 GitHub App 可访问的私有仓库' : '公开接入仅支持公开仓库') };
-  if (info.empty === true || info.size === 0) return { error: fail(422, '仓库尚无提交，暂不能分析') };
+  if (info.empty === true) return { error: fail(422, '仓库尚无提交，暂不能分析') };
+  if (!requestedBranch && !info.default_branch) return { error: fail(422, '仓库尚无提交，暂不能分析') };
   const branch = requestedBranch || info.default_branch;
   if (!validBranch(branch)) return { error: fail(400, '分支名称无效') };
   const canonicalBase = typeof info.full_name === 'string' && /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/.test(info.full_name)
     ? `https://api.github.com/repos/${info.full_name}` : base;
   const found = await readGithub(fetchGithub, `${canonicalBase}/branches/${encodeURIComponent(branch)}`);
+  if (found.error?.status === 404) {
+    const commits = await readGithub(fetchGithub, `${canonicalBase}/commits?per_page=1`);
+    if (commits.error && commits.error.status !== 404) return commits;
+  }
   if (found.error) return found;
   const sha = found.data?.commit?.sha;
   if (!/^[a-f\d]{40}$/i.test(sha || '')) return { error: fail(422, '分支没有可用的 commit SHA') };
