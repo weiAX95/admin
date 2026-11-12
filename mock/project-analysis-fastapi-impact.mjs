@@ -2,7 +2,7 @@ import path from 'node:path';
 
 const routerDeclaration = /^\s*([A-Za-z_]\w*)\s*=\s*APIRouter\s*\(/gm;
 const appDeclaration = /^\s*([A-Za-z_]\w*)\s*=\s*FastAPI\s*\(/gm;
-const relativeImport = /^\s*from\s+(\.+[A-Za-z_\d.]*)\s+import\s+([^#\n]+)$/gm;
+const fromImport = /^\s*from\s+(\.+[A-Za-z_\d.]*|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+([^#\n]+)$/gm;
 const includeRouter = /\b([A-Za-z_]\w*)\.include_router\s*\(\s*([A-Za-z_]\w*)(?:\.([A-Za-z_]\w*))?/g;
 
 function codePositions(content) {
@@ -79,21 +79,41 @@ function relativeModule(filePath, moduleName) {
   return result.startsWith('../') || result.startsWith('/') ? null : result;
 }
 
-function importsFor(file, indexed, positions) {
+function uniqueAbsoluteModule(sourcePath, modulePath, indexed) {
+  const suffix = `/${modulePath}.py`;
+  const candidates = [...indexed.keys()].filter(name => name === `${modulePath}.py` || name.endsWith(suffix));
+  if (candidates.length !== 1) return null;
+  let directory = path.posix.dirname(sourcePath);
+  while (true) {
+    const expected = path.posix.normalize(path.posix.join(directory,modulePath + '.py'));
+    if (expected === candidates[0]) return expected;
+    if (directory === '.' || directory === '') break;
+    directory = path.posix.dirname(directory);
+  }
+  return null;
+}
+
+function importsFor(file, indexed, positions, includeAbsoluteImports) {
   const imports = new Map();
-  relativeImport.lastIndex = 0;
+  fromImport.lastIndex = 0;
   let match, count = 0;
-  while ((match = relativeImport.exec(file.content)) && count++ < 100) {
+  while ((match = fromImport.exec(file.content)) && count++ < 100) {
     if (!inCode(match,positions)) continue;
-    const base = relativeModule(file.path,match[1]);
+    const relative = match[1].startsWith('.');
+    if (!relative && !includeAbsoluteImports) continue;
+    const base = relative ? relativeModule(file.path,match[1]) : match[1].replaceAll('.','/');
     if (!base) continue;
     for (const entry of match[2].split(',')) {
       const item = entry.trim().match(/^([A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?$/);
       if (!item) continue;
       const alias = item[2] || item[1];
-      const modulePath = `${base}/${item[1]}.py`;
-      if (indexed.has(modulePath)) imports.set(alias,{ path:modulePath, member:null });
-      else if (indexed.has(`${base}.py`)) imports.set(alias,{ path:`${base}.py`, member:item[1] });
+      const modulePath = relative ? indexed.has(`${base}/${item[1]}.py`) ? `${base}/${item[1]}.py` : null : uniqueAbsoluteModule(file.path,`${base}/${item[1]}`,indexed);
+      const memberPath = relative ? indexed.has(`${base}.py`) ? `${base}.py` : null : uniqueAbsoluteModule(file.path,base,indexed);
+      if (relative) {
+        if (modulePath) imports.set(alias,{ path:modulePath, member:null });
+        else if (memberPath) imports.set(alias,{ path:memberPath, member:item[1] });
+      } else if (modulePath && !memberPath) imports.set(alias,{ path:modulePath, member:null });
+      else if (memberPath && !modulePath) imports.set(alias,{ path:memberPath, member:item[1] });
     }
   }
   return imports;
@@ -109,7 +129,7 @@ function operationPaths(content, positions, routerName) {
   return paths;
 }
 
-export function fastApiMountedEndpoints(files) {
+export function fastApiMountedEndpoints(files, includeAbsoluteImports = false) {
   const indexed = new Map(files.filter(file => file.path.endsWith('.py') && file.status === 'read' && typeof file.content === 'string').map(file => [file.path,file]));
   const positions = new Map([...indexed].map(([name,file]) => [name,codePositions(file.content)]));
   const routers = new Map([...indexed].map(([name,file]) => [name,declarations(file.content,positions.get(name),routerDeclaration)]));
@@ -118,7 +138,7 @@ export function fastApiMountedEndpoints(files) {
     const sourcePositions = positions.get(file.path);
     const apps = declarations(file.content,sourcePositions,appDeclaration);
     if (!apps.size) continue;
-    const imports = importsFor(file,indexed,sourcePositions);
+    const imports = importsFor(file,indexed,sourcePositions,includeAbsoluteImports);
     includeRouter.lastIndex = 0;
     let match, count = 0;
     while ((match = includeRouter.exec(file.content)) && count++ < 100) {
