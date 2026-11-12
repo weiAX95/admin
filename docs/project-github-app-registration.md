@@ -8,6 +8,8 @@
 
 2026-10-30 本地管理端账号已完成 GitHub App 用户 OAuth，数据库中该账号的连接含有效访问与刷新期限，连接页面显示 `weiAX95`。通过页面调用已授权仓库接口时，列表只返回 `weiAX95/admin`（公开仓库）。这验证了当前本地授权和仓库清单的实际读取路径；私有仓库、授权撤销及真实 Webhook 交付尚未联调。
 
+已连接账号可在“项目分析”页点击“在 GitHub 管理可读取的仓库”，进入 GitHub 的已安装 App 设置；在本 App 下选择仓库并保存后，返回页面点击“查看已授权仓库”重新读取清单。该入口不授予权限，实际授权仍由 GitHub 账号在其设置页完成。[GitHub 官方说明](https://docs.github.com/en/apps/using-github-apps/reviewing-and-modifying-installed-github-apps)列出个人账号修改安装仓库范围的步骤。
+
 2026-11-12 已创建私有联调仓库 [`weiAX95/admin-private-integration-fixture`](https://github.com/weiAX95/admin-private-integration-fixture)，并加入 `requirements.md`、`backend/app.py`、`frontend/Tasks.tsx` 三个合成样例文件；固定基线 commit 为 `66e3aa702e1c96869b5ee1c2001a354386ced822`，不含 admin 项目代码或密钥。`REQ-CREATE` 在 API 和页面均有源码线索，`REQ-FILTER` 在 API 和页面均有源码线索，`REQ-DELETE` 在该完整小样例中没有实现。这里的预期仅供最终逐条评审，尚未运行扫描或模型分析，不能视为实际报告验收。**创建仓库不等于授予 App 访问权**：当前 App 安装仍只选中 `weiAX95/admin`。GitHub 在打开安装配置时要求账号重新验证身份；验证完成后，须单独确认只新增这个联调仓库，保持 Contents／Metadata 只读，不选择所有仓库。实际授权、私有读取和撤销结果尚未取得，不能将 14.7 标记完成。
 
 该小仓库已经有提交，但 GitHub 仓库元数据仍返回 `size: 0`；接入逻辑已改为先读取目标分支，只有分支缺失时才额外查询提交接口以辨别空仓库。`size` 不再充当是否存在提交的依据。此处仅核对了元数据和静态代码，私有 App 读取仍待授权后验收。

@@ -286,7 +286,8 @@ export default function ProjectAnalysis() {
         <Typography.Text type="secondary">连接账号后，从已授权仓库中选择私有仓库并接入。扫描仅读取所选仓库；开始模型分析前会再次展示发送范围供你确认。</Typography.Text>
         {githubConnection?.connected ? <Button danger loading={githubBusy} onClick={() => Modal.confirm({ title: '断开 GitHub 账号？', content: '断开后服务端删除本账号保存的 GitHub 凭证。', okText: '断开连接', okButtonProps: { danger: true }, onOk: disconnectGithub })}>断开连接</Button> : <Button loading={githubBusy} disabled={!githubConnection?.configured} onClick={() => void connectGithub()}>连接 GitHub</Button>}
         {githubConnection?.connected && <>
-          <Button loading={githubRepositoriesLoading} onClick={() => void loadGithubRepositories()}>查看已授权仓库</Button>
+          <Space wrap><Button loading={githubRepositoriesLoading} onClick={() => void loadGithubRepositories()}>查看已授权仓库</Button><a href="https://github.com/settings/installations" target="_blank" rel="noopener noreferrer">在 GitHub 管理可读取的仓库</a></Space>
+          <Typography.Text type="secondary">在 GitHub 找到本 App，选择允许读取的仓库并保存；返回后点击“查看已授权仓库”刷新清单。</Typography.Text>
           {githubRepositories.length > 0 && <Space wrap><Select aria-label="选择 GitHub App 已授权仓库" showSearch optionFilterProp="label" value={selectedGithubRepository} onChange={setSelectedGithubRepository} style={{ minWidth: 320 }} options={githubRepositories.map(repo => ({ value: repo.fullName, label: `${repo.fullName} · ${repo.private ? '私有' : '公开'}` }))} /><Button disabled={!selectedGithubRepository} onClick={() => { const repo = githubRepositories.find(item => item.fullName === selectedGithubRepository); if (repo) form.setFieldsValue({ url: `https://github.com/${repo.fullName}`, branch: repo.defaultBranch || undefined, useGithubApp: repo.private }); }}>填入接入表单</Button></Space>}
           {githubRepositoriesCursor && <Button loading={githubRepositoriesLoading} onClick={() => void loadGithubRepositories(true)}>加载更多授权仓库</Button>}
         </>}
