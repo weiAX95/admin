@@ -323,7 +323,7 @@ flowchart LR
 
 [169_project_scan_index_completeness.sql](../db/migrations/169_project_scan_index_completeness.sql) 增加 `project_scans.index_complete`，把“目录路径索引完整”与“正文读取完成”分开。旧完整扫描可安全置为 true；旧部分扫描不推断，保持 false。新增、删除和重命名差异按两侧索引完整性保守写入，不增加表或外键。
 
-[170_project_analysis_python_setup_cfg_v26.sql](../db/migrations/170_project_analysis_python_setup_cfg_v26.sql) 将 `project_analyses.analysis_plan_version` 的允许范围扩至 26，不增加表、列或外键。第 26 版的 Python `setup.cfg` 静态影响规则见[增量分析影响范围](project-analysis-impact.md)；已保存的旧作业仍按原版本处理。
+[170_project_analysis_python_setup_cfg_v26.sql](../db/migrations/170_project_analysis_python_setup_cfg_v26.sql) 将 `project_analyses.analysis_plan_version` 的允许范围扩至 26，不增加表、列或外键。第 26 版的 Python `setup.cfg` 静态影响规则见[增量分析影响范围](project-analysis-impact.md)；已保存的旧作业仍按原版本处理。`project_analysis_technologies` 也可保存可读 `setup.cfg` 的 `install_requires` 中已知依赖声明及原文件行，这仍不证明代码实际运行。
 
 [117_project_scan_rate_retry.sql](../db/migrations/117_project_scan_rate_retry.sql) 在扫描头部保存限流重试次数和下次尝试时间，无新表或外键。排队状态跨服务重启恢复，跨进程咨询锁保证扫描请求串行；详见[扫描限流与恢复](project-scan-rate-limits.md)。
 

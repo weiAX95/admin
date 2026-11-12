@@ -164,7 +164,8 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
   let relatedPaths = new Set();
   // New SQL, Python and deployment files may affect old modules even though
   // they were absent from the previous scan's dependency graph.
-  const knownChanges = changes.filter(change => change.kind !== 'added' || /\.(?:sql|py)$/i.test(change.path) || isProjectDeploymentConfigPath(change.path));
+  const knownChanges = changes.filter(change => change.kind !== 'added' || /\.(?:sql|py)$/i.test(change.path)
+    || /(?:^|\/)setup\.cfg$/i.test(change.path) || isProjectDeploymentConfigPath(change.path));
   if (knownChanges.length && typeof relatedPathsForChanges === 'function') {
     try { relatedPaths = new Set((relatedPathsForChanges(knownChanges) || []).filter(path => !priorityPaths.has(path))); }
     catch { /* A stale or unsupported dependency graph must not prevent the scan. */ }

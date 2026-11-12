@@ -37,7 +37,7 @@ export function parseProjectRequirements(content) {
 export function detectProjectTechnologies(files) {
   const found = new Map();
   for (const file of [...files].sort((a,b) => a.path.localeCompare(b.path))) {
-    if (file.status !== 'read' || typeof file.content !== 'string' || isSensitiveProjectPath(file.path) || !/(^|\/)(?:package\.json|requirements\.txt|pyproject\.toml|go\.mod|Cargo\.toml)$/.test(file.path) || containsKnownSecret(file.content)) continue;
+    if (file.status !== 'read' || typeof file.content !== 'string' || isSensitiveProjectPath(file.path) || !/(^|\/)(?:package\.json|requirements\.txt|pyproject\.toml|setup\.cfg|go\.mod|Cargo\.toml)$/.test(file.path) || containsKnownSecret(file.content)) continue;
     const lines = file.content.split(/\r?\n/);
     const add = (dependency, name, index) => {
       if (!name || found.has(name) || lines[index].length > 300) return;
@@ -74,6 +74,19 @@ export function detectProjectTechnologies(files) {
           const match = trimmed.match(/^([A-Za-z0-9_.-]+)\s*=\s*(?:["'][^"']+["']|\{[^}\n]+\})(?:\s+#.*)?$/);
           if (match) { const dependency = match[1].toLowerCase().replaceAll('_','-'); add(dependency,pythonTechnologies.get(dependency),index); }
         }
+      });
+    } else if (/(^|\/)setup\.cfg$/.test(file.path)) {
+      let section = '', inRequirements = false;
+      lines.forEach((line,index) => {
+        const trimmed = line.trim();
+        const heading = trimmed.match(/^\[([^\]]+)\](?:\s*[#;].*)?$/);
+        if (heading) { section = heading[1].toLowerCase(); inRequirements = false; return; }
+        if (section !== 'options') return;
+        if (/^install_requires\s*=\s*(?:[#;].*)?$/.test(trimmed)) { inRequirements = true; return; }
+        if (!inRequirements) return;
+        if (trimmed && !/^\s/.test(line)) { inRequirements = false; return; }
+        const match = trimmed.match(/^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?(?:\s*[<>=!~].*)?$/);
+        if (match) { const dependency = match[1].toLowerCase().replaceAll('_','-'); add(dependency,pythonTechnologies.get(dependency),index); }
       });
     } else if (/(^|\/)go\.mod$/.test(file.path)) {
       let inRequire = false;
