@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { fastApiMountedEndpoints } from './project-analysis-fastapi-impact.mjs';
 
 const sourcePath = /\.(?:[cm]?[jt]sx?|py|go)$/;
 const serverLiteral = /\bpathname\s*(?:===|==|\.startsWith\(\s*)\s*['"`](\/api\/[A-Za-z0-9_/-]+)/g;
@@ -220,7 +221,7 @@ function nextRouteMatches(segments, request) {
   return requested.length === segments.length;
 }
 
-export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false, ignoreNonCode = false, ignoreDirectJsComments = false, includeNextFileRoutes = false) {
+export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false, ignoreNonCode = false, ignoreDirectJsComments = false, includeNextFileRoutes = false, includeFastApiRouters = false) {
   const endpoints = files.filter(file => file.status === 'read' && typeof file.content === 'string' && sourcePath.test(file.path)).map(file => ({
     path: file.path,
     ...routePrefixes(file,ignoreDirectJsComments && /\.(?:[cm]?[jt]sx?)$/.test(file.path) ? codePositions(file.content) : null)
@@ -233,6 +234,11 @@ export function projectApiDependencyEdges(files, includeRouterMounts = false, in
     servers.get(key).push({ path: file.path, route });
   }
   if (includeRouterMounts) for (const endpoint of routerMountEndpoints(files,includeNamedImports,ignoreNonCode)) {
+    const key = root(endpoint.route);
+    if (!servers.has(key)) servers.set(key,[]);
+    servers.get(key).push(endpoint);
+  }
+  if (includeFastApiRouters) for (const endpoint of fastApiMountedEndpoints(files)) {
     const key = root(endpoint.route);
     if (!servers.has(key)) servers.set(key,[]);
     servers.get(key).push(endpoint);
