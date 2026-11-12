@@ -1068,7 +1068,7 @@
   - [x] 重新读取 GitHub 安装设置确认仅选中 `weiAX95/admin`，没有授予所有仓库权限
   - [x] 本地管理端账号已通过 GitHub App OAuth 连接 `weiAX95`；数据库保存有效的加密访问／刷新令牌，授权仓库列表实际返回唯一的 `weiAX95/admin`
   - [x] 带凭据的授权码／续期请求拒绝自动重定向；仓库 API 仅手动跟随限次同站跳转，拒绝跨域并继续核对不可变仓库 ID
-  - [ ] 私有仓库授权与失权联调仍待选定私有仓库；当前安装只包含公开的 `weiAX95/admin`
+  - [ ] 2026-11-12 已建立仅含 README 的私有联调仓库 `weiAX95/admin-private-integration-fixture`；GitHub App 当前仍只安装到公开的 `weiAX95/admin`。待账号完成 GitHub 再次验证后，另行确认仅把该私有仓库加入只读安装范围，再做授权与失权联调
   - [x] 已在 `weiAX95` 注册仅该账号可安装的只读 GitHub App；Client ID 与本地回调写入本机配置，见[接入准备](docs/project-github-app-registration.md)
   - [x] 连接状态不再把刷新令牌已过期的记录显示为已连接，避免页面继续提供失效仓库入口
   - [x] 授权仓库清单重新读取后清除已失权的旧选择；断开账号或连接状态失效时清空列表、分页位置和选择，并忽略过期请求结果
