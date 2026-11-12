@@ -5,7 +5,7 @@ import { assertGithubPrivateRepoAccess, GithubAuthorizationError, githubPublicFe
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA = /^[0-9a-f]{40}$/i;
 const REPOSITORY = /^[A-Za-z0-9-]+\/[A-Za-z0-9_.-]+$/;
-const MAX_BODY_BYTES = 1024 * 1024;
+const MAX_BODY_BYTES = 25 * 1024 * 1024;
 const MAX_ATTEMPTS = 4;
 let processingDeliveries = false;
 export class GithubRepositoryIdentityError extends Error {}
@@ -92,6 +92,8 @@ export async function handleProjectGithubWebhook(req, pool, env = process.env) {
   if (req.method !== 'POST') return { status: 405, data: { error: '仅接受 POST' } };
   if (!env.GITHUB_APP_WEBHOOK_SECRET) return { status: 503, data: { error: 'GitHub Webhook 尚未配置' } };
   if (!/^application\/json(?:\s*;|$)/i.test(String(req.headers['content-type'] || ''))) return { status: 415, data: { error: '需要 JSON 请求体' } };
+  const declaredBytes = Number(req.headers['content-length']);
+  if (Number.isFinite(declaredBytes) && declaredBytes > MAX_BODY_BYTES) return { status: 413, data: { error: 'GitHub 事件超过大小限制' } };
   const deliveryId = req.headers['x-github-delivery'];
   const eventType = req.headers['x-github-event'];
   if (!UUID.test(String(deliveryId || '')) || typeof eventType !== 'string' || !/^[a-z_]{1,40}$/.test(eventType)) return { status: 400, data: { error: 'GitHub 事件标识无效' } };

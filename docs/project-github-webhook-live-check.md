@@ -27,7 +27,7 @@ GitHub Push Webhook
 4. 在公网主机为专用域名配置 Nginx。下面只展示关键 `location`，应放在该域名自己的 TLS `server` 中；该 `server` 的其他路径返回 404：
 
    ```nginx
-   client_max_body_size 1m;
+   client_max_body_size 26m;
    location = /api/project-github/webhook {
        limit_except POST { deny all; }
        proxy_pass http://127.0.0.1:18002;
