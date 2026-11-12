@@ -29,6 +29,14 @@ const repositoryQuery = `SELECT r.*, latest.finished_at AS last_analysis_at, lat
     ORDER BY finished_at DESC, created_at DESC LIMIT 1
   ) latest ON true`;
 const fail = (status, error) => ({ status, data: { error } });
+function privateAccessFailure(error, fallback = '暂时无法核验私有仓库权限') {
+  if (error instanceof GithubAuthorizationError) return fail(403,error.message);
+  if (error.rateLimited) {
+    const retryAfterSeconds = Math.max(1,Math.ceil((error.retryAfterMs || 60_000) / 1000));
+    return { status: 429, data: { error: `GitHub 请求受限，建议 ${retryAfterSeconds} 秒后重试`, retryAfterSeconds } };
+  }
+  return fail(502,fallback);
+}
 
 async function currentRequirements(client, baselineVersionId) {
   if (!baselineVersionId) return [];
@@ -110,7 +118,7 @@ async function resolveRepository(fetchGithub, parsed, requestedBranch, expectPri
 async function resolveStoredRepository(client, row, fetchGithub) {
   if (row.is_private) {
     try { await assertGithubPrivateRepoAccess(client,row.owner_id,row.full_name,row.github_repository_id); }
-    catch (error) { return { error: error instanceof GithubAuthorizationError ? fail(403,error.message) : error.rateLimited ? fail(429,'GitHub 请求受限，请稍后重试') : fail(502,'暂时无法核验私有仓库权限') }; }
+    catch (error) { return { error: privateAccessFailure(error) }; }
   }
   const [owner, repo] = row.full_name.split('/');
   return resolveRepository(row.is_private ? url => githubUserFetch(client,row.owner_id,url) : fetchGithub,
@@ -128,7 +136,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
       try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name,row.github_repository_id); visible.push(row); }
       catch (error) {
         if (error instanceof GithubAuthorizationError) continue;
-        return error.rateLimited ? fail(429,'GitHub 请求受限，暂时无法核验私有仓库列表') : fail(502,'暂时无法核验私有仓库列表');
+        return privateAccessFailure(error,'暂时无法核验私有仓库列表');
       }
     }
     return { status: 200, data: { items: visible.map(publicRow) } };
@@ -146,7 +154,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     const privateMode = body.useGithubApp === true;
     if (privateMode) {
       try { await assertGithubPrivateRepoAccess(client,me.id,parsed.fullName); }
-      catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
+      catch (error) { return privateAccessFailure(error); }
     }
     const repositoryFetch = privateMode ? url => githubUserFetch(client,me.id,url) : fetchGithub;
     const resolved = await resolveRepository(repositoryFetch, parsed, body.branch, privateMode);
@@ -206,7 +214,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     if (body.enabled && row.github_repository_id === null) return fail(409,'请先核对并绑定此项目的 GitHub 仓库身份');
     if (body.enabled && row.is_private) {
       try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name,row.github_repository_id); }
-      catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
+      catch (error) { return privateAccessFailure(error); }
     }
     return auditedWrite(client,req,me,'update_poll_scan',id,async connection => {
       const updated = (await connection.query(`UPDATE project_repositories SET poll_scan_enabled=$3,
@@ -227,7 +235,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
     if (body.enabled && !githubWebhookEndpointConfigured()) return fail(409,'服务端尚未配置专用的公网 HTTPS Webhook 接收地址，请先使用定时检查');
     if (body.enabled && row.is_private) {
       try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name,row.github_repository_id); }
-      catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
+      catch (error) { return privateAccessFailure(error); }
     }
     return auditedWrite(client,req,me,'update_webhook_scan',id,async connection => {
       const updated = (await connection.query('UPDATE project_repositories SET webhook_scan_enabled=$3,auto_analysis_enabled=CASE WHEN $3 OR poll_scan_enabled THEN auto_analysis_enabled ELSE false END,updated_at=now() WHERE id=$1 AND owner_id=$2 AND webhook_scan_enabled=$4 RETURNING *',[id,me.id,body.enabled,body.expectedEnabled])).rows[0];
@@ -244,7 +252,7 @@ export async function handleProjectRepositories({ pathname, method, client, me, 
       if (!row.webhook_scan_enabled && !row.poll_scan_enabled) return fail(409,'请先开启提交后扫描或定时检查');
       if (row.is_private) {
         try { await assertGithubPrivateRepoAccess(client,me.id,row.full_name,row.github_repository_id); }
-        catch (error) { return error instanceof GithubAuthorizationError ? fail(403,error.message) : fail(502,'暂时无法核验私有仓库权限'); }
+        catch (error) { return privateAccessFailure(error); }
       }
       if (body.confirmRecurringCost !== true || typeof body.modelId !== 'string' || ![30000,60000,120000].includes(body.tokenBudget) || ![0.1,0.5,1,5].includes(body.costBudgetUsd)) return fail(400,'请选择模型和单次费用／token 上限，并确认持续调用');
       const model = (await client.query('SELECT * FROM experiment_models WHERE id=$1',[body.modelId])).rows[0];
