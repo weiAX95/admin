@@ -139,11 +139,62 @@ function operationPaths(content, positions, routerName) {
   return paths;
 }
 
-export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, includeAliasedImports = false) {
+function mountedRouter(file, match, imports, indexed, routers) {
+  const imported = imports.get(match[2]);
+  const target = imported ? indexed.get(imported.path) : file;
+  const routerName = match[3] || imported?.member || match[2];
+  if (!target || imported && match[3] && imported.member || !routers.get(target.path)?.has(routerName)) return null;
+  return { target, routerName };
+}
+
+function routePath(parts) {
+  const route = `/${parts.flatMap(part => part.split('/')).filter(Boolean).join('/')}`;
+  return /^\/api\/[A-Za-z0-9_/-]+$/.test(route) ? route : null;
+}
+
+export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, includeAliasedImports = false, includeNestedRouters = false) {
   const indexed = new Map(files.filter(file => file.path.endsWith('.py') && file.status === 'read' && typeof file.content === 'string').map(file => [file.path,file]));
   const positions = new Map([...indexed].map(([name,file]) => [name,codePositions(file.content)]));
   const routers = new Map([...indexed].map(([name,file]) => [name,declarations(file.content,positions.get(name),routerDeclaration)]));
+  const routerKey = (name, router) => `${name}\0${router}`;
+  const nestedMounts = new Map();
+  if (includeNestedRouters) for (const file of indexed.values()) {
+    const declared = routers.get(file.path);
+    if (!declared.size) continue;
+    const sourcePositions = positions.get(file.path);
+    const imports = importsFor(file,indexed,sourcePositions,includeAbsoluteImports,includeAliasedImports);
+    includeRouter.lastIndex = 0;
+    let match, count = 0;
+    while ((match = includeRouter.exec(file.content)) && count++ < 100) {
+      if (!inCode(match,sourcePositions) || !declared.has(match[1])) continue;
+      const opening = file.content.indexOf('(',match.index);
+      const prefix = literalPrefix(callArguments(file.content,opening,sourcePositions),sourcePositions);
+      const child = mountedRouter(file,match,imports,indexed,routers);
+      if (prefix === null || !child) continue;
+      const key = routerKey(file.path,match[1]);
+      if (!nestedMounts.has(key)) nestedMounts.set(key,[]);
+      nestedMounts.get(key).push({ ...child, prefix });
+    }
+  }
   const endpoints = [];
+  let nestedCount = 0;
+  function appendNested(parentPath, parentRouter, prefixParts, trace, seen, depth) {
+    if (depth >= 4 || nestedCount >= 2000 || endpoints.length >= 10000) return;
+    for (const mount of nestedMounts.get(routerKey(parentPath,parentRouter)) || []) {
+      if (nestedCount >= 2000 || endpoints.length >= 10000) break;
+      const key = routerKey(mount.target.path,mount.routerName);
+      if (seen.has(key)) continue;
+      nestedCount++;
+      const parts = [...prefixParts,mount.prefix,routers.get(mount.target.path).get(mount.routerName)];
+      const paths = [...new Set([...trace,mount.target.path])];
+      for (const operation of operationPaths(mount.target.content,positions.get(mount.target.path),mount.routerName)) {
+        if (endpoints.length >= 10000) break;
+        const route = routePath([...parts,operation]);
+        if (route) for (const name of paths) endpoints.push({ path:name, route });
+      }
+      appendNested(mount.target.path,mount.routerName,parts,paths,new Set([...seen,key]),depth + 1);
+    }
+  }
   for (const file of indexed.values()) {
     const sourcePositions = positions.get(file.path);
     const apps = declarations(file.content,sourcePositions,appDeclaration);
@@ -156,17 +207,17 @@ export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, i
       const opening = file.content.indexOf('(',match.index);
       const mountPrefix = literalPrefix(callArguments(file.content,opening,sourcePositions),sourcePositions);
       if (mountPrefix === null) continue;
-      const imported = imports.get(match[2]);
-      const target = imported ? indexed.get(imported.path) : file;
-      const routerName = match[3] || imported?.member || match[2];
-      if (!target || imported && match[3] && imported.member || !routers.get(target.path)?.has(routerName)) continue;
+      const mounted = mountedRouter(file,match,imports,indexed,routers);
+      if (!mounted) continue;
+      const { target, routerName } = mounted;
       const routerPrefix = routers.get(target.path).get(routerName);
       for (const operation of operationPaths(target.content,positions.get(target.path),routerName)) {
-        const route = `/${[mountPrefix,routerPrefix,operation].flatMap(part => part.split('/')).filter(Boolean).join('/')}`;
-        if (!/^\/api\/[A-Za-z0-9_/-]+$/.test(route)) continue;
+        const route = routePath([mountPrefix,routerPrefix,operation]);
+        if (!route) continue;
         endpoints.push({ path:target.path, route });
         if (target !== file) endpoints.push({ path:file.path, route });
       }
+      if (includeNestedRouters) appendNested(target.path,routerName,[mountPrefix,routerPrefix],[file.path,target.path],new Set([routerKey(target.path,routerName)]),0);
     }
   }
   return endpoints;

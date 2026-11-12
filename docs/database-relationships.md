@@ -339,6 +339,7 @@ flowchart LR
 
 [177_project_analysis_fastapi_absolute_v33.sql](../db/migrations/177_project_analysis_fastapi_absolute_v33.sql) 将 `project_analyses.analysis_plan_version` 的允许范围扩至 33，不增加表、列或外键。第 33 版将可唯一定位的 FastAPI 绝对导入也纳入静态影响边；旧作业仍按创建时版本恢复。
 [178_project_analysis_fastapi_aliased_import_v34.sql](../db/migrations/178_project_analysis_fastapi_aliased_import_v34.sql) 将 `project_analyses.analysis_plan_version` 的允许范围扩至 34，不增加表、列或外键。第 34 版识别可唯一定位的 FastAPI 显式别名模块导入；旧作业仍按创建时版本恢复。
+[179_project_analysis_fastapi_nested_routers_v35.sql](../db/migrations/179_project_analysis_fastapi_nested_routers_v35.sql) 将 `project_analyses.analysis_plan_version` 的允许范围扩至 35，不增加表、列或外键。第 35 版将可确认的嵌套 FastAPI 路由纳入静态影响边；旧作业仍按创建时版本恢复。
 
 [117_project_scan_rate_retry.sql](../db/migrations/117_project_scan_rate_retry.sql) 在扫描头部保存限流重试次数和下次尝试时间，无新表或外键。排队状态跨服务重启恢复，跨进程咨询锁保证扫描请求串行；详见[扫描限流与恢复](project-scan-rate-limits.md)。
 
