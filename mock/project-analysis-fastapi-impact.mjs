@@ -3,6 +3,7 @@ import path from 'node:path';
 const routerDeclaration = /^\s*([A-Za-z_]\w*)\s*=\s*APIRouter\s*\(/gm;
 const appDeclaration = /^\s*([A-Za-z_]\w*)\s*=\s*FastAPI\s*\(/gm;
 const fromImport = /^\s*from\s+(\.+[A-Za-z_\d.]*|[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+([^#\n]+)$/gm;
+const aliasedImport = /^\s*import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)\s+as\s+([A-Za-z_]\w*)\s*(?:#.*)?$/gm;
 const includeRouter = /\b([A-Za-z_]\w*)\.include_router\s*\(\s*([A-Za-z_]\w*)(?:\.([A-Za-z_]\w*))?/g;
 
 function codePositions(content) {
@@ -93,7 +94,7 @@ function uniqueAbsoluteModule(sourcePath, modulePath, indexed) {
   return null;
 }
 
-function importsFor(file, indexed, positions, includeAbsoluteImports) {
+function importsFor(file, indexed, positions, includeAbsoluteImports, includeAliasedImports) {
   const imports = new Map();
   fromImport.lastIndex = 0;
   let match, count = 0;
@@ -116,6 +117,15 @@ function importsFor(file, indexed, positions, includeAbsoluteImports) {
       else if (memberPath && !modulePath) imports.set(alias,{ path:memberPath, member:item[1] });
     }
   }
+  if (includeAliasedImports) {
+    aliasedImport.lastIndex = 0;
+    count = 0;
+    while ((match = aliasedImport.exec(file.content)) && count++ < 100) {
+      if (!inCode(match,positions)) continue;
+      const target = uniqueAbsoluteModule(file.path,match[1].replaceAll('.','/'),indexed);
+      if (target && !imports.has(match[2])) imports.set(match[2],{ path:target, member:null });
+    }
+  }
   return imports;
 }
 
@@ -129,7 +139,7 @@ function operationPaths(content, positions, routerName) {
   return paths;
 }
 
-export function fastApiMountedEndpoints(files, includeAbsoluteImports = false) {
+export function fastApiMountedEndpoints(files, includeAbsoluteImports = false, includeAliasedImports = false) {
   const indexed = new Map(files.filter(file => file.path.endsWith('.py') && file.status === 'read' && typeof file.content === 'string').map(file => [file.path,file]));
   const positions = new Map([...indexed].map(([name,file]) => [name,codePositions(file.content)]));
   const routers = new Map([...indexed].map(([name,file]) => [name,declarations(file.content,positions.get(name),routerDeclaration)]));
@@ -138,7 +148,7 @@ export function fastApiMountedEndpoints(files, includeAbsoluteImports = false) {
     const sourcePositions = positions.get(file.path);
     const apps = declarations(file.content,sourcePositions,appDeclaration);
     if (!apps.size) continue;
-    const imports = importsFor(file,indexed,sourcePositions,includeAbsoluteImports);
+    const imports = importsFor(file,indexed,sourcePositions,includeAbsoluteImports,includeAliasedImports);
     includeRouter.lastIndex = 0;
     let match, count = 0;
     while ((match = includeRouter.exec(file.content)) && count++ < 100) {
