@@ -709,7 +709,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false, includePrisma = false, includeSqlAlchemy = false, includeWebpackAliases = false, includeGoLocalReplace = false, includeGoWorkspace = false, includeSetupCfg = false, includeRouterMounts = false, includeNamedRouterImports = false, ignoreRouterComments = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false, includePrisma = false, includeSqlAlchemy = false, includeWebpackAliases = false, includeGoLocalReplace = false, includeGoWorkspace = false, includeSetupCfg = false, includeRouterMounts = false, includeNamedRouterImports = false, ignoreRouterComments = false, ignoreDirectJsComments = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -730,10 +730,10 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const goReplacements = includeGoLocalReplace ? goLocalReplacements(files,goBoundaries) : null;
   const goWorkspaces = includeGoWorkspace ? goWorkspaceModules(files,goBoundaries) : null;
   const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files,includeSetupCfg) : null;
-  const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files,includeRouterMounts,includeNamedRouterImports,ignoreRouterComments) : new Map();
+  const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files,includeRouterMounts,includeNamedRouterImports,ignoreRouterComments,ignoreDirectJsComments) : new Map();
   const sqlEdges = includeSqlTables ? projectSqlDependencyEdges(files,includeSqlAlchemy) : new Map();
   const prismaEdges = includePrisma ? prismaDependencyEdges(files) : new Map();
-  const unknownApi = includeDynamicApi ? dynamicApiFiles(files) : new Set();
+  const unknownApi = includeDynamicApi ? dynamicApiFiles(files,ignoreDirectJsComments) : new Set();
   const sqlChanged = changes.some(change => /\.sql$/i.test(change.path) || change.oldPath && /\.sql$/i.test(change.oldPath));
   const unknownSql = includeDynamicSql && sqlChanged ? dynamicSqlFiles(files) : new Set();
   const pythonChanged = changes.some(change => /\.py$/i.test(change.path) || change.oldPath && /\.py$/i.test(change.oldPath));
@@ -879,3 +879,11 @@ export function selectProjectImpactEvidenceV29(files, changes) {
   return result;
 }
 export const projectImpactPriorityPathsV29 = (files, changes) => selectProjectImpactEvidenceV29(files,changes).priorityPaths;
+export function selectProjectImpactEvidenceV30(files, changes) {
+  const result = selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true);
+  if (changes.some(change => isProjectDeploymentConfigPath(change.path) || isProjectDeploymentConfigPath(change.oldPath))) {
+    for (const file of files) result.impactedModules.add(projectModuleKey(file.path));
+  }
+  return result;
+}
+export const projectImpactPriorityPathsV30 = (files, changes) => selectProjectImpactEvidenceV30(files,changes).priorityPaths;

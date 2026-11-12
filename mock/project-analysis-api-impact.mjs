@@ -70,12 +70,13 @@ function namedRouterExport(content, exportedName, positions = null) {
   return null;
 }
 
-function collect(content, patterns, transform = value => value) {
+function collect(content, patterns, transform = value => value, positions = null) {
   const values = new Set();
   for (const pattern of patterns) {
     pattern.lastIndex = 0;
     let match, count = 0;
     while ((match = pattern.exec(content)) && count++ < 200) {
+      if (!inCode(match,positions)) continue;
       const value = transform(match[1]);
       const segments = value.split('/').filter(Boolean);
       if (segments[0] === 'api' && segments.length >= 2) values.add(`/${segments.join('/')}`);
@@ -84,9 +85,9 @@ function collect(content, patterns, transform = value => value) {
   return values;
 }
 
-function routePrefixes(file) {
-  const server = collect(file.content,[serverLiteral,serverRegex,routeRegistration,pythonRoute,goRoute],value => value.replaceAll('\\/','/'));
-  const client = collect(file.content,[clientHttp,clientFetch],value => value.startsWith('/api/') ? value : `/api${value}`);
+function routePrefixes(file, positions = null) {
+  const server = collect(file.content,[serverLiteral,serverRegex,routeRegistration,pythonRoute,goRoute],value => value.replaceAll('\\/','/'),positions);
+  const client = collect(file.content,[clientHttp,clientFetch],value => value.startsWith('/api/') ? value : `/api${value}`,positions);
   return { server, client };
 }
 
@@ -163,8 +164,11 @@ function relatedRoutes(left, right) {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
-export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false, ignoreNonCode = false) {
-  const endpoints = files.filter(file => file.status === 'read' && typeof file.content === 'string' && sourcePath.test(file.path)).map(file => ({ path: file.path, ...routePrefixes(file) }));
+export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false, ignoreNonCode = false, ignoreDirectJsComments = false) {
+  const endpoints = files.filter(file => file.status === 'read' && typeof file.content === 'string' && sourcePath.test(file.path)).map(file => ({
+    path: file.path,
+    ...routePrefixes(file,ignoreDirectJsComments && /\.(?:[cm]?[jt]sx?)$/.test(file.path) ? codePositions(file.content) : null)
+  }));
   const servers = new Map();
   const root = route => route.split('/').slice(0,3).join('/');
   for (const file of endpoints) for (const route of file.server) {
@@ -188,13 +192,15 @@ export function projectApiDependencyEdges(files, includeRouterMounts = false, in
   return edges;
 }
 
-export function dynamicApiFiles(files) {
+export function dynamicApiFiles(files, ignoreJsComments = false) {
   const found = new Set();
   for (const file of files) {
     if (file.status !== 'read' || typeof file.content !== 'string' || !sourcePath.test(file.path) || file.content.length > 250000) continue;
+    const positions = ignoreJsComments && /\.(?:[cm]?[jt]sx?)$/.test(file.path) ? codePositions(file.content) : null;
     dynamicCall.lastIndex = 0;
     let match, count = 0;
     while ((match = dynamicCall.exec(file.content)) && count++ < 200) {
+      if (!inCode(match,positions)) continue;
       const argument = match[1].trim();
       const quote = argument[0];
       if (!['\'', '"', '`'].includes(quote)) { found.add(file.path); break; }
@@ -203,7 +209,10 @@ export function dynamicApiFiles(files) {
     }
     if (found.has(file.path)) continue;
     dynamicPathname.lastIndex = 0;
-    if (dynamicPathname.test(file.content)) found.add(file.path);
+    count = 0;
+    while ((match = dynamicPathname.exec(file.content)) && count++ < 200) {
+      if (inCode(match,positions)) { found.add(file.path); break; }
+    }
   }
   return found;
 }
