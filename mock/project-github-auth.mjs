@@ -234,7 +234,7 @@ const encodeRepositoryCursor = cursor => Buffer.from(JSON.stringify(cursor)).toS
 async function listGithubRepositories(client, ownerId, cursorValue) {
   let { installationPage, installationIndex, repositoryPage } = repositoryCursor(cursorValue);
   const checkResponse = async (response, label) => {
-    const message = response.status === 403 ? (await response.clone().json().catch(() => ({})))?.message || '' : '';
+    const message = response.status === 403 ? (await response.json().catch(() => ({})))?.message || '' : '';
     if (githubRateLimited(response,message)) {
       throw Object.assign(new Error('GitHub 请求受限，请稍后重试'), { rateLimited: true, retryAfterMs: githubRateLimitWait(response) });
     }
