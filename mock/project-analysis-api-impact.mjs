@@ -12,9 +12,23 @@ const dynamicCall = /\b(?:fetch|(?:axios|http|app|router|server)\.(?:get|post|pu
 const dynamicPathname = /\bpathname\s*(?:===|==|\.startsWith\s*\()\s*(?!['"`/])\b[A-Za-z_$][\w$]*/g;
 const routerMount = /\b(?:app|server)\.use\s*\(\s*['"`](\/api(?:\/[A-Za-z0-9_/-]+)?)['"`]\s*,\s*([A-Za-z_$][\w$]*)\s*[,)]/g;
 const defaultImport = /\bimport\s+([A-Za-z_$][\w$]*)\s+from\s+['"](\.{1,2}\/[^'"\n]+)['"]/g;
+const namedImport = /\bimport\s*\{([^}\n]+)\}\s*from\s*['"](\.{1,2}\/[^'"\n]+)['"]/g;
 const requiredImport = /\b(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*require\s*\(\s*['"](\.{1,2}\/[^'"\n]+)['"]\s*\)/g;
 const localRoute = /\b([A-Za-z_$][\w$]*)\.(?:get|post|put|patch|delete|del|GET|POST|PUT|PATCH|DELETE)\s*\(\s*['"`](\/[A-Za-z0-9_:/-]*)['"`]/g;
-const exportedRouter = /\bexport\s+default\s+([A-Za-z_$][\w$]*)\s*;?|\bmodule\.exports\s*=\s*([A-Za-z_$][\w$]*)\s*;?/g;
+const exportedRouter = /^\s*(?:export\s+default\s+([A-Za-z_$][\w$]*)|module\.exports\s*=\s*([A-Za-z_$][\w$]*))\s*;?\s*$/gm;
+const namedExportList = /\bexport\s*\{([^}\n]+)\}/g;
+
+function namedRouterExport(content, exportedName) {
+  const declaration = new RegExp(`^\\s*export\\s+(?:const|let|var)\\s+${exportedName}\\b`,'m');
+  if (declaration.test(content)) return exportedName;
+  namedExportList.lastIndex = 0;
+  let match, count = 0;
+  while ((match = namedExportList.exec(content)) && count++ < 100) for (const entry of match[1].split(',')) {
+    const item = entry.trim().match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+    if (item && (item[2] || item[1]) === exportedName) return item[1];
+  }
+  return null;
+}
 
 function collect(content, patterns, transform = value => value) {
   const values = new Set();
@@ -36,7 +50,7 @@ function routePrefixes(file) {
   return { server, client };
 }
 
-function routerMountEndpoints(files) {
+function routerMountEndpoints(files, includeNamedImports = false) {
   const indexed = new Map(files.filter(file => file.status === 'read' && typeof file.content === 'string' && /\.(?:[cm]?[jt]sx?)$/.test(file.path)).map(file => [file.path,file]));
   const endpoints = [];
   for (const file of indexed.values()) {
@@ -44,7 +58,15 @@ function routerMountEndpoints(files) {
     for (const pattern of [defaultImport,requiredImport]) {
       pattern.lastIndex = 0;
       let match, count = 0;
-      while ((match = pattern.exec(file.content)) && count++ < 200) imports.set(match[1],match[2]);
+      while ((match = pattern.exec(file.content)) && count++ < 200) imports.set(match[1],{ source: match[2], exportedName: null });
+    }
+    if (includeNamedImports) {
+      namedImport.lastIndex = 0;
+      let match, count = 0;
+      while ((match = namedImport.exec(file.content)) && count++ < 200) for (const entry of match[1].split(',')) {
+        const item = entry.trim().match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+        if (item) imports.set(item[2] || item[1],{ source: match[2], exportedName: item[1] });
+      }
     }
     routerMount.lastIndex = 0;
     let mount, count = 0;
@@ -53,7 +75,8 @@ function routerMountEndpoints(files) {
       const variable = mount[2];
       let target = file;
       if (imports.has(variable)) {
-        const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file.path),imports.get(variable)));
+        const imported = imports.get(variable);
+        const resolved = path.posix.normalize(path.posix.join(path.posix.dirname(file.path),imported.source));
         if (resolved.startsWith('../') || resolved.startsWith('/')) continue;
         const emittedSource = resolved.replace(/\.(?:mjs|cjs|js)$/,'.ts');
         target = [resolved,emittedSource,emittedSource.replace(/\.ts$/,'.tsx'),`${resolved}.ts`,`${resolved}.tsx`,`${resolved}.js`,`${resolved}.mjs`,`${resolved}.cjs`,`${resolved}/index.ts`,`${resolved}/index.js`]
@@ -62,9 +85,12 @@ function routerMountEndpoints(files) {
       }
       let routerName = variable;
       if (target !== file) {
-        exportedRouter.lastIndex = 0;
-        const exportMatch = exportedRouter.exec(target.content);
-        routerName = exportMatch?.[1] || exportMatch?.[2];
+        if (imports.get(variable)?.exportedName) routerName = namedRouterExport(target.content,imports.get(variable).exportedName);
+        else {
+          exportedRouter.lastIndex = 0;
+          const exportMatch = exportedRouter.exec(target.content);
+          routerName = exportMatch?.[1] || exportMatch?.[2];
+        }
         if (!routerName) continue;
       }
       localRoute.lastIndex = 0;
@@ -86,7 +112,7 @@ function relatedRoutes(left, right) {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
-export function projectApiDependencyEdges(files, includeRouterMounts = false) {
+export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false) {
   const endpoints = files.filter(file => file.status === 'read' && typeof file.content === 'string' && sourcePath.test(file.path)).map(file => ({ path: file.path, ...routePrefixes(file) }));
   const servers = new Map();
   const root = route => route.split('/').slice(0,3).join('/');
@@ -95,7 +121,7 @@ export function projectApiDependencyEdges(files, includeRouterMounts = false) {
     if (!servers.has(key)) servers.set(key,[]);
     servers.get(key).push({ path: file.path, route });
   }
-  if (includeRouterMounts) for (const endpoint of routerMountEndpoints(files)) {
+  if (includeRouterMounts) for (const endpoint of routerMountEndpoints(files,includeNamedImports)) {
     const key = root(endpoint.route);
     if (!servers.has(key)) servers.set(key,[]);
     servers.get(key).push(endpoint);
