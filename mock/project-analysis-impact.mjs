@@ -14,6 +14,7 @@ const aliasConfigPath = /(?:^|\/)(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json$/;
 const viteConfigPath = /(?:^|\/)vite\.config\.(?:[cm]?[jt]s)$/;
 const webpackConfigPath = /(?:^|\/)webpack(?:\.[^/]*)?\.config\.(?:[cm]?[jt]s)$/;
 const nestedConfigPath = /(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json|vite\.config\.[^/]+|pyproject\.toml|requirements\.txt|go\.(?:mod|work)|Cargo\.toml)$/;
+const setupConfigPath = /(?:^|\/)setup\.cfg$/;
 const pythonPathMutation = /\bsys\s*\.\s*path\s*(?:\.\s*(?:append|insert|extend|remove)\s*\(|\[[^\]\n]{0,80}\]\s*=|=)|\b(?:site\s*\.\s*addsitedir|os\s*\.\s*environ\s*\[\s*['"]PYTHONPATH['"]\s*\]\s*=)/;
 const prismaSchemaPath = /\.prisma$/i;
 const prismaMethods = new Set(['findUnique','findUniqueOrThrow','findFirst','findFirstOrThrow','findMany','create','createMany','createManyAndReturn','update','updateMany','updateManyAndReturn','upsert','delete','deleteMany','count','aggregate','groupBy']);
@@ -456,18 +457,32 @@ function javascriptAliasedImports(file, indexed, aliasConfigs, includeSameDepth 
   return [...found];
 }
 
-function pythonSourceBoundaries(files) {
-  return files.filter(file => /(?:^|\/)pyproject\.toml$/.test(file.path)).map(file => {
+function pythonSourceBoundaries(files, includeSetupCfg = false) {
+  const configs = new Map();
+  for (const file of files) {
+    if (!/(?:^|\/)pyproject\.toml$/.test(file.path) && !(includeSetupCfg && setupConfigPath.test(file.path))) continue;
     const directory = path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path);
-    let section = '', hasSrcLayout = false;
+    let section = '', hasSrcLayout = false, pendingPackageDir = false;
     if (file.status === 'read' && typeof file.content === 'string') for (const line of file.content.split(/\r?\n/)) {
       const heading = line.trim().match(/^\[([^\]]+)\](?:\s*#.*)?$/);
-      if (heading) { section = heading[1]; continue; }
-      if (section === 'tool.setuptools.packages.find' && /^\s*where\s*=\s*\[\s*["']src["']\s*\]\s*(?:#.*)?$/.test(line)) hasSrcLayout = true;
-      if (section === 'tool.setuptools' && /^\s*package-dir\s*=\s*\{\s*""\s*=\s*"src"\s*\}\s*(?:#.*)?$/.test(line)) hasSrcLayout = true;
+      if (heading) { section = heading[1].toLowerCase(); pendingPackageDir = false; continue; }
+      if (file.path.endsWith('pyproject.toml')) {
+        if (section === 'tool.setuptools.packages.find' && /^\s*where\s*=\s*\[\s*["']src["']\s*\]\s*(?:#.*)?$/.test(line)) hasSrcLayout = true;
+        if (section === 'tool.setuptools' && /^\s*package-dir\s*=\s*\{\s*""\s*=\s*"src"\s*\}\s*(?:#.*)?$/.test(line)) hasSrcLayout = true;
+      } else {
+        if (section === 'options.packages.find' && /^\s*where\s*=\s*src\s*(?:[#;].*)?$/.test(line)) hasSrcLayout = true;
+        if (section === 'options' && /^\s*package_dir\s*=\s*(?:[#;].*)?$/.test(line)) { pendingPackageDir = true; continue; }
+        if (pendingPackageDir && /^\s+=\s*src\s*(?:[#;].*)?$/.test(line)) hasSrcLayout = true;
+        if (pendingPackageDir && line.trim() && !/^\s+=/.test(line)) pendingPackageDir = false;
+      }
     }
-    return { directory, sourceRoot: hasSrcLayout ? path.posix.join(directory,'src') : null };
-  }).sort((a,b) => b.directory.length - a.directory.length);
+    const declarations = configs.get(directory) || [];
+    declarations.push(hasSrcLayout);
+    configs.set(directory,declarations);
+  }
+  return [...configs].map(([directory,declarations]) => ({
+    directory, sourceRoot: declarations.every(Boolean) ? path.posix.join(directory,'src') : null,
+  })).sort((a,b) => b.directory.length - a.directory.length);
 }
 
 function pythonTargets(file, moduleName, indexed, sourceRoot = null) {
@@ -694,7 +709,7 @@ export function selectProjectImpactEvidenceV3(files, changes) {
   return { selected: selectProjectEvidence(files,{ priorityPaths }), impactedModules };
 }
 
-function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false, includePrisma = false, includeSqlAlchemy = false, includeWebpackAliases = false, includeGoLocalReplace = false, includeGoWorkspace = false) {
+function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases = false, includeExtends = false, includeNestedConfigs = false, includePythonSrc = false, includeViteAliases = false, includeSqlTables = false, includeDynamicApi = false, includeDynamicSql = false, includeRuntimePythonPath = false, includePrisma = false, includeSqlAlchemy = false, includeWebpackAliases = false, includeGoLocalReplace = false, includeGoWorkspace = false, includeSetupCfg = false) {
   const current = new Map(files.map(file => [file.path,file]));
   const changedPaths = new Set();
   const currentChanged = new Set();
@@ -714,7 +729,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
   const goBoundaries = includeNestedConfigs ? files.filter(file => /(?:^|\/)go\.mod$/.test(file.path)).map(file => ({ path: file.path, directory: path.posix.dirname(file.path) === '.' ? '' : path.posix.dirname(file.path), name: file.status === 'read' && typeof file.content === 'string' ? goModuleName(file.content) : null })).sort((a,b) => b.directory.length - a.directory.length) : null;
   const goReplacements = includeGoLocalReplace ? goLocalReplacements(files,goBoundaries) : null;
   const goWorkspaces = includeGoWorkspace ? goWorkspaceModules(files,goBoundaries) : null;
-  const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files) : null;
+  const pythonBoundaries = includePythonSrc ? pythonSourceBoundaries(files,includeSetupCfg) : null;
   const apiEdges = includeApiRoutes ? projectApiDependencyEdges(files) : new Map();
   const sqlEdges = includeSqlTables ? projectSqlDependencyEdges(files,includeSqlAlchemy) : new Map();
   const prismaEdges = includePrisma ? prismaDependencyEdges(files) : new Map();
@@ -776,7 +791,7 @@ function selectImpactEvidence(files, changes, includeApiRoutes, includeAliases =
       pending = [...next];
     }
   }
-  if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath) || includeAliases && (aliasConfigPath.test(change.path) || change.oldPath && aliasConfigPath.test(change.oldPath)) || includeNestedConfigs && (nestedConfigPath.test(change.path) || change.oldPath && nestedConfigPath.test(change.oldPath)) || includeWebpackAliases && (webpackConfigPath.test(change.path) || change.oldPath && webpackConfigPath.test(change.oldPath)))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
+  if (changes.some(change => rootConfig.test(change.path) || change.oldPath && rootConfig.test(change.oldPath) || includeAliases && (aliasConfigPath.test(change.path) || change.oldPath && aliasConfigPath.test(change.oldPath)) || includeNestedConfigs && (nestedConfigPath.test(change.path) || change.oldPath && nestedConfigPath.test(change.oldPath)) || includeWebpackAliases && (webpackConfigPath.test(change.path) || change.oldPath && webpackConfigPath.test(change.oldPath)) || includeSetupCfg && (setupConfigPath.test(change.path) || change.oldPath && setupConfigPath.test(change.oldPath)))) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   if (includeSqlTables && changedSqlNeedsBroadReview(changes,files)) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   if (includePrisma && changedPrismaNeedsBroadReview(changes,files)) for (const file of files) impactedModules.add(projectModuleKey(file.path));
   const priorityPaths = [...currentChanged].sort().concat(...layers,[...dependencies].sort(),...uncertainLayers);
@@ -832,3 +847,11 @@ export function selectProjectImpactEvidenceV25(files, changes) {
   return result;
 }
 export const projectImpactPriorityPathsV25 = (files, changes) => selectProjectImpactEvidenceV25(files,changes).priorityPaths;
+export function selectProjectImpactEvidenceV26(files, changes) {
+  const result = selectImpactEvidence(files,changes,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true,true);
+  if (changes.some(change => isProjectDeploymentConfigPath(change.path) || isProjectDeploymentConfigPath(change.oldPath))) {
+    for (const file of files) result.impactedModules.add(projectModuleKey(file.path));
+  }
+  return result;
+}
+export const projectImpactPriorityPathsV26 = (files, changes) => selectProjectImpactEvidenceV26(files,changes).priorityPaths;
