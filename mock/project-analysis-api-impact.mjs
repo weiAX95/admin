@@ -18,14 +18,54 @@ const localRoute = /\b([A-Za-z_$][\w$]*)\.(?:get|post|put|patch|delete|del|GET|P
 const exportedRouter = /^\s*(?:export\s+default\s+([A-Za-z_$][\w$]*)|module\.exports\s*=\s*([A-Za-z_$][\w$]*))\s*;?\s*$/gm;
 const namedExportList = /\bexport\s*\{([^}\n]+)\}/g;
 
-function namedRouterExport(content, exportedName) {
-  const declaration = new RegExp(`^\\s*export\\s+(?:const|let|var)\\s+${exportedName}\\b`,'m');
-  if (declaration.test(content)) return exportedName;
+function codePositions(content) {
+  const positions = new Uint8Array(content.length);
+  for (let index = 0; index < content.length;) {
+    const char = content[index], next = content[index + 1];
+    if (char === '/' && next === '/') {
+      const end = content.indexOf('\n',index + 2);
+      index = end < 0 ? content.length : end;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      const end = content.indexOf('*/',index + 2);
+      index = end < 0 ? content.length : end + 2;
+      continue;
+    }
+    if (char === '\'' || char === '"' || char === '`') {
+      const quote = char;
+      index++;
+      while (index < content.length) {
+        if (content[index] === '\\') { index += 2; continue; }
+        if (content[index++] === quote) break;
+      }
+      continue;
+    }
+    positions[index++] = 1;
+  }
+  return positions;
+}
+
+function inCode(match, positions) {
+  if (!positions) return true;
+  const first = match[0].search(/\S/);
+  return first >= 0 && positions[match.index + first] === 1;
+}
+
+function namedRouterExport(content, exportedName, positions = null) {
+  const declaration = new RegExp(`^\\s*export\\s+(?:const|let|var)\\s+${exportedName}\\b`,'gm');
+  let declared, declarationCount = 0;
+  while ((declared = declaration.exec(content)) && declarationCount++ < 100) {
+    if (inCode(declared,positions)) return exportedName;
+  }
   namedExportList.lastIndex = 0;
   let match, count = 0;
-  while ((match = namedExportList.exec(content)) && count++ < 100) for (const entry of match[1].split(',')) {
-    const item = entry.trim().match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
-    if (item && (item[2] || item[1]) === exportedName) return item[1];
+  while ((match = namedExportList.exec(content)) && count++ < 100) {
+    if (!inCode(match,positions)) continue;
+    for (const entry of match[1].split(',')) {
+      const item = entry.trim().match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+      if (item && (item[2] || item[1]) === exportedName) return item[1];
+    }
   }
   return null;
 }
@@ -50,27 +90,33 @@ function routePrefixes(file) {
   return { server, client };
 }
 
-function routerMountEndpoints(files, includeNamedImports = false) {
+function routerMountEndpoints(files, includeNamedImports = false, ignoreNonCode = false) {
   const indexed = new Map(files.filter(file => file.status === 'read' && typeof file.content === 'string' && /\.(?:[cm]?[jt]sx?)$/.test(file.path)).map(file => [file.path,file]));
+  const positions = ignoreNonCode ? new Map([...indexed].map(([name,file]) => [name,codePositions(file.content)])) : new Map();
   const endpoints = [];
   for (const file of indexed.values()) {
+    const sourcePositions = positions.get(file.path);
     const imports = new Map();
     for (const pattern of [defaultImport,requiredImport]) {
       pattern.lastIndex = 0;
       let match, count = 0;
-      while ((match = pattern.exec(file.content)) && count++ < 200) imports.set(match[1],{ source: match[2], exportedName: null });
+      while ((match = pattern.exec(file.content)) && count++ < 200) if (inCode(match,sourcePositions)) imports.set(match[1],{ source: match[2], exportedName: null });
     }
     if (includeNamedImports) {
       namedImport.lastIndex = 0;
       let match, count = 0;
-      while ((match = namedImport.exec(file.content)) && count++ < 200) for (const entry of match[1].split(',')) {
-        const item = entry.trim().match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
-        if (item) imports.set(item[2] || item[1],{ source: match[2], exportedName: item[1] });
+      while ((match = namedImport.exec(file.content)) && count++ < 200) {
+        if (!inCode(match,sourcePositions)) continue;
+        for (const entry of match[1].split(',')) {
+          const item = entry.trim().match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+          if (item) imports.set(item[2] || item[1],{ source: match[2], exportedName: item[1] });
+        }
       }
     }
     routerMount.lastIndex = 0;
     let mount, count = 0;
     while ((mount = routerMount.exec(file.content)) && count++ < 100) {
+      if (!inCode(mount,sourcePositions)) continue;
       const prefix = mount[1].replace(/\/$/,'');
       const variable = mount[2];
       let target = file;
@@ -85,18 +131,23 @@ function routerMountEndpoints(files, includeNamedImports = false) {
       }
       let routerName = variable;
       if (target !== file) {
-        if (imports.get(variable)?.exportedName) routerName = namedRouterExport(target.content,imports.get(variable).exportedName);
+        if (imports.get(variable)?.exportedName) routerName = namedRouterExport(target.content,imports.get(variable).exportedName,positions.get(target.path));
         else {
           exportedRouter.lastIndex = 0;
-          const exportMatch = exportedRouter.exec(target.content);
-          routerName = exportMatch?.[1] || exportMatch?.[2];
+          routerName = null;
+          let exportMatch, exportCount = 0;
+          while ((exportMatch = exportedRouter.exec(target.content)) && exportCount++ < 100) {
+            if (!inCode(exportMatch,positions.get(target.path))) continue;
+            routerName = exportMatch[1] || exportMatch[2];
+            break;
+          }
         }
         if (!routerName) continue;
       }
       localRoute.lastIndex = 0;
       let route, routeCount = 0;
       while ((route = localRoute.exec(target.content)) && routeCount++ < 200) {
-        if (route[1] !== routerName) continue;
+        if (!inCode(route,positions.get(target.path)) || route[1] !== routerName) continue;
         const staticPath = route[2].split('/:')[0];
         const fullPath = `${prefix}${staticPath === '/' ? '' : staticPath}`;
         if (fullPath.split('/').filter(Boolean).length < 2) continue;
@@ -112,7 +163,7 @@ function relatedRoutes(left, right) {
   return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
 }
 
-export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false) {
+export function projectApiDependencyEdges(files, includeRouterMounts = false, includeNamedImports = false, ignoreNonCode = false) {
   const endpoints = files.filter(file => file.status === 'read' && typeof file.content === 'string' && sourcePath.test(file.path)).map(file => ({ path: file.path, ...routePrefixes(file) }));
   const servers = new Map();
   const root = route => route.split('/').slice(0,3).join('/');
@@ -121,7 +172,7 @@ export function projectApiDependencyEdges(files, includeRouterMounts = false, in
     if (!servers.has(key)) servers.set(key,[]);
     servers.get(key).push({ path: file.path, route });
   }
-  if (includeRouterMounts) for (const endpoint of routerMountEndpoints(files,includeNamedImports)) {
+  if (includeRouterMounts) for (const endpoint of routerMountEndpoints(files,includeNamedImports,ignoreNonCode)) {
     const key = root(endpoint.route);
     if (!servers.has(key)) servers.set(key,[]);
     servers.get(key).push(endpoint);
