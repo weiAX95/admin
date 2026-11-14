@@ -63,6 +63,7 @@ export default function ProjectAnalysis() {
   const [githubRepositoriesCursor, setGithubRepositoriesCursor] = useState<string | null>(null);
   const [selectedGithubRepository, setSelectedGithubRepository] = useState<string>();
   const githubRepositoryLoadId = useRef(0);
+  const repositoryLoadId = useRef(0);
 
   useEffect(() => {
     const repositoryId = new URLSearchParams(location.search).get('repositoryId');
@@ -115,12 +116,34 @@ export default function ProjectAnalysis() {
   };
 
   const load = async () => {
+    const loadId = ++repositoryLoadId.current;
     setLoading(true);
-    try { setItems((await listProjectRepositories()).items); setError(''); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : '项目读取失败'); }
-    finally { setLoading(false); }
+    try {
+      const result = await listProjectRepositories();
+      if (loadId === repositoryLoadId.current) { setItems(result.items); setError(''); }
+    }
+    catch (cause) { if (loadId === repositoryLoadId.current) setError(cause instanceof Error ? cause.message : '项目读取失败'); }
+    finally { if (loadId === repositoryLoadId.current) setLoading(false); }
   };
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      const loadId = ++repositoryLoadId.current;
+      void listProjectRepositories().then(result => {
+        if (loadId === repositoryLoadId.current) setItems(result.items);
+      }).catch(() => {}).finally(() => {
+        if (loadId === repositoryLoadId.current) setLoading(false);
+      });
+    };
+    const timer = window.setInterval(refresh, 60_000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+      repositoryLoadId.current += 1;
+    };
+  }, []);
   const create = async (values: FormValues) => {
     setSaving(true);
     try { await createProjectRepository(values); form.resetFields(); await load(); message.success('仓库已接入'); }
@@ -164,6 +187,7 @@ export default function ProjectAnalysis() {
     setWebhookSaving(item.id);
     try {
       const updated = await updateProjectWebhookScan(item,enabled);
+      repositoryLoadId.current += 1;
       setItems(current => current.map(repository => repository.id === item.id ? updated : repository));
       setError('');
       message.success(enabled ? '提交后自动扫描已开启' : '提交后自动扫描已关闭');
@@ -176,6 +200,7 @@ export default function ProjectAnalysis() {
     setPollSaving(item.id);
     try {
       const updated = await updateProjectPollScan(item,enabled);
+      repositoryLoadId.current += 1;
       setItems(current => current.map(repository => repository.id === item.id ? updated : repository));
       setError('');
       message.success(enabled ? '定时检查已开启' : '定时检查已关闭');
