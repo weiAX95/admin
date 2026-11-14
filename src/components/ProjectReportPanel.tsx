@@ -52,6 +52,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
   const { message } = App.useApp();
   const [items, setItems] = useState<ProjectAnalysisJob[]>([]);
   const [models, setModels] = useState<ModelConfig[]>([]);
+  const [modelBudgetReady, setModelBudgetReady] = useState(false);
   const [scanId, setScanId] = useState('');
   const [modelId, setModelId] = useState('');
   const [tokenBudget, setTokenBudget] = useState<number | null>(null);
@@ -118,7 +119,11 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
     loadedMore.current = false;
     latestCompletedId.current = '';
     let cancelled = false;
-    void getPlatformConfig().then(config => { if (!cancelled) setModels(config.models.filter(model => model.active && model.status === 'active' && model.adapterReady && model.configured && model.capabilities.output.includes('text'))); }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : '模型目录读取失败'); });
+    void getPlatformConfig().then(config => {
+      if (cancelled) return;
+      setModels(config.models.filter(model => model.active && model.status === 'active' && model.adapterReady && model.configured && model.capabilities.output.includes('text')));
+      setModelBudgetReady(config.dailyBudgetUsd > 0 && config.concurrencyLimit > 0);
+    }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : '模型目录读取失败'); });
     const load = async () => {
       try {
         const result = await listProjectAnalyses(repository.id);
@@ -372,7 +377,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <Select aria-label="自动分析模型" placeholder="选择模型" value={autoModelId || undefined} onChange={setAutoModelId} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
         <Select aria-label="自动分析 token 上限" value={autoTokenBudget} onChange={setAutoTokenBudget} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 170 }} options={[30000,60000,120000].map(value => ({ value, label: `${value.toLocaleString()} token` }))} />
         <Select aria-label="自动分析单次费用上限" value={autoCostBudgetUsd} onChange={setAutoCostBudgetUsd} disabled={repository.autoAnalysisEnabled || autoSaving} style={{ minWidth: 170 }} options={[0.1,0.5,1,5].map(value => ({ value, label: `最多 $${value.toFixed(2)}` }))} />
-        <Switch aria-label="自动模型分析" checked={repository.autoAnalysisEnabled} loading={autoSaving} disabled={!repository.autoAnalysisEnabled && (repository.githubRepositoryId === null || !(repository.webhookScanEnabled || repository.pollScanEnabled) || !autoModelId)} onChange={value => void setAutoAnalysis(value)} />
+        <Switch aria-label="自动模型分析" checked={repository.autoAnalysisEnabled} loading={autoSaving} disabled={!repository.autoAnalysisEnabled && (!modelBudgetReady || repository.githubRepositoryId === null || !(repository.webhookScanEnabled || repository.pollScanEnabled) || !autoModelId)} onChange={value => void setAutoAnalysis(value)} />
         <Typography.Text>{repository.autoAnalysisEnabled ? '已开启' : '未开启'}</Typography.Text>
       </Space>
       <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>{repository.private ? '先开启“提交后扫描”或“定时检查”。每次扫描结束后仍需查看私有代码发送范围，并由你确认本次模型调用。' : '先开启“提交后扫描”或“定时检查”，再单独确认持续模型调用。'}已开启时如需更换模型或费用上限，请先关闭后重新配置。</Typography.Paragraph>
@@ -385,7 +390,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       <Select aria-label="分析模型" placeholder="选择分析模型" value={modelId || undefined} onChange={setModelId} style={{ minWidth: 200 }} options={models.map(model => ({ value: model.id, label: model.displayName }))} />
       <Select aria-label="分析 token 上限" value={tokenBudget} onChange={setTokenBudget} style={{ minWidth: 170 }} options={[{ value: null, label: 'token：仅系统配额' }, ...[30000,60000,120000].map(value => ({ value, label: `${value.toLocaleString()} token` }))]} />
       <Select aria-label="单次分析费用上限" value={costBudgetUsd} onChange={setCostBudgetUsd} style={{ minWidth: 170 }} options={[{ value: null, label: '费用：仅每日预算' }, ...[0.1,0.5,1,5].map(value => ({ value, label: `最多 $${value.toFixed(2)}` }))]} />
-      <Button type="primary" disabled={!scanId || !modelId || items.some(item => item.scanId === scanId && item.modelId === modelId && ['queued', 'analyzing'].includes(item.status))} loading={starting} onClick={() => void start()}>生成报告</Button>
+      <Button type="primary" disabled={!modelBudgetReady || !scanId || !modelId || items.some(item => item.scanId === scanId && item.modelId === modelId && ['queued', 'analyzing'].includes(item.status))} loading={starting} onClick={() => void start()}>生成报告</Button>
     </Space>
     <Typography.Paragraph type="secondary">可选上限会固定到分析任务，重试累计计算已用量。提交前按输入字符保守预留 token 和费用；每次继续调用前重新核对，已发出的单次模型调用仍可能产生超出预估的用量。</Typography.Paragraph>
     <Modal title="确认私有代码分析范围" open={Boolean(privatePreview)} onCancel={() => { if (!starting) setPrivatePreview(null); }} footer={<Space><Button disabled={starting} onClick={() => setPrivatePreview(null)}>取消</Button><Button type="primary" loading={starting} onClick={() => { if (privatePreview) void submit(privatePreview.scanId,privatePreview.modelId,{ tokenBudget:privatePreview.tokenBudget,costBudgetUsd:privatePreview.costBudgetUsd },privatePreview.disclosure,privatePreview.autoApproval); }}>确认发送并生成报告</Button></Space>} width={700}>
@@ -404,7 +409,8 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
         <div style={{ maxHeight:180,overflow:'auto',background:'rgba(127,127,127,0.06)',borderRadius:6,padding:8 }}>{privatePreview.disclosure.paths.map(path => <div key={path}><code>{path}</code></div>)}</div>
       </Space>}
     </Modal>
-    {!models.length && <Alert type="info" showIcon message="暂无可用的文本模型" description={canEditTasks ? <>请先<Link to="/experiments?settings=1">配置模型、连接和预算</Link>，再返回生成报告。</> : '请联系管理员配置模型、连接和预算。'} style={{ marginBottom: 16 }} />}
+    {!models.length && <Alert type="info" showIcon message="暂无可用的文本模型" description={canEditTasks ? <>请在<Link to="/settings">系统设置中填写模型连接</Link>，并到<Link to="/experiments?settings=1">实验设置中核对模型与预算</Link>，再返回生成报告。</> : '请联系管理员配置模型、连接和预算。'} style={{ marginBottom: 16 }} />}
+    {models.length > 0 && !modelBudgetReady && <Alert type="warning" showIcon message="模型预算或并发额度尚未开启" description={canEditTasks ? <>请到<Link to="/experiments?settings=1">实验设置</Link>配置每日预算和并发上限；配置前无法提交模型分析。</> : '请联系管理员配置每日预算和并发上限。'} style={{ marginBottom: 16 }} />}
     {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 16 }} />}
     {linkedReportLoading && <Alert type="info" showIcon message="正在打开通知中的报告…" style={{ marginBottom: 16 }} />}
     {linkedReportError && <Alert type="error" showIcon message={`通知中的报告无法打开：${linkedReportError}`} style={{ marginBottom: 16 }} />}
