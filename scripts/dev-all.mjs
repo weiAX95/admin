@@ -36,6 +36,15 @@ if (!process.env.GITHUB_APP_MASTER_KEY) {
 }
 if (!/^[a-f\d]{64}$/i.test(process.env.GITHUB_APP_MASTER_KEY || '')) throw new Error('GITHUB_APP_MASTER_KEY 必须是 32 字节随机密钥的十六进制值');
 
+if (!process.env.MODEL_CONNECTION_MASTER_KEY) {
+  const existing = fs.readFileSync(localEnv, 'utf8');
+  if (/^MODEL_CONNECTION_MASTER_KEY\s*=/m.test(existing)) throw new Error('.env.local 中的 MODEL_CONNECTION_MASTER_KEY 无效，请检查后重试');
+  fs.appendFileSync(localEnv, `${existing && !existing.endsWith('\n') ? '\n' : ''}MODEL_CONNECTION_MASTER_KEY=${crypto.randomBytes(32).toString('hex')}\n`, { mode: 0o600 });
+  fs.chmodSync(localEnv, 0o600);
+  process.loadEnvFile(localEnv);
+}
+if (!/^[a-f\d]{64}$/i.test(process.env.MODEL_CONNECTION_MASTER_KEY || '')) throw new Error('MODEL_CONNECTION_MASTER_KEY 必须是 32 字节随机密钥的十六进制值');
+
 const children = [];
 
 function launch(name, args) {
