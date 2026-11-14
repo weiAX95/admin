@@ -24,6 +24,6 @@
 
 完成配置后，按以下顺序记录实际结果：连接与断开账号；安装时选择一个私有仓库并确认另一未选仓库不可读；私有扫描及模型发送预览；撤销安装授权后再次读取被拒绝；有效 push 触发指定分支扫描；错误签名、重复交付、未开启分支和乱序交付均不产生重复或回退扫描；模型分析的费用和报告证据仍需另行核对。记录 GitHub App ID、仓库 ID、分支、交付 ID、扫描／报告 ID 和时间，**不记录令牌或密钥**。
 
-当前服务器若尚无公网 HTTPS 入口，只能先做本地 OAuth 与公开仓库流程；Webhook 的真实交付验收须等公网入口可达。执行测试与页面验收前，`TODOLIST.md` 14.7／14.11 保持未完成。
+当前没有可用的专用公网 HTTPS 入口，Webhook 的真实交付验收须等入口可达。2026-11-14 已为私有联调仓库开启每 5 分钟定时检查，首次检查于 01:45 UTC 完成且无错误；它会发现所选分支的新 commit 并排队扫描，自动模型分析保持关闭，不替代 Webhook 的真实交付验收。执行测试与页面验收前，`TODOLIST.md` 14.7／14.11 保持未完成。
 
 协议依据：[GitHub App 用户访问令牌](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-user-access-token-for-a-github-app)、[Webhook 签名验证](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries)。
