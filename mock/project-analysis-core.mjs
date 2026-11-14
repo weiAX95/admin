@@ -216,7 +216,7 @@ export function selectCrossModuleEvidence(selectedFiles) {
   return files;
 }
 
-export function validateCrossModuleFlows(raw, selectedFiles) {
+export function validateCrossModuleFlows(raw, selectedFiles, { commentEvidenceUnverified = false } = {}) {
   let value;
   try { value = JSON.parse(raw); } catch { throw new Error('跨模块流程不是有效 JSON'); }
   if (!exactKeys(value, ['flows']) || !Array.isArray(value.flows) || value.flows.length > 2) throw new Error('跨模块流程结构无效');
@@ -234,7 +234,8 @@ export function validateCrossModuleFlows(raw, selectedFiles) {
     });
     if (modules.size < 2) throw new Error('跨模块流程须包含至少两个目录模块的证据');
     return { title: flow.title.trim(), moduleKey: null, steps };
-  });
+  }).filter(flow => !commentEvidenceUnverified || flow.steps.every(step =>
+    !commentOnlyEvidence(step.evidence.path,byPath.get(step.evidence.path).lines[step.evidence.line - 1])));
 }
 
 export function mergeProjectModuleReports(results) {
@@ -253,7 +254,14 @@ export function mergeProjectModuleReports(results) {
   return { summary, findings, suggestions, flows, ...(results.some(item => Object.hasOwn(item.report,'semanticDuplicates')) ? { semanticDuplicates } : {}) };
 }
 
-export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [], duplicateCandidateTaskIds = null, structuredDependencies = false, sourceRequiredForImplementation = false, unlinkedAbsenceUnverified = false } = {}) {
+function commentOnlyEvidence(path, line) {
+  const text = line.trim();
+  if (/^(?:\/\/|\/\*|\*\/|\*(?:\s|$)|<!--|-->)/.test(text)) return true;
+  if (/\.(?:py|sh|rb)$/i.test(path) && /^(?:#|'''|""")/.test(text)) return true;
+  return /\.sql$/i.test(path) && /^--/.test(text);
+}
+
+export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, maxSuggestions = 30, maxFlows = 2, requirementIds = [], duplicateCandidateTaskIds = null, structuredDependencies = false, sourceRequiredForImplementation = false, unlinkedAbsenceUnverified = false, commentEvidenceUnverified = false } = {}) {
   let value;
   try { value = JSON.parse(raw); } catch { throw new Error('模型报告不是有效 JSON'); }
   const legacyShape = exactKeys(value, ['summary', 'findings', 'suggestions']) || exactKeys(value, ['summary', 'findings', 'suggestions', 'flows']);
@@ -275,9 +283,10 @@ export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, ma
     const file = byPath.get(item.evidence.path);
     const line = item.evidence.line;
     if (!file || !Number.isInteger(line) || line < 1 || line > file.lines.length || !boundedText(item.evidence.excerpt, 500) || file.lines[line - 1].trim() !== item.evidence.excerpt.trim()) throw new Error('模型证据未匹配本次扫描的文件和行号');
-    const type = file.category === 'test' ? 'test' : file.category === 'documentation' ? 'document' : sourceRequiredForImplementation && file.category !== 'source' ? 'config' : 'code';
+    const type = commentEvidenceUnverified && commentOnlyEvidence(file.path,file.lines[line - 1]) ? 'document'
+      : file.category === 'test' ? 'test' : file.category === 'documentation' ? 'document' : sourceRequiredForImplementation && file.category !== 'source' ? 'config' : 'code';
     if (sourceRequiredForImplementation && type !== 'code' && ['implemented', 'partial'].includes(item.status)) {
-      const caveat = `（本次仅有${type === 'test' ? '测试源码' : type === 'document' ? '文档声明' : '配置文件'}线索，尚无实现源码或运行结果）`;
+      const caveat = `（本次仅有${type === 'test' ? '测试源码' : type === 'document' ? commentEvidenceUnverified && commentOnlyEvidence(file.path,file.lines[line - 1]) ? '源码注释' : '文档声明' : '配置文件'}线索，尚无实现源码或运行结果）`;
       return {
         ...item,
         status: 'unverified',
@@ -315,6 +324,7 @@ export function validateProjectReport(raw, selectedFiles, { maxFindings = 40, ma
       if (!file || !['source', 'test'].includes(file.category) || !Number.isInteger(line) || line < 1 || line > file.lines.length || !boundedText(step.evidence.excerpt, 500) || file.lines[line - 1].trim() !== step.evidence.excerpt.trim()) throw new Error('核心流程步骤缺少本次扫描的代码或测试行证据');
       return { description: step.description.trim(), evidence: { path: file.path, line, excerpt: step.evidence.excerpt, type: file.category === 'test' ? 'test' : 'code', gitSha: file.gitSha } };
     }) };
-  });
+  }).filter(flow => !commentEvidenceUnverified || flow.steps.every(step =>
+    !commentOnlyEvidence(step.evidence.path,byPath.get(step.evidence.path).lines[step.evidence.line - 1])));
   return { summary: value.summary.trim(), findings, suggestions, flows, ...(duplicateCandidateTaskIds !== null ? { semanticDuplicates } : {}) };
 }
