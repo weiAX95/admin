@@ -1,6 +1,6 @@
 import { http } from './client';
 
-export type ModelProvider = 'legacy' | 'openai' | 'qwen' | 'gemini';
+export type ModelProvider = 'legacy' | 'openai' | 'qwen' | 'gemini' | 'deepseek';
 export interface ModelConnection {
   id: string;
   provider: ModelProvider;

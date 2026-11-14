@@ -3,7 +3,7 @@ import { App, Button, Card, Form, Input, Modal, Select, Space, Switch, Table, Ta
 import { createModelConnection, listModelConnections, testModelConnection, updateModelConnection, type ConnectionDraft, type ModelConnection } from '../api/model-connections';
 import { getPlatformConfig, type ModelConfig } from '../api/experiment-platform';
 
-const providers = [{ value: 'legacy', label: '兼容 API' }, { value: 'openai', label: 'OpenAI' }, { value: 'qwen', label: '千问' }, { value: 'gemini', label: 'Gemini' }];
+const providers = [{ value: 'legacy', label: '兼容 API' }, { value: 'openai', label: 'OpenAI' }, { value: 'qwen', label: '千问' }, { value: 'gemini', label: 'Gemini' }, { value: 'deepseek', label: 'DeepSeek' }];
 type ConnectionForm = Omit<ConnectionDraft, 'headers'> & { headers?: string };
 export default function ModelConnectionsSettings() {
   const { message } = App.useApp();

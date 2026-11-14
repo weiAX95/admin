@@ -25,7 +25,7 @@ async function evaluationScores(row, output, calls, latencyMs, completionTokens)
 }
 
 export async function executionConfigured(client) {
-  if (['legacy','openai','qwen','gemini'].some(providerConfigured)) return true;
+  if (['legacy','openai','qwen','gemini','deepseek'].some(providerConfigured)) return true;
   const query = await client.query('SELECT 1 FROM model_connections WHERE active=true LIMIT 1');
   return query.rowCount > 0;
 }
@@ -81,7 +81,8 @@ export async function runExperimentJobs(pool, onChanged = () => {}) {
   const running = Number((await pool.query("SELECT count(*) AS n FROM experiment_runs WHERE status='running'")).rows[0].n);
   const slots = Math.max(0, settings.concurrency_limit - running);
   const claimed = [];
-  const enabledProviders=['legacy','openai','qwen','gemini'].filter(providerConfigured);
+  const connectionProviders=(await pool.query('SELECT DISTINCT provider FROM model_connections WHERE active=true')).rows.map(row=>row.provider);
+  const enabledProviders=[...new Set([...['legacy','openai','qwen','gemini','deepseek'].filter(providerConfigured),...connectionProviders])];
   try {
     for (let index = 0; index < slots; index++) {
       const lease = await acquireModelSlot(pool,settings.concurrency_limit);

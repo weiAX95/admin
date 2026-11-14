@@ -8,11 +8,11 @@ import ModelRateSettings from './ModelRateSettings';
 import ModelSecuritySettings from './ModelSecuritySettings';
 
 type ModelDraft={name:string;displayName:string;apiModel:string;provider:ModelConfig['provider'];connectionId:string|null;capabilities:ModelCapabilities;mediaPricing:MediaPricing;inputPricePer1K:number;outputPricePer1K:number;active:boolean;status:ModelConfig['status'];allowedRoles:string[];endpointUrl:string|null;apiVersion:string|null;contextWindow:number|null;maxOutputTokens:number|null;featureTags:string[]};
-const providerOptions=[{value:'legacy',label:'兼容文本 API'},{value:'openai',label:'OpenAI'},{value:'qwen',label:'千问'},{value:'gemini',label:'Gemini'},{value:'anthropic',label:'Anthropic（待接入）'},{value:'azure',label:'Azure（待接入）'},{value:'local',label:'Local（待接入）'},{value:'custom',label:'Custom（待接入）'}];
+const providerOptions=[{value:'legacy',label:'兼容文本 API'},{value:'openai',label:'OpenAI'},{value:'qwen',label:'千问'},{value:'gemini',label:'Gemini'},{value:'deepseek',label:'DeepSeek'},{value:'anthropic',label:'Anthropic（待接入）'},{value:'azure',label:'Azure（待接入）'},{value:'local',label:'Local（待接入）'},{value:'custom',label:'Custom（待接入）'}];
 const featureOptions=['vision','function_calling','json_mode','streaming','embedding','reasoning'].map(value=>({value,label:value}));
 const registryPayload=({inputPricePer1K,outputPricePer1K,...values}:ModelDraft)=>({...values,inputUsdPerMillion:inputPricePer1K*1000,outputUsdPerMillion:outputPricePer1K*1000});
 const outputOptions=(provider:ModelConfig['provider'] | undefined)=>['text',...(['gemini','openai'].includes(provider || '')?['image']:[]),...(provider==='gemini'?['audio']:[])].map(value=>({value,label:value}));
-const modalityOptions=(provider:ModelConfig['provider'] | undefined)=>['text',...(provider==='legacy'?[]:provider==='openai'?['image','audio']:['image','audio','video'])].map(value=>({value,label:value}));
+const modalityOptions=(provider:ModelConfig['provider'] | undefined)=>['text',...(['legacy','deepseek','anthropic','azure','local','custom'].includes(provider || '')?[]:provider==='openai'?['image','audio']:['image','audio','video'])].map(value=>({value,label:value}));
 
 export default function ExperimentPlatformSettings({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { message } = App.useApp();

@@ -1,5 +1,5 @@
 const defaults={input:['text'],output:['text'],tools:false};
-const allowed={legacy:{input:['text'],output:['text'],tools:false},openai:{input:['text','image','audio'],output:['text','image'],tools:true},qwen:{input:['text','image','audio','video'],output:['text'],tools:true},gemini:{input:['text','image','audio','video'],output:['text','image','audio'],tools:true},anthropic:{input:['text'],output:['text'],tools:false},azure:{input:['text'],output:['text'],tools:false},local:{input:['text'],output:['text'],tools:false},custom:{input:['text'],output:['text'],tools:false}};
+const allowed={legacy:{input:['text'],output:['text'],tools:false},openai:{input:['text','image','audio'],output:['text','image'],tools:true},qwen:{input:['text','image','audio','video'],output:['text'],tools:true},gemini:{input:['text','image','audio','video'],output:['text','image','audio'],tools:true},deepseek:{input:['text'],output:['text'],tools:true},anthropic:{input:['text'],output:['text'],tools:false},azure:{input:['text'],output:['text'],tools:false},local:{input:['text'],output:['text'],tools:false},custom:{input:['text'],output:['text'],tools:false}};
 const priceKeys=['imageInputUsdEach','audioInputUsdPerSecond','videoInputUsdPerSecond','imageOutputUsdEach','audioOutputUsdPerSecond'];
 
 export function providerConfigured(provider) {
@@ -7,6 +7,7 @@ export function providerConfigured(provider) {
   if(provider==='openai') return Boolean(process.env.OPENAI_API_KEY);
   if(provider==='qwen') return Boolean(process.env.DASHSCOPE_API_KEY);
   if(provider==='gemini') return Boolean(process.env.GEMINI_API_KEY);
+  if(provider==='deepseek') return Boolean(process.env.DEEPSEEK_API_KEY);
   return false;
 }
 

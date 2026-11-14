@@ -1,6 +1,6 @@
 import { isAdministrator } from './roles.mjs';
 const features=new Set(['vision','function_calling','json_mode','streaming','embedding','reasoning']);
-export const supportedProvider=new Set(['legacy','openai','qwen','gemini']);
+export const supportedProvider=new Set(['legacy','openai','qwen','gemini','deepseek']);
 export const modelUsable=(model, user)=>Boolean(model?.active && model.status==='active' && (isAdministrator(user) || model.allowed_roles?.includes(user.role)));
 export function validateRegistry(body, current=null){
   const name=body.name===undefined?current?.name:body.name;

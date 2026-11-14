@@ -62,6 +62,10 @@ function build(provider,model,messages,parameters,tool,outputKind='text',baseUrl
     if(messages.some(message=>message.parts.some(part=>part.type!=='text'))) throw new Error('兼容模式只支持文本');
     return {url:`${baseUrl}/chat/completions`,body:{model,messages:messages.map(message=>({role:message.role,content:message.parts.map(part=>part.text).join('')})),...parameters}};
   }
+  if(provider==='deepseek') {
+    if(messages.some(message=>message.parts.some(part=>part.type!=='text'))) throw new Error('DeepSeek 当前适配器只支持文本输入');
+    return {url:`${baseUrl}/chat/completions`,body:{model,messages:messages.map(message=>({role:message.role,content:message.parts.map(part=>part.text).join('')})),...parameters,...(tool?{tools:[{type:'function',function:tool}]}:{})}};
+  }
   if(provider==='qwen') {
     const content=messages.map(message=>({role:message.role,content:message.parts.map(part=>{
       if(part.type==='text') return {type:'text',text:part.text};
@@ -94,7 +98,7 @@ function build(provider,model,messages,parameters,tool,outputKind='text',baseUrl
 }
 
 function parsed(provider,result,outputKind='text') {
-  if(provider==='legacy'||provider==='qwen') {
+  if(provider==='legacy'||provider==='qwen'||provider==='deepseek') {
     const message=result.choices?.[0]?.message;
     const output=typeof message?.content==='string'?message.content:Array.isArray(message?.content)?message.content.filter(part=>part.type==='text').map(part=>part.text).join('\n'):'';
     const toolCalls=message?.tool_calls || [];

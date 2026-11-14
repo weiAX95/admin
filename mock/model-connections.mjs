@@ -1,17 +1,19 @@
 import { canAccess } from './permissions.mjs';
 import crypto from 'node:crypto';
 
-const providers = new Set(['legacy','openai','qwen','gemini']);
+const providers = new Set(['legacy','openai','qwen','gemini','deepseek']);
 const defaults = {
   legacy: '', openai: 'https://api.openai.com/v1',
   qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   gemini: 'https://generativelanguage.googleapis.com/v1beta',
+  deepseek: 'https://api.deepseek.com',
 };
 const environment = {
   legacy: ['MODEL_API_KEY','MODEL_API_BASE_URL'],
   openai: ['OPENAI_API_KEY','OPENAI_API_BASE_URL'],
   qwen: ['DASHSCOPE_API_KEY','QWEN_API_BASE_URL'],
   gemini: ['GEMINI_API_KEY','GEMINI_API_BASE_URL'],
+  deepseek: ['DEEPSEEK_API_KEY','DEEPSEEK_API_BASE_URL'],
 };
 function version() { return process.env.MODEL_CONNECTION_KEY_VERSION || 'v1'; }
 function encryptionKey(keyVersion) {
