@@ -60,6 +60,9 @@ function modelDestination(baseUrl) {
 async function privateDisclosure(client, repository, scan, model, selected, duplicateCandidates) {
   const connection = await resolveModelConnection(client,model.provider,model.connection_id);
   const destination = modelDestination(connection.baseUrl);
+  const budget = modelBudget(modelPlan({ ...repository, full_name: scan.full_name, branch: scan.branch,
+    commit_sha: scan.commit_sha, analysis_plan_version: CURRENT_ANALYSIS_PLAN_VERSION,
+    duplicate_candidates: duplicateCandidates },selected),model);
   const scope = {
     repositoryId: repository.id, fullName: repository.full_name, scanId: scan.id,
     commitSha: scan.commit_sha.trim(), goal: repository.goal, externalContext: repository.external_context,
@@ -67,6 +70,8 @@ async function privateDisclosure(client, repository, scan, model, selected, dupl
     baselineVersionId: repository.baseline_version_id || null,
     requirementDocumentSha256: crypto.createHash('sha256').update(repository.requirement_document || '').digest('hex'),
     modelId: model.id, model: model.api_model, provider: model.provider, destination,
+    inputPrice: Number(model.input_usd_per_million), outputPrice: Number(model.output_usd_per_million),
+    estimatedCostUsd: budget.estimatedCost, reservedTokens: budget.reservedTokens, plannedCalls: budget.calls,
     analysisPlanVersion: CURRENT_ANALYSIS_PLAN_VERSION,
     files: selected.map(file => ({ path: file.path, gitSha: file.gitSha, excerptSha256: crypto.createHash('sha256').update(file.numberedContent).digest('hex') })),
     duplicateCandidates,
@@ -74,6 +79,7 @@ async function privateDisclosure(client, repository, scan, model, selected, dupl
   return {
     digest: crypto.createHash('sha256').update(JSON.stringify(scope)).digest('hex'),
     provider: model.provider, model: model.api_model, destination,
+    estimatedCostUsd: budget.estimatedCost, reservedTokens: budget.reservedTokens, plannedCalls: budget.calls,
     externalContext: repository.external_context || '',
     fileCount: selected.length, paths: selected.map(file => file.path),
     duplicateCandidateCount: duplicateCandidates.length,

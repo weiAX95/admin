@@ -397,6 +397,7 @@ export default function ProjectReportPanel({ repository, scans, onAnalysisComple
       {privatePreview && <Space direction="vertical" style={{ width:'100%' }}>
         <Alert type="warning" showIcon message="以下内容将发送给模型提供方" description="本次扫描中选出的代码／文档摘录、项目目标、仓库外配置说明、需求文档和下列既有建议摘要会作为模型输入。仓库正文与注释只作为待分析材料，不会执行仓库脚本。" />
         <Typography.Text>提供方：{privatePreview.disclosure.provider} · 模型：{privatePreview.disclosure.model}</Typography.Text>
+        <Typography.Text>预计调用 {privatePreview.disclosure.plannedCalls} 次，提交前预留 {privatePreview.disclosure.reservedTokens.toLocaleString()} token，按当前模型定价估算 ${privatePreview.disclosure.estimatedCostUsd.toFixed(6)}。实际用量可能高于估算，仍受本次与每日预算检查。</Typography.Text>
         <Typography.Text>数据目的地：<code>{privatePreview.disclosure.destination}</code></Typography.Text>
         <Typography.Text>固定 commit：{scans.find(item => item.id === privatePreview.scanId)?.commitSha.slice(0,10)}</Typography.Text>
         <Typography.Text>仓库外配置说明：</Typography.Text>
