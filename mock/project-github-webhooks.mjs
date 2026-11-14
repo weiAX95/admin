@@ -64,7 +64,7 @@ export async function currentBranchHead(pool, repository) {
 }
 
 export async function queueScan(client, repository, commitSha, source = 'webhook') {
-  await client.query('UPDATE project_repositories SET commit_sha=$2,last_checked_at=now(),updated_at=now() WHERE id=$1',[repository.id,commitSha]);
+  await client.query('UPDATE project_repositories SET commit_sha=$2,last_checked_at=now(),updated_at=CASE WHEN commit_sha IS DISTINCT FROM $2 THEN now() ELSE updated_at END WHERE id=$1',[repository.id,commitSha]);
   const previous = await client.query("SELECT 1 FROM project_scans WHERE repository_id=$1 AND branch=$2 AND commit_sha=$3 AND github_repository_id=$4 AND status IN ('queued','scanning','completed','partial') LIMIT 1",[repository.id,repository.branch,commitSha,repository.github_repository_id]);
   if (previous.rowCount) return 0;
   const queuedScan = source === 'webhook' ? (await client.query(`SELECT id FROM project_scans WHERE repository_id=$1 AND github_repository_id=$2 AND branch=$3 AND trigger_source='webhook' AND status='queued'
