@@ -39,7 +39,9 @@ const view = row => ({ id: row.id, repositoryId: row.repository_id, scanId: row.
 let runTail = Promise.resolve();
 const pending = new Map();
 const running = new Map();
-const defaultRunModel = (client, job, messages, signal) => completeWithProvider(client, { provider: job.provider, connectionId: job.connection_id, model: job.api_model, messages, signal, parameters: { temperature: 0, max_tokens: MAX_OUTPUT_TOKENS }, timeoutMs: 90000, audit: { runId: job.id, attempt: job.attempts, userId: job.owner_id, module: 'project_analysis', phase: 'main', modelId: job.model_id, redactPrompt: true } });
+const defaultRunModel = (client, job, messages, signal) => completeWithProvider(client, { provider: job.provider, connectionId: job.connection_id, model: job.api_model, messages, signal, parameters: job.provider === 'deepseek'
+  ? { thinking: { type: 'disabled' }, response_format: { type: 'json_object' }, temperature: 0, max_tokens: MAX_OUTPUT_TOKENS }
+  : { temperature: 0, max_tokens: MAX_OUTPUT_TOKENS }, timeoutMs: 90000, audit: { runId: job.id, attempt: job.attempts, userId: job.owner_id, module: 'project_analysis', phase: 'main', modelId: job.model_id, redactPrompt: true } });
 const hasSensitiveMetadata = job => [job.full_name, job.branch, job.goal, job.external_context, job.requirement_baseline, job.requirement_document].some(value => value && containsKnownSecret(value));
 const scanMatchesCurrentRepository = (repository, scan) => Boolean(repository?.github_repository_id && scan?.github_repository_id
   && repository.github_repository_id === scan.github_repository_id
