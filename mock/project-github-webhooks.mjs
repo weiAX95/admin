@@ -191,7 +191,10 @@ export async function processProjectGithubDeliveries(pool, resolveHead = current
       try { await applyDelivery(pool,delivery,resolveHead); }
       catch (error) {
         const exhausted = delivery.attempts >= MAX_ATTEMPTS;
-        const delaySeconds = 60 * 2 ** (delivery.attempts - 1);
+        const backoffSeconds = 60 * 2 ** (delivery.attempts - 1);
+        const rateLimitSeconds = error?.rateLimited
+          ? Math.min(86_400,Math.max(60,Math.ceil((error.retryAfterMs || 60_000) / 1000))) : 0;
+        const delaySeconds = Math.max(backoffSeconds,rateLimitSeconds);
         const errorCode = error?.rateLimited ? 'GITHUB_RATE_LIMIT'
           : /^GITHUB_HEAD_(?:\d{3}|INVALID)$/.test(error?.message || '') ? error.message
             : 'DELIVERY_PROCESSING_FAILED';
