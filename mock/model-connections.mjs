@@ -1,5 +1,6 @@
 import { canAccess } from './permissions.mjs';
 import crypto from 'node:crypto';
+import pg from 'pg';
 
 const providers = new Set(['legacy','openai','qwen','gemini','deepseek']);
 const defaults = {
@@ -66,6 +67,19 @@ function view(row) {
 async function audit(client, actorId, action, id) {
   await client.query('INSERT INTO security_audit_logs(actor_id,action,target_type,target_id) VALUES($1,$2,$3,$4)', [actorId, action, 'model_connection', id]);
 }
+async function atomic(client, work) {
+  const pooled = client instanceof pg.Pool;
+  const connection = pooled ? await client.connect() : client;
+  try {
+    if (pooled) await connection.query('BEGIN');
+    const result = await work(connection);
+    if (pooled) await connection.query(result?.status >= 400 ? 'ROLLBACK' : 'COMMIT');
+    return result;
+  } catch (error) {
+    if (pooled) await connection.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally { if (pooled) connection.release(); }
+}
 export async function resolveModelConnection(client, provider, connectionId = null) {
   if (!providers.has(provider)) throw new Error('未知供应商');
   let row;
@@ -102,10 +116,12 @@ export async function handleModelConnections({ pathname, method, client, me, rea
     const id = crypto.randomUUID(), keyVersion = version(), url = validUrl(body.baseUrl || null), headers = validHeaders(body.headers);
     const secret = encrypt(body.apiKey, id, 'key', keyVersion);
     const headerSecret = Object.keys(headers).length ? encrypt(JSON.stringify(headers), id, 'headers', keyVersion) : null;
-    if (body.isDefault) await client.query('UPDATE model_connections SET is_default=false WHERE provider=$1', [body.provider]);
-    const { rows } = await client.query('INSERT INTO model_connections(id,provider,name,base_url,key_cipher,key_nonce,key_tag,key_version,key_mask,headers_cipher,headers_nonce,headers_tag,is_default) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *', [id,body.provider,body.name.trim(),url,secret.data,secret.nonce,secret.tag,keyVersion,mask(body.apiKey),headerSecret?.data || null,headerSecret?.nonce || null,headerSecret?.tag || null,body.isDefault===true]);
-    await audit(client, me.id, 'model_connection.created', id);
-    return { status: 201, data: view(rows[0]) };
+    return atomic(client, async connection => {
+      if (body.isDefault) await connection.query('UPDATE model_connections SET is_default=false WHERE provider=$1', [body.provider]);
+      const { rows } = await connection.query('INSERT INTO model_connections(id,provider,name,base_url,key_cipher,key_nonce,key_tag,key_version,key_mask,headers_cipher,headers_nonce,headers_tag,is_default) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *', [id,body.provider,body.name.trim(),url,secret.data,secret.nonce,secret.tag,keyVersion,mask(body.apiKey),headerSecret?.data || null,headerSecret?.nonce || null,headerSecret?.tag || null,body.isDefault===true]);
+      await audit(connection, me.id, 'model_connection.created', id);
+      return { status: 201, data: view(rows[0]) };
+    });
   }
   const route = pathname.match(/^\/api\/settings\/model-connections\/([0-9a-f-]{36})(?:\/(test))?$/);
   if (!route) return null;
@@ -136,10 +152,13 @@ export async function handleModelConnections({ pathname, method, client, me, rea
     const headers = body.headers === undefined ? null : validHeaders(body.headers);
     const headerSecret = headers === null ? { data: row.headers_cipher, nonce: row.headers_nonce, tag: row.headers_tag } : Object.keys(headers).length ? encrypt(JSON.stringify(headers), row.id, 'headers', keyVersion) : { data: null, nonce: null, tag: null };
     if (body.apiKey && headers === null && row.headers_cipher) throw new Error('轮换 API Key 时请同时重新填写自定义请求头，以便使用新密钥版本加密');
-    if (body.isDefault && body.active) await client.query('UPDATE model_connections SET is_default=false WHERE provider=$1 AND id<>$2', [row.provider,row.id]);
-    const updated = await client.query('UPDATE model_connections SET name=$2,base_url=$3,key_cipher=$4,key_nonce=$5,key_tag=$6,key_version=$7,key_mask=$8,headers_cipher=$9,headers_nonce=$10,headers_tag=$11,is_default=$12,active=$13,version=version+1,updated_at=now() WHERE id=$1 AND version=$14 RETURNING *', [row.id,body.name.trim(),url,secret.data,secret.nonce,secret.tag,keyVersion,body.apiKey?mask(body.apiKey):row.key_mask,headerSecret.data,headerSecret.nonce,headerSecret.tag,body.isDefault===true && body.active,body.active,body.version]);
-    await audit(client, me.id, 'model_connection.updated', row.id);
-    return { status: 200, data: view(updated.rows[0]) };
+    return atomic(client, async connection => {
+      if (body.isDefault && body.active) await connection.query('UPDATE model_connections SET is_default=false WHERE provider=$1 AND id<>$2', [row.provider,row.id]);
+      const updated = await connection.query('UPDATE model_connections SET name=$2,base_url=$3,key_cipher=$4,key_nonce=$5,key_tag=$6,key_version=$7,key_mask=$8,headers_cipher=$9,headers_nonce=$10,headers_tag=$11,is_default=$12,active=$13,version=version+1,updated_at=now() WHERE id=$1 AND version=$14 RETURNING *', [row.id,body.name.trim(),url,secret.data,secret.nonce,secret.tag,keyVersion,body.apiKey?mask(body.apiKey):row.key_mask,headerSecret.data,headerSecret.nonce,headerSecret.tag,body.isDefault===true && body.active,body.active,body.version]);
+      if (!updated.rowCount) return { status: 409, data: { error: '连接版本已变化' } };
+      await audit(connection, me.id, 'model_connection.updated', row.id);
+      return { status: 200, data: view(updated.rows[0]) };
+    });
   }
   return { status: 405, data: { error: '不支持的操作' } };
 }
