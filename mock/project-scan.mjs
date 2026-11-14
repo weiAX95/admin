@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { GithubAuthorizationError, githubPublicFetch } from './project-github-auth.mjs';
-import { isProjectDeploymentConfigPathV37 } from './project-deployment-config.mjs';
+import { isProjectDeploymentConfigPathV37, isProjectPythonDependencyConfigPathV38 } from './project-deployment-config.mjs';
 
 const SHA = /^[a-f\d]{40}$/i;
 const SKIP_DIRS = new Set(['node_modules', '.git', '.next', 'dist', 'build', 'coverage', 'vendor', 'target', '.venv', '__pycache__']);
@@ -12,7 +12,7 @@ export const isSensitiveProjectPath = path => SENSITIVE_NAMES.test(path) || cont
 const gitBlobSha = bytes => crypto.createHash('sha1').update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex');
 
 function classification(path) {
-  if (isProjectDeploymentConfigPathV37(path)) return 'config';
+  if (isProjectDeploymentConfigPathV37(path) || isProjectPythonDependencyConfigPathV38(path)) return 'config';
   if (/(?:^|\/)(?:test|tests|__tests__|spec)(?:\/|\.)|\.(?:test|spec)\./i.test(path)) return 'test';
   if (/(?:^|\/)(?:README|CHANGELOG|CONTRIBUTING)(?:\.|$)|\.(?:md|mdx|rst)$/i.test(path)) return 'documentation';
   if (/(?:^|\/)(?:package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|requirements\.txt|go\.(?:mod|sum|work|work\.sum)|pyproject\.toml|setup\.cfg|Cargo\.(?:toml|lock)|(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json|Dockerfile|vite\.config\.[^/]+)$|\.prisma$/i.test(path)) return 'config';
@@ -166,7 +166,7 @@ export async function scanPublicRepository({ fullName, commitSha, expectedReposi
   // they were absent from the previous scan's dependency graph.
   const knownChanges = changes.filter(change => change.kind !== 'added' || /\.(?:sql|py)$/i.test(change.path)
     || /(?:^|\/)(?:setup\.cfg|package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|pyproject\.toml|requirements\.txt|go\.(?:mod|sum|work|work\.sum)|Cargo\.(?:toml|lock)|(?:tsconfig|jsconfig)(?:\.[^/]*)?\.json|vite\.config\.[^/]+)$/i.test(change.path)
-    || isProjectDeploymentConfigPathV37(change.path));
+    || isProjectDeploymentConfigPathV37(change.path) || isProjectPythonDependencyConfigPathV38(change.path));
   if (knownChanges.length && typeof relatedPathsForChanges === 'function') {
     try { relatedPaths = new Set((relatedPathsForChanges(knownChanges) || []).filter(path => !priorityPaths.has(path))); }
     catch { /* A stale or unsupported dependency graph must not prevent the scan. */ }
