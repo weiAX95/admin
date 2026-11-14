@@ -2,7 +2,7 @@ import path from 'node:path';
 import { projectModuleKey, selectProjectEvidence } from './project-analysis-core.mjs';
 import { dynamicApiFiles, projectApiDependencyEdges } from './project-analysis-api-impact.mjs';
 import { changedSqlNeedsBroadReview, dynamicSqlFiles, projectSqlDependencyEdges } from './project-analysis-sql-impact.mjs';
-import { isProjectDeploymentConfigPath } from './project-deployment-config.mjs';
+import { isProjectDeploymentConfigPath, isProjectDeploymentConfigPathV37 } from './project-deployment-config.mjs';
 
 const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.json', '/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
 const relativeImport = /\b(?:from\s*|import\s*\(|require\s*\()\s*['"](\.{1,2}\/[^'"\n]+)['"]/g;
@@ -935,3 +935,13 @@ export function selectProjectImpactEvidenceV36(files, changes) {
   return result;
 }
 export const projectImpactPriorityPathsV36 = (files, changes) => selectProjectImpactEvidenceV36(files,changes).priorityPaths;
+const dependencyConfigV37 = /(?:^|\/)(?:go\.(?:sum|work|work\.sum)|Cargo\.lock)$/;
+export function selectProjectImpactEvidenceV37(files, changes) {
+  const result = selectProjectImpactEvidenceV36(files,changes);
+  if (changes.some(change => [change.path,change.oldPath].some(path =>
+    isProjectDeploymentConfigPathV37(path) || typeof path === 'string' && dependencyConfigV37.test(path)))) {
+    for (const file of files) result.impactedModules.add(projectModuleKey(file.path));
+  }
+  return result;
+}
+export const projectImpactPriorityPathsV37 = (files, changes) => selectProjectImpactEvidenceV37(files,changes).priorityPaths;
