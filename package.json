@@ -17,6 +17,7 @@
     "backup:verify": "node scripts/backup-verify.mjs",
     "backup:restore:isolated": "node scripts/backup-restore-isolated.mjs",
     "build": "node scripts/check-changelog.mjs && tsc && vite build",
+    "build:analyze": "node scripts/check-changelog.mjs && tsc && vite build --mode analyze",
     "preview": "vite preview",
     "lint": "oxlint src/",
     "test": "node --test tests/*.test.mjs",
@@ -75,6 +76,7 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.5.0",
     "oxlint": "^0.16.0",
+    "rollup-plugin-visualizer": "^7.1.3",
     "typescript": "~5.8.3",
     "vite": "^6.3.5"
   }
