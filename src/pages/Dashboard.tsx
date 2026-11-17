@@ -13,7 +13,7 @@ import {
   Typography,
 } from "antd";
 import type { Dayjs } from "dayjs";
-import { getStats } from "../api/stats";
+import { getCachedStats, getStats } from "../api/stats";
 import RadarChart from "../components/RadarChart";
 import TaskTrendChart from "../components/TaskTrendChart";
 import OverduePanel from "../components/OverduePanel";
@@ -50,19 +50,20 @@ const WINDOW_OPTIONS: WindowOption[] = [
 // ── 页面 ─────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const initialRange = resolveDashboardWindow("365d", null);
+  const [stats, setStats] = useState<Stats | null>(() => getCachedStats(initialRange || undefined));
+  const [loading, setLoading] = useState(() => !getCachedStats(initialRange || undefined));
   const [error, setError] = useState("");
 
   const [windowPreset, setWindowPreset] = useState<TimeWindow>("365d");
   const [customRange, setCustomRange] = useState<[Dayjs, Dayjs] | null>(null);
-  const [appliedRange, setAppliedRange] = useState<{ start: string; end: string } | null>(null);
+  const [appliedRange, setAppliedRange] = useState<{ start: string; end: string } | null>(() => getCachedStats(initialRange || undefined) ? initialRange : null);
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const latestRequest = useRef(0);
-  const hasStats = useRef(false);
+  const hasStats = useRef(Boolean(stats));
 
   const refresh = useCallback(async () => {
     const range = resolveDashboardWindow(windowPreset, customRange ? [customRange[0].format("YYYY-MM-DD"), customRange[1].format("YYYY-MM-DD")] : null);
