@@ -21,6 +21,7 @@ import ErrorBoundary from "../components/ErrorBoundary";
 const { Header, Sider, Content } = Layout;
 const MENU_ITEMS = [
   { key: "/", icon: <DashboardOutlined />, label: "学习仪表盘" },
+  { key: "/spaces", icon: <TeamOutlined />, label: "团队空间" },
   { key: "/tasks", icon: <ProfileOutlined />, label: "学习任务" },
   { key: "/sessions", icon: <MessageOutlined />, label: "会话记录" },
   { key: "/notes", icon: <FileTextOutlined />, label: "学习笔记" },
@@ -47,6 +48,7 @@ const MODEL_HEALTH_ITEM = { key: "/model-health", icon: <DashboardOutlined />, l
 const ALERTS_ITEM = { key: "/alerts", icon: <BellOutlined />, label: "告警监控" };
 const PAGE_META: Record<string, { title: string; description: string; section: string }> = {
   "/": { title: "学习仪表盘", description: "看见每一步积累，掌握你的学习节奏。", section: "学习概览" },
+  "/spaces": { title: "团队空间", description: "创建空间、安排成员与管理协作角色。", section: "协作空间" },
   "/tasks": { title: "学习任务", description: "从目标到行动，让每一项学习计划有迹可循。", section: "学习工作台" },
   "/sessions": { title: "会话记录", description: "回顾与 Agent 的对话，将有价值的回答沉淀为知识。", section: "学习工作台" },
   "/notes": { title: "学习笔记", description: "整理思考、记录心得，建立自己的知识积累。", section: "学习工作台" },

@@ -29,7 +29,7 @@ function view(row) {
     status: row.status, role: row.my_role, version: row.version, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
-export async function handleCollaborationSpaces({ pathname, method, client: pool, me, readBody }) {
+export async function handleCollaborationSpaces({ pathname, method, client: pool, me, readBody, url }) {
   if (pathname === '/api/spaces') {
     if (method === 'GET') {
       const rows = (await pool.query(`SELECT s.*, CASE WHEN s.owner_id=$1 THEN 'owner' ELSE m.role END AS my_role
@@ -45,7 +45,7 @@ export async function handleCollaborationSpaces({ pathname, method, client: pool
       VALUES($1,$2,$3,$4,$5) RETURNING *, 'owner'::text AS my_role`,[crypto.randomUUID(),name,description,icon,me.id])).rows[0];
     return ok(view(row),201);
   }
-  const match = /^\/api\/spaces\/([^/]+)(?:\/(members|transfer))?(?:\/([^/]+))?$/.exec(pathname);
+  const match = /^\/api\/spaces\/([^/]+)(?:\/(members|transfer|candidates))?(?:\/([^/]+))?$/.exec(pathname);
   if (!match) return null;
   const [,id,section,memberId] = match;
   if (!uuid.test(id)) return fail(404,'空间不存在');
@@ -56,6 +56,15 @@ export async function handleCollaborationSpaces({ pathname, method, client: pool
       const rows = (await pool.query(`SELECT u.id,u.username,u.name,m.role,m.added_at FROM collaboration_space_members m
         JOIN users u ON u.id=m.user_id WHERE m.space_id=$1 ORDER BY m.added_at,u.id`,[id])).rows;
       return ok({ ownerId: space.owner_id, items: rows.map(row => ({ id:row.id,username:row.username,name:row.name,role:row.role,addedAt:row.added_at })) });
+    }
+    if (section === 'candidates' && !memberId) {
+      if (space.my_role !== 'owner') return fail(403,'仅空间 Owner 可查找成员');
+      const query = String(url?.searchParams.get('query') || '').trim().slice(0,80);
+      const rows = (await pool.query(`SELECT u.id,u.username,u.name FROM users u WHERE u.status='active' AND u.deleted_at IS NULL
+        AND u.id <> $2 AND (u.username ILIKE '%' || $1 || '%' OR u.name ILIKE '%' || $1 || '%')
+        AND NOT EXISTS(SELECT 1 FROM collaboration_space_members m WHERE m.space_id=$3 AND m.user_id=u.id)
+        ORDER BY u.username LIMIT 20`,[query,space.owner_id,id])).rows;
+      return ok({ items:rows });
     }
     return !section ? ok(view(space)) : fail(404,'接口不存在');
   }

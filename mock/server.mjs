@@ -2248,7 +2248,7 @@ function routeHttpRequest(req, res, pathname, method) {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res,401,{ error:'未登录或登录已过期' });
-      const result = await handleCollaborationSpaces({ pathname, method, client:pool, me, readBody:() => readProjectBody(req) });
+      const result = await handleCollaborationSpaces({ pathname, method, client:pool, me, url:new URL(req.url,'http://localhost'), readBody:() => readProjectBody(req) });
       sendImmediate(res,result?.status || 404,result?.data || { error:'空间接口不存在' });
       if (result && result.status < 400 && !['GET','OPTIONS'].includes(method)) notifyLive();
     })().catch(error => {

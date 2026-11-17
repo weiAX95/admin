@@ -49,6 +49,7 @@ const ModelHealth = lazy(() => import("./pages/ModelHealth"));
 const Alerts = lazy(() => import("./pages/Alerts"));
 const ProjectAnalysis = lazy(() => import("./pages/ProjectAnalysis"));
 const ProjectLearningReviews = lazy(() => import("./pages/ProjectLearningReviews"));
+const Spaces = lazy(() => import("./pages/Spaces"));
 
 export default function App() {
   return (
@@ -71,6 +72,7 @@ export default function App() {
               <Route element={<AdminLayout />}>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/tasks" element={<Tasks />} />
+                <Route path="/spaces" element={<Spaces />} />
                 <Route path="/tasks/:id" element={<TaskDetail />} />
                 <Route path="/sessions" element={<Sessions />} />
                 <Route path="/notes" element={<Notes />} />
