@@ -1,5 +1,6 @@
 import type { MessageAnnotationTag, MessageAnnotationView, SessionDetail, SessionSummary } from "../types";
 import { ApiError, clearAuth, getToken, http } from "./client";
+import { cachedResponse, rememberResponse } from './responseCache';
 
 export const listSessions = (filters: { quality?: "rejection" | "excessive_length"; clusterId?: string } = {}) =>
   http.get<{ items: SessionSummary[] }>("/sessions", filters);
@@ -19,7 +20,13 @@ export interface SessionTokenStats {
   daily: { date: string; totalTokens: number }[];
   topSessions: { id: string; title: string; totalTokens: number }[];
 }
-export const getSessionTokenStats = () => http.get<SessionTokenStats>('/sessions/token-stats');
+export const getCachedSessionTokenStats = () => getToken() ? cachedResponse<SessionTokenStats>('sessions:token-stats') : null;
+export async function getSessionTokenStats() {
+  const token = getToken();
+  const result = await http.get<SessionTokenStats>('/sessions/token-stats');
+  if (token && token === getToken()) rememberResponse('sessions:token-stats', result);
+  return result;
+}
 
 export type SessionPriceMode = 'current' | 'snapshot';
 export type SessionCostGranularity = 'day' | 'week' | 'month';
@@ -33,7 +40,13 @@ export interface SessionCostStats {
   sessions: SessionCostRow[];
 }
 export interface SessionModelPrice { id: string; name: string; displayName: string; inputUsdPer1K: number; outputUsdPer1K: number; status: string }
-export const getSessionCostStats = (priceMode: SessionPriceMode, granularity: SessionCostGranularity) => http.get<SessionCostStats>('/sessions/cost-stats', { priceMode, granularity });
+export const getCachedSessionCostStats = (priceMode: SessionPriceMode, granularity: SessionCostGranularity) => getToken() ? cachedResponse<SessionCostStats>(`sessions:cost-stats:${priceMode}:${granularity}`) : null;
+export async function getSessionCostStats(priceMode: SessionPriceMode, granularity: SessionCostGranularity) {
+  const token = getToken();
+  const result = await http.get<SessionCostStats>('/sessions/cost-stats', { priceMode, granularity });
+  if (token && token === getToken()) rememberResponse(`sessions:cost-stats:${priceMode}:${granularity}`, result);
+  return result;
+}
 export const getSessionModelPrices = () => http.get<{ items: SessionModelPrice[] }>('/sessions/model-prices');
 export const updateSessionModelPrice = (id: string, inputUsdPer1K: number, outputUsdPer1K: number) => http.patch<SessionModelPrice>(`/sessions/model-prices/${encodeURIComponent(id)}`, { inputUsdPer1K, outputUsdPer1K });
 

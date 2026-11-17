@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Empty, Segmented, Space, Spin, Statistic, Typography, theme } from 'antd';
 import { ArcElement, CategoryScale, Chart, Legend, LineController, LineElement, LinearScale, PieController, PointElement, Tooltip } from 'chart.js';
-import { getSessionCostStats } from '../api/sessions';
+import { getCachedSessionCostStats, getSessionCostStats } from '../api/sessions';
 import type { SessionCostGranularity, SessionCostRow, SessionCostStats as CostStats, SessionPriceMode } from '../api/sessions';
 
 Chart.register(ArcElement, CategoryScale, Legend, LineController, LineElement, LinearScale, PieController, PointElement, Tooltip);
@@ -10,8 +10,8 @@ export default function SessionCostStats({ onSessionCosts }: { onSessionCosts: (
   const { token } = theme.useToken();
   const [priceMode, setPriceMode] = useState<SessionPriceMode>('current');
   const [granularity, setGranularity] = useState<SessionCostGranularity>('day');
-  const [stats, setStats] = useState<CostStats>();
-  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<CostStats | undefined>(() => getCachedSessionCostStats('current', 'day') || undefined);
+  const [loading, setLoading] = useState(() => !getCachedSessionCostStats('current', 'day'));
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   const trendRef = useRef<HTMLCanvasElement>(null);
@@ -19,8 +19,9 @@ export default function SessionCostStats({ onSessionCosts }: { onSessionCosts: (
 
   useEffect(() => {
     let active = true;
-    onSessionCosts([]);
-    setStats(undefined);
+    const previous = getCachedSessionCostStats(priceMode, granularity);
+    onSessionCosts(previous?.sessions || []);
+    setStats(previous || undefined);
     setLoading(true);
     void getSessionCostStats(priceMode, granularity).then(result => {
       if (!active) return;

@@ -1,16 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Empty, Space, Spin, Statistic, Table, Typography, theme } from 'antd';
 import { CategoryScale, Chart, LineController, LineElement, LinearScale, PointElement, Tooltip } from 'chart.js';
-import { getSessionTokenStats } from '../api/sessions';
+import { getCachedSessionTokenStats, getSessionTokenStats } from '../api/sessions';
 import type { SessionTokenStats as TokenStats } from '../api/sessions';
 
 Chart.register(CategoryScale, LinearScale, LineController, LineElement, PointElement, Tooltip);
 
 export default function SessionTokenStats({ onOpen }: { onOpen: (id: string) => void }) {
   const { token } = theme.useToken();
-  const [stats, setStats] = useState<TokenStats>();
+  const [stats, setStats] = useState<TokenStats | undefined>(() => getCachedSessionTokenStats() || undefined);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(() => !getCachedSessionTokenStats());
   const [revision, setRevision] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 

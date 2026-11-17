@@ -2,6 +2,8 @@
  * 轻量 fetch 封装：统一 baseURL、JSON 头、鉴权头与错误处理。
  * baseURL 走 Vite proxy（/api -> mock server），替换真实后端无需改这里。
  */
+import { clearResponseCache } from "./responseCache";
+
 const BASE = "/api";
 
 export const TOKEN_KEY = "admin_token";
@@ -11,6 +13,7 @@ export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 export function setAuth(token: string, user: unknown) {
+  clearResponseCache();
   localStorage.setItem(TOKEN_KEY, token);
   localStorage.setItem(USER_KEY, JSON.stringify(user));
 }
@@ -24,6 +27,7 @@ export function getStoredUser<T>(): T | null {
   }
 }
 export function clearAuth() {
+  clearResponseCache();
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
 }
