@@ -30,6 +30,12 @@ function view(row) {
 }
 
 export async function handleCollaborationSpaces({ pathname, method, client: pool, me, readBody, url }) {
+  if (pathname === '/api/spaces/deleted' && method === 'GET') {
+    const rows = (await pool.query(`SELECT s.*, 'owner'::text AS my_role FROM collaboration_spaces s CROSS JOIN retention_settings r
+      WHERE s.owner_id=$1 AND s.deleted_at IS NOT NULL AND r.id=1 AND r.recycle_days > 0
+        AND s.deleted_at > now() - (r.recycle_days * interval '1 day') ORDER BY s.deleted_at DESC`,[me.id])).rows;
+    return ok({ items: rows.map(row => ({ ...view(row), deletedAt:row.deleted_at })) });
+  }
   if (pathname === '/api/spaces') {
     if (method === 'GET') {
       const rows = (await pool.query(`SELECT s.*, CASE WHEN s.owner_id=$1 THEN 'owner' ELSE m.role END AS my_role
@@ -45,7 +51,7 @@ export async function handleCollaborationSpaces({ pathname, method, client: pool
       VALUES($1,$2,$3,$4,$5) RETURNING *, 'owner'::text AS my_role`,[crypto.randomUUID(),name,description,icon,me.id])).rows[0];
     return ok(view(row),201);
   }
-  const match = /^\/api\/spaces\/([^/]+)(?:\/(members|transfer|candidates))?(?:\/([^/]+))?$/.exec(pathname);
+  const match = /^\/api\/spaces\/([^/]+)(?:\/(members|transfer|candidates|restore))?(?:\/([^/]+))?$/.exec(pathname);
   if (!match) return null;
   const [,id,section,memberId] = match;
   if (!uuid.test(id)) return fail(404,'空间不存在');
@@ -69,6 +75,14 @@ export async function handleCollaborationSpaces({ pathname, method, client: pool
     return !section ? ok(view(space)) : fail(404,'接口不存在');
   }
   return transact(pool, async client => {
+    if (section === 'restore' && method === 'POST' && !memberId) {
+      const body = await readBody();
+      const restored = await client.query(`UPDATE collaboration_spaces SET deleted_at=NULL,version=version+1,updated_at=now()
+        WHERE id=$1 AND owner_id=$2 AND deleted_at IS NOT NULL AND version=$3
+          AND deleted_at > now() - (SELECT recycle_days * interval '1 day' FROM retention_settings WHERE id=1)
+        RETURNING *, 'owner'::text AS my_role`,[id,me.id,body?.version]);
+      return restored.rowCount ? ok(view(restored.rows[0])) : fail(409,'空间已被清理或版本已变化');
+    }
     const space = await visibleSpace(client,id,me.id,true);
     if (!space) return fail(404,'空间不存在或无权访问');
     if (space.my_role !== 'owner') return fail(403,'仅空间 Owner 可管理空间和成员');
@@ -88,8 +102,13 @@ export async function handleCollaborationSpaces({ pathname, method, client: pool
     if (!section && method === 'DELETE') {
       const body = await readBody();
       if (body?.version !== space.version) return fail(409,'空间版本已变化，请刷新');
+      const days = Number((await client.query('SELECT recycle_days FROM retention_settings WHERE id=1')).rows[0].recycle_days);
+      if (days === 0) {
+        await client.query('DELETE FROM collaboration_spaces WHERE id=$1',[id]);
+        return ok({ deleted:true, recoverUntil:null });
+      }
       await client.query('UPDATE collaboration_spaces SET deleted_at=now(),version=version+1,updated_at=now() WHERE id=$1',[id]);
-      return ok({ deleted:true, recoverUntil: new Date(Date.now()+30*86400000).toISOString() });
+      return ok({ deleted:true, recoverUntil: new Date(Date.now()+days*86400000).toISOString() });
     }
     if (section === 'members' && !memberId && method === 'POST') {
       const body = await readBody();

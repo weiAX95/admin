@@ -5,6 +5,8 @@ export interface Space { id:string; name:string; description:string; icon:string
 export interface SpaceMember { id:string; username:string; name:string | null; role:'editor'|'viewer'; addedAt:string }
 export interface SpaceCandidate { id:string; username:string; name:string | null }
 export const listSpaces = () => http.get<{ items:Space[] }>('/spaces');
+export const listDeletedSpaces = () => http.get<{ items:(Space & {deletedAt:string})[] }>('/spaces/deleted');
+export const restoreSpace = (id:string,version:number) => http.post<Space>(`/spaces/${id}/restore`,{version});
 export const createSpace = (value:{name:string;description:string;icon:string}) => http.post<Space>('/spaces',value);
 export const updateSpace = (id:string,version:number,value:Partial<Pick<Space,'name'|'description'|'icon'|'status'>>) => http.patch<Space>(`/spaces/${id}`,{version,...value});
 export const deleteSpace = (id:string,version:number) => http.del<{deleted:boolean}>(`/spaces/${id}`,{version});

@@ -60,6 +60,8 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
       sessions = (await client.query('DELETE FROM sessions WHERE id=ANY($1)', [oldSessions])).rowCount;
       if (sessions) await rebuildSessionClusters(client);
     }
+    const spacesDeleted = (await client.query(`DELETE FROM collaboration_spaces WHERE deleted_at IS NOT NULL
+      AND deleted_at <= $1::timestamptz - ($2 * interval '1 day')`,[now.toISOString(),settings.recycle_days])).rowCount;
     const purged = { tasks: 0, notes: 0, experiments: 0, prompt_library: 0, users: 0 };
     const failures = [];
     for (const table of Object.keys(purged)) {
@@ -83,9 +85,9 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
       }
     }
     const totalAuditDeleted = auditDeleted+modelAudit.rowCount+rateRejections.rowCount+modelSecurity.rowCount+clientErrors.rowCount+loginHistory.rowCount+githubDeliveries.rowCount;
-    await client.query('UPDATE retention_cleanup_runs SET completed_at=now(),audit_deleted=$2,sessions_deleted=$3,candidates_deleted=$4,tasks_deleted=$5,notes_deleted=$6,experiments_deleted=$7,prompts_deleted=$8,purge_failures=$9,webhook_events_deleted=$10,users_deleted=$11 WHERE local_date=$1', [clock.date,totalAuditDeleted,sessions,candidates,purged.tasks,purged.notes,purged.experiments,purged.prompt_library,JSON.stringify(failures),webhookEvents.rowCount,purged.users]);
+    await client.query('UPDATE retention_cleanup_runs SET completed_at=now(),audit_deleted=$2,sessions_deleted=$3,candidates_deleted=$4,tasks_deleted=$5,notes_deleted=$6,experiments_deleted=$7,prompts_deleted=$8,purge_failures=$9,webhook_events_deleted=$10,users_deleted=$11,spaces_deleted=$12 WHERE local_date=$1', [clock.date,totalAuditDeleted,sessions,candidates,purged.tasks,purged.notes,purged.experiments,purged.prompt_library,JSON.stringify(failures),webhookEvents.rowCount,purged.users,spacesDeleted]);
     await client.query('COMMIT');
-    return { localDate: clock.date, auditDeleted: totalAuditDeleted, webhookEventsDeleted: webhookEvents.rowCount, sessionsDeleted: sessions, candidatesDeleted: candidates, purged, failures };
+    return { localDate: clock.date, auditDeleted: totalAuditDeleted, webhookEventsDeleted: webhookEvents.rowCount, sessionsDeleted: sessions, candidatesDeleted: candidates, spacesDeleted, purged, failures };
   } catch (error) { await client.query('ROLLBACK'); throw error; }
   finally { client.release(); }
 }
