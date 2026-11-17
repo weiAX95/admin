@@ -78,7 +78,7 @@ import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
 import { handleCollaborationSpaces } from './collaboration-spaces.mjs';
-import { handleTaskComments } from './task-comments.mjs';
+import { handleContentComments, isContentCommentsPath } from './content-comments.mjs';
 import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, GithubOAuthFailure, handleProjectGithubAuth, reconcileDisconnectedGithubAutomation } from './project-github-auth.mjs';
 import { handleProjectGithubWebhook, processProjectGithubDeliveries } from './project-github-webhooks.mjs';
 import { processProjectPollScans } from './project-poll-scans.mjs';
@@ -2243,19 +2243,19 @@ async function withData(work) {
 }
 
 function routeHttpRequest(req, res, pathname, method) {
-  if (/^\/api\/tasks\/[^/]+\/comments(?:\/[^/]+)?$/.test(pathname)) {
+  if (isContentCommentsPath(pathname)) {
     if (method === 'OPTIONS') return sendImmediate(res,204,{});
     void (async () => {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
       const me = await lookupSession(token);
       if (!me) return sendImmediate(res,401,{ error:'未登录或登录已过期' });
-      const result = await handleTaskComments({ pathname, method, pool, me,
+      const result = await handleContentComments({ pathname, method, pool, me,
         url:new URL(req.url,'http://localhost'), readBody:() => readProjectBody(req) });
       sendImmediate(res,result.status,result.data);
       if (result.status < 400 && !['GET','OPTIONS'].includes(method)) notifyLive();
     })().catch(error => {
-      console.error('[task-comments] request failed:',error.message);
-      if (!res.headersSent) sendImmediate(res,500,{ error:'任务评论暂不可用' });
+      console.error('[content-comments] request failed:',error.message);
+      if (!res.headersSent) sendImmediate(res,500,{ error:'评论服务暂不可用' });
     });
     return;
   }

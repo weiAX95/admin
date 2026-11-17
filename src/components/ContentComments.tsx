@@ -1,52 +1,55 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Empty, Popconfirm, Select, Space, Spin, Typography } from 'antd';
-import { createTaskComment, deleteTaskComment, listTaskComments, updateTaskComment, type TaskComment } from '../api/taskComments';
+import { createContentComment, deleteContentComment, listContentComments, updateContentComment, type ContentComment, type ContentKind } from '../api/contentComments';
 import { getStoredUser } from '../api/client';
 import type { AuthUser } from '../types';
 import { isAdministrator } from '../utils/roles';
 import MarkdownContent from './MarkdownContent';
 import MarkdownEditor from './MarkdownEditor';
 
-export default function TaskComments({ taskId }: { taskId:string }) {
+export default function ContentComments({ kind, entityId }: { kind:ContentKind; entityId:string }) {
   const { message } = App.useApp();
   const me = getStoredUser<AuthUser>();
-  const [items,setItems] = useState<TaskComment[]>([]);
+  const [items,setItems] = useState<ContentComment[]>([]);
   const [total,setTotal] = useState(0);
   const [order,setOrder] = useState<'newest'|'oldest'>('newest');
   const [loading,setLoading] = useState(false);
   const [busy,setBusy] = useState(false);
   const [error,setError] = useState('');
+  const requestId = useRef(0);
   const [content,setContent] = useState('');
-  const [replyTo,setReplyTo] = useState<TaskComment | null>(null);
-  const [editing,setEditing] = useState<TaskComment | null>(null);
+  const [replyTo,setReplyTo] = useState<ContentComment | null>(null);
+  const [editing,setEditing] = useState<ContentComment | null>(null);
   const [editContent,setEditContent] = useState('');
   const load = useCallback(async (offset=0) => {
+    const request = ++requestId.current;
     setLoading(true);
     try {
-      const result = await listTaskComments(taskId,order,offset);
+      const result = await listContentComments(kind,entityId,order,offset);
+      if (request !== requestId.current) return;
       setItems(previous=>offset ? [...previous,...result.items] : result.items);
       setTotal(result.total); setError('');
-    } catch (cause) { setError(cause instanceof Error?cause.message:'评论加载失败'); }
-    finally { setLoading(false); }
-  },[taskId,order]);
-  useEffect(()=>{ void load(); },[load]);
+    } catch (cause) { if (request === requestId.current) setError(cause instanceof Error?cause.message:'评论加载失败'); }
+    finally { if (request === requestId.current) setLoading(false); }
+  },[kind,entityId,order]);
+  useEffect(()=>{ setItems([]); setTotal(0); setReplyTo(null); setEditing(null); void load(); return ()=>{requestId.current++;}; },[load]);
   const save = async () => {
     if (!content.trim()) return;
     setBusy(true);
-    try { await createTaskComment(taskId,content,replyTo?.id); setContent(''); setReplyTo(null); await load(); message.success('评论已保存'); }
+    try { await createContentComment(kind,entityId,content,replyTo?.id); setContent(''); setReplyTo(null); await load(); message.success('评论已保存'); }
     catch (cause) { message.error(cause instanceof Error?cause.message:'保存评论失败'); }
     finally { setBusy(false); }
   };
-  const change = async (item:TaskComment,remove=false) => {
+  const change = async (item:ContentComment,remove=false) => {
     setBusy(true);
     try {
-      if (remove) await deleteTaskComment(taskId,item.id,item.version);
-      else await updateTaskComment(taskId,item.id,item.version,editContent);
+      if (remove) await deleteContentComment(kind,entityId,item.id,item.version);
+      else await updateContentComment(kind,entityId,item.id,item.version,editContent);
       setEditing(null); setEditContent(''); await load(); message.success(remove?'评论已删除':'评论已修改');
     } catch (cause) { message.error(cause instanceof Error?cause.message:'评论操作失败'); await load(); }
     finally { setBusy(false); }
   };
-  const renderComment = (item:TaskComment,reply=false) => <Card size="small" key={item.id} style={{marginTop:reply?8:12,marginLeft:reply?24:0}}>
+  const renderComment = (item:ContentComment,reply=false) => <Card size="small" key={item.id} style={{marginTop:reply?8:12,marginLeft:reply?24:0}}>
     <Space direction="vertical" style={{width:'100%'}} size={8}>
       <Space wrap><Typography.Text strong>{item.authorName}</Typography.Text><Typography.Text type="secondary">{new Date(item.createdAt).toLocaleString('zh-CN')}</Typography.Text>{item.updatedAt!==item.createdAt && !item.deletedAt && <Typography.Text type="secondary">已编辑</Typography.Text>}</Space>
       {item.deletedAt ? <Typography.Text type="secondary">评论已删除</Typography.Text> : editing?.id===item.id ? <MarkdownEditor value={editContent} onChange={setEditContent} rows={5} ariaLabel="修改评论" /> : <MarkdownContent content={item.content || ''} />}

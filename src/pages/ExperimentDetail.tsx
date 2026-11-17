@@ -5,6 +5,7 @@ import { Link, useParams } from "react-router-dom";
 import { getExperiment } from "../api/experiments";
 import type { Experiment } from "../types";
 import MarkdownContent from "../components/MarkdownContent";
+import ContentComments from "../components/ContentComments";
 import ExperimentDefinitionDetail from "../components/ExperimentDefinitionDetail";
 import ExperimentShareButton from "../components/ExperimentShareButton";
 import { getStoredUser } from "../api/client";
@@ -34,5 +35,6 @@ export default function ExperimentDetail() {
     ]} />
     <div className="task-detail-section"><h4>Prompt</h4><MarkdownContent content={experiment.prompt || "暂无内容"} /></div>
     <div className="task-detail-section"><h4>结果观察</h4><MarkdownContent content={experiment.result || "暂无结果观察"} /></div>
+    <ContentComments kind="experiments" entityId={experiment.id} />
   </Card>;
 }

@@ -218,7 +218,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [187_task_comments.sql](../db/migrations/187_task_comments.sql)。迁移定义共 **155 张表**；实际运行库须先应用迁移。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [188_collaboration_comments.sql](../db/migrations/188_collaboration_comments.sql)。迁移定义共 **155 张表**；实际运行库须先应用迁移。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -787,7 +787,7 @@ flowchart LR
 
 [146 扫描分支隔离迁移](../db/migrations/146_project_scan_branch_isolation.sql) 将 `project_scans` 进行中唯一索引限定为项目、分支和 commit；它是唯一索引，不是新的外键或表。扫描差异的基线也只从同一可信 GitHub 仓库 ID、同一分支的较早扫描中选择，防止跨分支差异误报。
 
-早期的任务、会话和笔记表组之外，后续迁移还增加了实验、评测、模型治理、系统设置、项目分析、会话分析及页面错误报告等表；185 号迁移增加两张协作空间表，187 号迁移增加任务评论表，迁移定义的总数为 155 张。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。
+早期的任务、会话和笔记表组之外，后续迁移还增加了实验、评测、模型治理、系统设置、项目分析、会话分析及页面错误报告等表；185 号迁移增加两张协作空间表，187 号迁移增加评论表，188 号迁移将其扩展到五类内容，迁移定义的总数为 155 张。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。
 # 协作空间迁移边界（185）
 
 ```mermaid
@@ -801,13 +801,19 @@ erDiagram
 
 `/api/spaces` 提供登录账号的空间列表和创建；`/api/spaces/:id` 读取、按版本修改、归档或软删除；`/api/spaces/:id/members` 由 Owner 批量添加 Editor／Viewer；成员路径支持改角色和移除，`/transfer` 转让唯一 Owner。归档空间拒绝成员写入。Owner 可以通过 `/api/spaces/deleted` 查看仍在回收期的空间，经 `/api/spaces/:id/restore` 恢复；回收期使用 `retention_settings.recycle_days`，设置为 0 时立即永久删除。每日清理器删除过期空间，[186_space_cleanup_runs.sql](../db/migrations/186_space_cleanup_runs.sql) 为清理记录增加 `spaces_deleted` 计数。此处权限只覆盖空间与成员自身，尚不约束任务等业务数据。
 
-## 任务评论（187）
+## 跨内容评论（187–188）
 
 ```mermaid
 erDiagram
-  tasks ||--o{ task_comments : "task_id · CASCADE"
-  users |o--o{ task_comments : "author_id · SET NULL"
-  task_comments |o--o{ task_comments : "parent_id + task_id · RESTRICT"
+  tasks ||--o{ collaboration_comments : "task_id · CASCADE"
+  notes ||--o{ collaboration_comments : "note_id · CASCADE"
+  experiments ||--o{ collaboration_comments : "experiment_id · CASCADE"
+  prompt_library ||--o{ collaboration_comments : "prompt_id · CASCADE"
+  experiment_dataset_cases ||--o{ collaboration_comments : "case_id · CASCADE"
+  users |o--o{ collaboration_comments : "author_id · SET NULL"
+  collaboration_comments |o--o{ collaboration_comments : "parent_id + entity ID · RESTRICT"
 ```
 
-`task_comments` 使用 `task_id` 外键在任务永久删除时级联清理；`author_id` 允许账号删除后保留匿名评论。回复的 `(parent_id, task_id)` 复合外键保证与父评论属于同一任务；服务端只接受顶层评论作为父节点，保持单层回复。评论删除仅标记 `deleted_at`，保留已存在的回复。`/api/tasks/:id/comments` 在每次访问时检查任务读取权限，作者或管理员可修改、删除。任务评论中的 `@用户名` 在事务内写入去重的站内通知，只有当前任务所有者或管理员可接收。当前还没有把评论绑定到协作空间，其他实体评论及空间成员的提及范围仍待实现。
+187 号迁移首先建立 `task_comments`；188 号迁移将其重命名为 `collaboration_comments` 并保留已有评论。五个实体 ID 中恰有一个非空，分别有真实外键，实体永久删除时级联清理。`author_id` 允许账号删除后保留匿名评论。回复的 `(parent_id, 对应实体 ID)` 复合外键保证与父评论属于同一实体；服务端只接受顶层评论作为父节点，保持单层回复。评论删除仅标记 `deleted_at`，保留已存在的回复。
+
+五类 `/api/.../:id/comments` 入口在每次访问时检查对应实体存在及当前读取权限；任务仅所有者或管理员可读，其他四类遵循当前全员登录可读规则。作者或管理员可修改、删除。`@用户名` 在事务内写入去重的站内通知，任务仅通知所有者或管理员，其他实体可通知有登录权限的账号。通知的 `entity_id` 是评论 ID，由应用维护，**没有评论外键**。当前还没有把内容与评论绑定到协作空间，因此空间 Owner 权限及提及范围仍待 11.1 数据隔离接通。

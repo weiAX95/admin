@@ -8,6 +8,7 @@ import { ApiError, getStoredUser } from '../api/client';
 import type { Dataset, DatasetCase } from '../api/experiment-evaluation';
 import { EVALUATION_FIELDS, parseEvaluationFile, previewEvaluationRows } from '../utils/evaluationImport';
 import type { EvaluationField, EvaluationImportSource } from '../utils/evaluationImport';
+import ContentComments from '../components/ContentComments';
 
 const example = JSON.stringify([{ caseKey: 'case-1', input: '解释 ReAct', expectedOutput: 'ReAct 将思考与行动交替进行', tags: ['Agent'], difficulty: 2, source: 'manual' }], null, 2);
 type Folder = { id: string; name: string; parent_id: string | null };
@@ -209,7 +210,7 @@ export default function ExperimentDatasets() {
     </Modal>
     <Modal title="评测媒体配额" open={settingsOpen} onCancel={() => setSettingsOpen(false)} onOk={() => void saveSettings()} okButtonProps={{disabled:mediaDatasetGb>mediaGlobalGb || mediaGlobalGb<=0 || mediaDatasetGb<=0}}><Form.Item label="总配额（GB）"><InputNumber min={0.001} step={1} value={mediaGlobalGb} onChange={value=>setMediaGlobalGb(value||0)} /></Form.Item><Form.Item label="单数据集配额（GB）"><InputNumber min={0.001} step={1} value={mediaDatasetGb} onChange={value=>setMediaDatasetGb(value||0)} /></Form.Item><Form.Item label="磁盘最小空闲比例（%）"><InputNumber min={0} max={99} value={minFreePercent} onChange={value=>setMinFreePercent(value||0)} /></Form.Item></Modal>
     <Modal title={`固定版本用例 · ${requestedCaseKey || ''}`} open={Boolean(requestedVersionId && requestedCaseKey)} onCancel={closeLinkedCase} footer={<Button onClick={closeLinkedCase}>关闭</Button>} width={760}>
-      {linkedCaseLoading ? <Spin /> : linkedCaseError ? <Alert type="error" message={linkedCaseError} /> : linkedCase ? <pre className="global-search-case-detail">{JSON.stringify(linkedCase, null, 2)}</pre> : null}
+      {linkedCaseLoading ? <Spin /> : linkedCaseError ? <Alert type="error" message={linkedCaseError} /> : linkedCase ? <><pre className="global-search-case-detail">{JSON.stringify(linkedCase, null, 2)}</pre>{typeof linkedCase.id === 'string' && <ContentComments kind="cases" entityId={linkedCase.id} />}</> : null}
     </Modal>
   </Card>;
 }

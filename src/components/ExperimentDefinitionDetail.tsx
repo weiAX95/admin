@@ -7,6 +7,7 @@ import type { ExperimentBatch, ExperimentDefinition, ExperimentRun } from '../ap
 import { getStoredUser, getToken } from '../api/client';
 import type { AuthUser } from '../types';
 import MarkdownContent from './MarkdownContent';
+import ContentComments from './ContentComments';
 import { getRunAnnotation, saveRunAnnotation } from '../api/experiment-evaluation';
 import ExperimentRegressionPanel from './ExperimentRegressionPanel';
 import ExperimentChainLinks from './ExperimentChainLinks';
@@ -64,6 +65,7 @@ export default function ExperimentDefinitionDetail({ id }: { id: string }) {
     <ExperimentChainLinks definition={definition} canManage={canManage} onUpdated={() => void load()} />
     {definition.batches.some(batch => batch.kind === 'regression' || batch.kind === 'dataset') && <Card title="评测报告"><Space wrap>{definition.batches.filter(batch => batch.kind === 'regression' || batch.kind === 'dataset').map(batch => <Link key={batch.id} to={`/experiments/reports/${batch.id}`}>{batch.kind === 'regression' ? '回归' : '数据集'} · {new Date(batch.createdAt).toLocaleString('zh-CN')} · {batch.status}</Link>)}</Space></Card>}
     {definition.batches.map(batch => <BatchCard key={batch.id} batch={batch} canManage={canManage} onRetry={async () => { try { const result = await retryBatch(batch.id); message.success(`已重试 ${result.queued} 项`); await load(); } catch (cause) { message.error(cause instanceof Error ? cause.message : '重试失败'); } }} />)}
+    <ContentComments kind="experiments" entityId={definition.id} />
   </Space>;
 }
 

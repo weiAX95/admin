@@ -12,7 +12,7 @@ import TaskTagEditor from "../components/TaskTagEditor";
 import TaskRelations from "../components/TaskRelations";
 import TaskTimeTracking from "../components/TaskTimeTracking";
 import MarkdownContent from "../components/MarkdownContent";
-import TaskComments from "../components/TaskComments";
+import ContentComments from "../components/ContentComments";
 import type { AuthUser, LearningTask, RecurringSeries } from "../types";
 import { isAdministrator } from "../utils/roles";
 
@@ -78,7 +78,7 @@ export default function TaskDetail() {
         <Card title="任务标签"><TaskTagEditor task={task} onChanged={setTask} readOnly={!canEditTasks} /></Card>
         <TaskTimeTracking task={task} readOnly={!canEditTasks} />
         <TaskRelations task={task} />
-        <TaskComments taskId={task.id} />
+        <ContentComments kind="tasks" entityId={task.id} />
         <Card title="学习资料">
           {task.resources.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无学习资料" /> : <ul className="task-resource-list">{task.resources.map((resource, index) => {
             const href = safeResourceUrl(resource.url);
