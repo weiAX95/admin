@@ -218,7 +218,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [188_collaboration_comments.sql](../db/migrations/188_collaboration_comments.sql)。迁移定义共 **155 张表**；实际运行库须先应用迁移。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [189_space_activity.sql](../db/migrations/189_space_activity.sql)。迁移定义共 **156 张表**；实际运行库须先应用迁移。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -787,7 +787,7 @@ flowchart LR
 
 [146 扫描分支隔离迁移](../db/migrations/146_project_scan_branch_isolation.sql) 将 `project_scans` 进行中唯一索引限定为项目、分支和 commit；它是唯一索引，不是新的外键或表。扫描差异的基线也只从同一可信 GitHub 仓库 ID、同一分支的较早扫描中选择，防止跨分支差异误报。
 
-早期的任务、会话和笔记表组之外，后续迁移还增加了实验、评测、模型治理、系统设置、项目分析、会话分析及页面错误报告等表；185 号迁移增加两张协作空间表，187 号迁移增加评论表，188 号迁移将其扩展到五类内容，迁移定义的总数为 155 张。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。
+早期的任务、会话和笔记表组之外，后续迁移还增加了实验、评测、模型治理、系统设置、项目分析、会话分析及页面错误报告等表；185 号迁移增加两张协作空间表，187 号迁移增加评论表，188 号迁移将其扩展到五类内容，189 号迁移增加空间管理活动表，迁移定义的总数为 156 张。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。
 # 协作空间迁移边界（185）
 
 ```mermaid
@@ -795,11 +795,15 @@ erDiagram
   users ||--o{ collaboration_spaces : "owner_id · RESTRICT"
   users ||--o{ collaboration_space_members : "user_id · CASCADE"
   collaboration_spaces ||--o{ collaboration_space_members : "space_id · CASCADE"
+  collaboration_spaces ||--o{ collaboration_space_activity : "space_id · CASCADE"
+  users |o--o{ collaboration_space_activity : "actor_id · SET NULL"
 ```
 
 `185_collaboration_spaces.sql` 增加 `collaboration_spaces` 与 `collaboration_space_members`。空间行的 `owner_id` 是唯一 Owner；成员表只保存 Editor、Viewer，并以 `(space_id, user_id)` 防重复。两处账号 ID 均有 SQL 外键。空间可归档并记录软删除时间。当前任务、笔记、实验、提示词和评测数据集仍使用原有数据归属规则，**尚未加入空间 ID 或空间访问控制**；因此此迁移只建立关系基础，不能据此认为 11.1／11.2 的隔离或权限已完成。
 
 `/api/spaces` 提供登录账号的空间列表和创建；`/api/spaces/:id` 读取、按版本修改、归档或软删除；`/api/spaces/:id/members` 由 Owner 批量添加 Editor／Viewer；成员路径支持改角色和移除，`/transfer` 转让唯一 Owner。归档空间拒绝成员写入。Owner 可以通过 `/api/spaces/deleted` 查看仍在回收期的空间，经 `/api/spaces/:id/restore` 恢复；回收期使用 `retention_settings.recycle_days`，设置为 0 时立即永久删除。每日清理器删除过期空间，[186_space_cleanup_runs.sql](../db/migrations/186_space_cleanup_runs.sql) 为清理记录增加 `spaces_deleted` 计数。此处权限只覆盖空间与成员自身，尚不约束任务等业务数据。
+
+[189_space_activity.sql](../db/migrations/189_space_activity.sql) 增加 `collaboration_space_activity`：`space_id` 外键在空间永久删除时级联清理，`actor_id` 外键在账号删除后置空，`actor_name` 保留操作时的显示名称。空间与成员管理的写操作在同一事务中记录活动；`GET /api/spaces/:id/activity` 仅空间成员可读，可按操作者、资源类型、操作类型筛选并分页。任务、笔记、实验、提示词和评测用例尚无空间归属，因此这些内容的变更**未进入**空间活动流；当前时间线不是 11.5 的完整跨内容活动流。
 
 ## 跨内容评论（187–188）
 

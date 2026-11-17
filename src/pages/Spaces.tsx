@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Alert, App, Button, Card, Col, Drawer, Empty, Form, Input, Modal, Popconfirm, Row, Select, Space, Spin, Tag, Typography } from 'antd';
 import { addSpaceMembers, changeSpaceMemberRole, createSpace, deleteSpace, findSpaceCandidates, listDeletedSpaces, listSpaceMembers, listSpaces, removeSpaceMember, restoreSpace, transferSpaceOwner, updateSpace, type Space as TeamSpace, type SpaceCandidate, type SpaceMember } from '../api/spaces';
+import SpaceActivity from '../components/SpaceActivity';
 
 const roleLabel = { owner:'Owner', editor:'Editor', viewer:'Viewer' };
 const roleOptions = [{value:'editor',label:'Editor · 可编辑'}, {value:'viewer',label:'Viewer · 只读'}] as const;
@@ -20,6 +21,7 @@ export default function Spaces() {
   const [editing,setEditing] = useState<TeamSpace | 'new' | null>(null);
   const [loading,setLoading] = useState(true);
   const [busy,setBusy] = useState(false);
+  const [activityVersion,setActivityVersion] = useState(0);
   const [error,setError] = useState('');
   const load = useCallback(async () => {
     setLoading(true);
@@ -47,7 +49,7 @@ export default function Spaces() {
   },[selected?.id,selected?.role,selected?.status,candidateQuery,members.length]);
   const act = async (task:()=>Promise<unknown>,success:string,refreshMembers=true) => {
     setBusy(true);
-    try { await task(); message.success(success); await load(); if(selected && refreshMembers) { const data=await listSpaceMembers(selected.id); setMembers(data.items); } return true; }
+    try { await task(); message.success(success); await load(); setActivityVersion(value=>value+1); if(selected && refreshMembers) { const data=await listSpaceMembers(selected.id); setMembers(data.items); } return true; }
     catch(cause) { message.error(cause instanceof Error?cause.message:'操作失败'); await load(); return false; }
     finally { setBusy(false); }
   };
@@ -78,6 +80,8 @@ export default function Spaces() {
         <Typography.Title level={5}>成员</Typography.Title>
         {members.length ? members.map(member=><Card size="small" key={member.id}><Space style={{width:'100%',justifyContent:'space-between'}} wrap><span>{member.name||member.username} <Typography.Text type="secondary">@{member.username}</Typography.Text></span>{selected.role==='owner'&&selected.status==='active'?<Space><Select aria-label={`${member.username} 的空间角色`} value={member.role} style={{width:110}} options={[...roleOptions]} disabled={busy} onChange={role=>void act(()=>changeSpaceMemberRole(selected.id,member.id,role),'角色已更新')} /><Button size="small" onClick={()=>transfer(member)}>转让 Owner</Button><Popconfirm title="移除该成员？" onConfirm={()=>void act(()=>removeSpaceMember(selected.id,member.id),'成员已移除')}><Button size="small" danger>移除</Button></Popconfirm></Space>:<Tag>{roleLabel[member.role]}</Tag>}</Space></Card>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无其他成员" />}
         {selected.role==='owner'&&selected.status==='active'&&<Card size="small" title="添加成员"><Space direction="vertical" style={{width:'100%'}}><Select mode="multiple" showSearch filterOption={false} aria-label="搜索并选择账号" placeholder="搜索账号" value={chosen} searchValue={candidateQuery} onSearch={setCandidateQuery} onChange={setChosen} style={{width:'100%'}} options={candidates.map(account=>({value:account.id,label:`${account.name||account.username} (@${account.username})`}))} /><Space><Select aria-label="新成员默认角色" value={newRole} options={[...roleOptions]} onChange={setNewRole} style={{width:145}} /><Button type="primary" disabled={!chosen.length||busy} onClick={()=>void act(async()=>{await addSpaceMembers(selected.id,chosen.map(userId=>({userId,role:newRole})));setChosen([]);},'成员已添加')}>添加 {chosen.length||''} 人</Button></Space></Space></Card>}
+        <Typography.Title level={5}>空间活动</Typography.Title>
+        <SpaceActivity spaceId={selected.id} refreshVersion={activityVersion} />
         {selected.role==='owner'&&<Space><Button onClick={()=>changeStatus(selected)} loading={busy}>{selected.status==='active'?'归档空间':'恢复空间'}</Button><Popconfirm title="删除该空间？" description="成员将无法访问；保留期按系统设置执行。" onConfirm={()=>void act(async()=>{await deleteSpace(selected.id,selected.version);setSelected(null);},'空间已删除',false)}><Button danger loading={busy}>删除空间</Button></Popconfirm></Space>}
       </Space>}
     </Drawer>
