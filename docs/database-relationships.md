@@ -218,7 +218,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [160_project_analysis_sqlalchemy_v20.sql](../db/migrations/160_project_analysis_sqlalchemy_v20.sql)。迁移定义共 **152 张表**；实际运行库须先应用迁移。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [185_collaboration_spaces.sql](../db/migrations/185_collaboration_spaces.sql)。迁移定义共 **154 张表**；实际运行库须先应用迁移。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -787,4 +787,14 @@ flowchart LR
 
 [146 扫描分支隔离迁移](../db/migrations/146_project_scan_branch_isolation.sql) 将 `project_scans` 进行中唯一索引限定为项目、分支和 commit；它是唯一索引，不是新的外键或表。扫描差异的基线也只从同一可信 GitHub 仓库 ID、同一分支的较早扫描中选择，防止跨分支差异误报。
 
-早期的任务、会话和笔记表组之外，后续迁移还增加了实验、评测、模型治理、系统设置、项目分析、会话分析及页面错误报告等表，当前迁移定义的总数以本文开头的 152 张为准。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。
+早期的任务、会话和笔记表组之外，后续迁移还增加了实验、评测、模型治理、系统设置、项目分析、会话分析及页面错误报告等表；185 号迁移增加两张协作空间表，迁移定义的总数为 154 张。复习表对账号和笔记使用真实外键；`generation` 是业务轮次，通过唯一约束防止重复提醒或复习记录，不是跨表外键。查看实际定义时以 SQL 迁移文件为准；图解释的是**当前实现**，未来添加外键或改变删除策略时，应同步更新本文。
+# 协作空间迁移边界（185）
+
+```mermaid
+erDiagram
+  users ||--o{ collaboration_spaces : "owner_id · RESTRICT"
+  users ||--o{ collaboration_space_members : "user_id · CASCADE"
+  collaboration_spaces ||--o{ collaboration_space_members : "space_id · CASCADE"
+```
+
+`185_collaboration_spaces.sql` 增加 `collaboration_spaces` 与 `collaboration_space_members`。空间行的 `owner_id` 是唯一 Owner；成员表只保存 Editor、Viewer，并以 `(space_id, user_id)` 防重复。两处账号 ID 均有 SQL 外键。空间可归档并记录软删除时间。当前任务、笔记、实验、提示词和评测数据集仍使用原有数据归属规则，**尚未加入空间 ID 或空间访问控制**；因此此迁移只建立关系基础，不能据此认为 11.1／11.2 的隔离或权限已完成。
