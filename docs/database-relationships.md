@@ -810,4 +810,4 @@ erDiagram
   task_comments |o--o{ task_comments : "parent_id + task_id · RESTRICT"
 ```
 
-`task_comments` 使用 `task_id` 外键在任务永久删除时级联清理；`author_id` 允许账号删除后保留匿名评论。回复的 `(parent_id, task_id)` 复合外键保证与父评论属于同一任务；服务端只接受顶层评论作为父节点，保持单层回复。评论删除仅标记 `deleted_at`，保留已存在的回复。`/api/tasks/:id/comments` 在每次访问时检查任务读取权限，作者或管理员可修改、删除。当前还没有把评论绑定到协作空间，其他实体评论和 @mention 通知仍待实现。
+`task_comments` 使用 `task_id` 外键在任务永久删除时级联清理；`author_id` 允许账号删除后保留匿名评论。回复的 `(parent_id, task_id)` 复合外键保证与父评论属于同一任务；服务端只接受顶层评论作为父节点，保持单层回复。评论删除仅标记 `deleted_at`，保留已存在的回复。`/api/tasks/:id/comments` 在每次访问时检查任务读取权限，作者或管理员可修改、删除。任务评论中的 `@用户名` 在事务内写入去重的站内通知，只有当前任务所有者或管理员可接收。当前还没有把评论绑定到协作空间，其他实体评论及空间成员的提及范围仍待实现。
