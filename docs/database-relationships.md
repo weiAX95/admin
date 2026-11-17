@@ -798,3 +798,5 @@ erDiagram
 ```
 
 `185_collaboration_spaces.sql` 增加 `collaboration_spaces` 与 `collaboration_space_members`。空间行的 `owner_id` 是唯一 Owner；成员表只保存 Editor、Viewer，并以 `(space_id, user_id)` 防重复。两处账号 ID 均有 SQL 外键。空间可归档并记录软删除时间。当前任务、笔记、实验、提示词和评测数据集仍使用原有数据归属规则，**尚未加入空间 ID 或空间访问控制**；因此此迁移只建立关系基础，不能据此认为 11.1／11.2 的隔离或权限已完成。
+
+`/api/spaces` 提供登录账号的空间列表和创建；`/api/spaces/:id` 读取、按版本修改、归档或软删除；`/api/spaces/:id/members` 由 Owner 批量添加 Editor／Viewer；成员路径支持改角色和移除，`/transfer` 转让唯一 Owner。归档空间拒绝成员写入。此处权限只覆盖空间与成员自身，尚不约束任务等业务数据。

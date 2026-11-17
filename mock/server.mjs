@@ -77,6 +77,7 @@ import { handleModelSecurity } from './model-security.mjs';
 import { handleBackupRequest, recoverBackupJobs } from './backup-jobs.mjs';
 import { handleOutboundWebhooks, processOutboundWebhooks } from './outbound-webhooks.mjs';
 import { handleProjectRepositories } from './project-repositories.mjs';
+import { handleCollaborationSpaces } from './collaboration-spaces.mjs';
 import { assertGithubPrivateRepoAccess, completeProjectGithubAuthorization, GithubAuthorizationError, GithubOAuthFailure, handleProjectGithubAuth, reconcileDisconnectedGithubAutomation } from './project-github-auth.mjs';
 import { handleProjectGithubWebhook, processProjectGithubDeliveries } from './project-github-webhooks.mjs';
 import { processProjectPollScans } from './project-poll-scans.mjs';
@@ -2241,6 +2242,21 @@ async function withData(work) {
 }
 
 function routeHttpRequest(req, res, pathname, method) {
+  if (pathname === '/api/spaces' || pathname.startsWith('/api/spaces/')) {
+    if (method === 'OPTIONS') return sendImmediate(res,204,{});
+    void (async () => {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      const me = await lookupSession(token);
+      if (!me) return sendImmediate(res,401,{ error:'未登录或登录已过期' });
+      const result = await handleCollaborationSpaces({ pathname, method, client:pool, me, readBody:() => readProjectBody(req) });
+      sendImmediate(res,result?.status || 404,result?.data || { error:'空间接口不存在' });
+      if (result && result.status < 400 && !['GET','OPTIONS'].includes(method)) notifyLive();
+    })().catch(error => {
+      console.error('[spaces] request failed:',error.message);
+      if (!res.headersSent) sendImmediate(res,500,{ error:'空间服务暂不可用' });
+    });
+    return;
+  }
   if (pathname === '/api/project-github/callback' && method === 'GET') {
     void (async () => {
       const params = new URL(req.url, 'http://localhost').searchParams;
