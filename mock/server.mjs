@@ -392,6 +392,14 @@ function send(res, status, payload) {
   sendImmediate(res, status, payload);
 }
 
+const allowedApiOrigins = new Set((process.env.API_ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean));
+function apiCorsHeaders(res) {
+  const origin = res.req?.headers.origin;
+  return origin && allowedApiOrigins.has(origin)
+    ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin', 'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type,Authorization' }
+    : { Vary: 'Origin' };
+}
+
 function sendImmediate(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
@@ -400,9 +408,7 @@ function sendImmediate(res, status, payload) {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type,Authorization",
+    ...apiCorsHeaders(res),
     ...(status===429&&Number.isInteger(payload?.retryAfterSeconds)?{"Retry-After":String(payload.retryAfterSeconds)}:{}),
   });
   res.end(body);
@@ -2324,9 +2330,7 @@ function routeHttpRequest(req, res, pathname, method) {
         'Content-Type': `${result.contentType}; charset=utf-8`,
         'Content-Disposition': `attachment; filename="${result.filename}"`,
         'Cache-Control': 'no-store',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers': 'Content-Type,Authorization',
-        'Access-Control-Allow-Methods': 'POST,OPTIONS',
+        ...apiCorsHeaders(res),
       });
       res.end(result.content);
     })().catch(error => {
