@@ -218,7 +218,7 @@ flowchart LR
   Browser["React ErrorBoundary"] -. "认证后上报安全元数据" .-> ClientErrors
 ```
 
-本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [189_space_activity.sql](../db/migrations/189_space_activity.sql)。迁移定义共 **156 张表**；实际运行库须先应用迁移。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
+本文对应当前的 [建表迁移](../db/migrations/001_initial.sql)、[补充约束迁移](../db/migrations/002_constraints.sql)及后续版本化迁移，最新为 [190_content_space_ownership.sql](../db/migrations/190_content_space_ownership.sql)。迁移定义共 **156 张表**；实际运行库须先应用迁移。关系图中的**实线是数据库外键**，**虚线是应用代码使用的 ID 关联，没有数据库外键**；第一张图展示请求流向，箭头不代表外键。表中提到的页面路径以当前 [路由配置](../src/App.tsx) 为准。
 
 ## 项目分析连接
 
@@ -796,14 +796,19 @@ erDiagram
   users ||--o{ collaboration_space_members : "user_id · CASCADE"
   collaboration_spaces ||--o{ collaboration_space_members : "space_id · CASCADE"
   collaboration_spaces ||--o{ collaboration_space_activity : "space_id · CASCADE"
+  collaboration_spaces |o--o{ tasks : "space_id · RESTRICT"
+  collaboration_spaces |o--o{ notes : "space_id · RESTRICT"
+  collaboration_spaces |o--o{ experiments : "space_id · RESTRICT"
+  collaboration_spaces |o--o{ prompt_library : "space_id · RESTRICT"
+  collaboration_spaces |o--o{ experiment_datasets : "space_id · RESTRICT"
   users |o--o{ collaboration_space_activity : "actor_id · SET NULL"
 ```
 
-`185_collaboration_spaces.sql` 增加 `collaboration_spaces` 与 `collaboration_space_members`。空间行的 `owner_id` 是唯一 Owner；成员表只保存 Editor、Viewer，并以 `(space_id, user_id)` 防重复。两处账号 ID 均有 SQL 外键。空间可归档并记录软删除时间。当前任务、笔记、实验、提示词和评测数据集仍使用原有数据归属规则，**尚未加入空间 ID 或空间访问控制**；因此此迁移只建立关系基础，不能据此认为 11.1／11.2 的隔离或权限已完成。
+`185_collaboration_spaces.sql` 增加 `collaboration_spaces` 与 `collaboration_space_members`。空间行的 `owner_id` 是唯一 Owner；成员表只保存 Editor、Viewer，并以 `(space_id, user_id)` 防重复。两处账号 ID 均有 SQL 外键。空间可归档并记录软删除时间。[190_content_space_ownership.sql](../db/migrations/190_content_space_ownership.sql) 为任务、笔记、实验、提示词和评测数据集增加可空 `space_id` 外键与索引。现有内容保留空值，未自动转移；`RESTRICT` 防止清理空间时隐式删除仍有其他引用的内容。现有任务、笔记和实验的共享数据加载路径只加载空 `space_id` 内容；直接查询接口和空间内容的完整读写权限尚未接通，因此**不能视为完成空间隔离或业务权限控制**。
 
-`/api/spaces` 提供登录账号的空间列表和创建；`/api/spaces/:id` 读取、按版本修改、归档或软删除；`/api/spaces/:id/members` 由 Owner 批量添加 Editor／Viewer；成员路径支持改角色和移除，`/transfer` 转让唯一 Owner。归档空间拒绝成员写入。Owner 可以通过 `/api/spaces/deleted` 查看仍在回收期的空间，经 `/api/spaces/:id/restore` 恢复；回收期使用 `retention_settings.recycle_days`，设置为 0 时立即永久删除。每日清理器删除过期空间，[186_space_cleanup_runs.sql](../db/migrations/186_space_cleanup_runs.sql) 为清理记录增加 `spaces_deleted` 计数。此处权限只覆盖空间与成员自身，尚不约束任务等业务数据。
+`/api/spaces` 提供登录账号的空间列表和创建；`/api/spaces/:id` 读取、按版本修改、归档或软删除；`/api/spaces/:id/members` 由 Owner 批量添加 Editor／Viewer；成员路径支持改角色和移除，`/transfer` 转让唯一 Owner。归档空间拒绝成员写入。Owner 可以通过 `/api/spaces/deleted` 查看仍在回收期的空间，经 `/api/spaces/:id/restore` 恢复；回收期使用 `retention_settings.recycle_days`，设置为 0 时仅空空间可立即永久删除。每日清理器尝试删除过期空间并记录失败原因，遇到归属内容或其他引用时保留该空间，不影响其他资源清理。[186_space_cleanup_runs.sql](../db/migrations/186_space_cleanup_runs.sql) 为清理记录增加 `spaces_deleted` 计数。此处权限只覆盖空间与成员自身，尚不约束任务等业务数据。
 
-[189_space_activity.sql](../db/migrations/189_space_activity.sql) 增加 `collaboration_space_activity`：`space_id` 外键在空间永久删除时级联清理，`actor_id` 外键在账号删除后置空，`actor_name` 保留操作时的显示名称。空间与成员管理的写操作在同一事务中记录活动；`GET /api/spaces/:id/activity` 仅空间成员可读，可按操作者、资源类型、操作类型筛选并分页。任务、笔记、实验、提示词和评测用例尚无空间归属，因此这些内容的变更**未进入**空间活动流；当前时间线不是 11.5 的完整跨内容活动流。
+[189_space_activity.sql](../db/migrations/189_space_activity.sql) 增加 `collaboration_space_activity`：`space_id` 外键在空间永久删除时级联清理，`actor_id` 外键在账号删除后置空，`actor_name` 保留操作时的显示名称。空间与成员管理的写操作在同一事务中记录活动；`GET /api/spaces/:id/activity` 仅空间成员可读，可按操作者、资源类型、操作类型筛选并分页。业务内容尚无可用的空间访问入口，其变更**未进入**空间活动流；当前时间线不是 11.5 的完整跨内容活动流。
 
 ## 跨内容评论（187–188）
 

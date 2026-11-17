@@ -137,6 +137,13 @@ export async function handleCollaborationSpaces({ pathname, method, client: pool
       if (body?.version !== space.version) return fail(409,'空间版本已变化，请刷新');
       const days = Number((await client.query('SELECT recycle_days FROM retention_settings WHERE id=1')).rows[0].recycle_days);
       if (days === 0) {
+        const owned = (await client.query(`SELECT
+          EXISTS(SELECT 1 FROM tasks WHERE space_id=$1) OR
+          EXISTS(SELECT 1 FROM notes WHERE space_id=$1) OR
+          EXISTS(SELECT 1 FROM experiments WHERE space_id=$1) OR
+          EXISTS(SELECT 1 FROM prompt_library WHERE space_id=$1) OR
+          EXISTS(SELECT 1 FROM experiment_datasets WHERE space_id=$1) AS has_content`,[id])).rows[0].has_content;
+        if (owned) return fail(409,'空间仍有归属内容，请先处理后再永久删除');
         await client.query('DELETE FROM collaboration_spaces WHERE id=$1',[id]);
         return ok({ deleted:true, recoverUntil:null });
       }

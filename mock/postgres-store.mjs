@@ -21,7 +21,7 @@ const spec = (name, table, fields, children = []) => ({ name, table, fields, chi
 const child = (name, table, fields, parentColumn, orderField = "item_order") => ({ name, table, fields, parentColumn, orderField });
 const specs = [
   spec("users", "users", ["id", "username", ["passwordHash", "password_hash"], "name", "role", ["superAdminCandidate", "super_admin_candidate"], "status", "activationMode", "activatedAt", "maxDevices", "ipAllowlist", "lastLoginAt", "inactiveSince", "deletedAt", "statusBeforeDelete", "reviewEmail", "reviewEmailEnabled", "timeZone", "createdAt", "updatedAt"]),
-  spec("tasks", "tasks", ["id", "title", "description", "category", "phase", "status", "priority", "dueDate", "plannedStartDate", "notes", "progress", "manualProgress", "estimatedHours", "ownerId", "version", "activeCycleStartedAt", "legacyCompletionUnknown", "createdAt", "updatedAt", "recurringSeriesId", "recurrenceIndex"], [
+  spec("tasks", "tasks", ["id", "title", "description", "category", "phase", "status", "priority", "dueDate", "plannedStartDate", "notes", "progress", "manualProgress", "estimatedHours", "ownerId", "version", "activeCycleStartedAt", "legacyCompletionUnknown", "createdAt", "updatedAt", "recurringSeriesId", "recurrenceIndex", "spaceId"], [
     child("checklist", "task_checklist_items", ["id", "text", "done"], "task_id"),
     child("dependencyIds", "task_dependencies", [["value", "dependency_id"]], "task_id"),
     child("tags", "task_tags", [["value", "tag"]], "task_id"),
@@ -44,12 +44,12 @@ const specs = [
   ]),
   spec("noteCategories", "note_categories", ["id", "name", "parentId", "createdAt", "updatedAt"]),
   spec("noteTagDefinitions", "note_tag_definitions", ["id", "name", "normalizedKey", "createdAt", "updatedAt"]),
-  spec("notes", "notes", ["id", "title", "content", "taskId", "sourceSessionId", "categoryId", "ownerId", "createdAt", "updatedAt"], [
+  spec("notes", "notes", ["id", "title", "content", "taskId", "sourceSessionId", "categoryId", "ownerId", "createdAt", "updatedAt", "spaceId"], [
     child("links", "note_links", [["targetId", "target_note_id"], ["targetRef", "target_ref"], "label", "reason"], "source_note_id"),
     child("tags", "note_tags", [["value", "tag"]], "note_id"),
   ]),
   spec("noteVersions", "note_versions", ["id", "noteId", "versionNumber", "title", "content", "reason", "createdAt"]),
-  spec("experiments", "experiments", ["id", "title", "taskId", "prompt", "model", "params", "result", "score", "ownerId", "recordKind", "systemPrompt", "userPrompt", "promptVersionId", "variables", "chainId", "createdAt", "updatedAt"]),
+  spec("experiments", "experiments", ["id", "title", "taskId", "prompt", "model", "params", "result", "score", "ownerId", "recordKind", "systemPrompt", "userPrompt", "promptVersionId", "variables", "chainId", "createdAt", "updatedAt", "spaceId"]),
   spec("activity", "activity", ["id", "type", "taskId", "title", "detail", "at", "userId", "username", "userName"]),
 ];
 const recyclableTables = new Set(['tasks', 'notes', 'experiments']);
@@ -132,7 +132,9 @@ export async function assertSchemaCurrent(client = pool) {
 export async function loadData(client) {
   const data = {};
   for (const descriptor of specs) {
-    const rows = (await client.query(`SELECT * FROM ${descriptor.table}${recyclableTables.has(descriptor.table) ? ' WHERE deleted_at IS NULL' : ''}`)).rows;
+    // The existing API is the legacy, unassigned area. Once a record belongs
+    // to a space, never expose it through these unscoped endpoints.
+    const rows = (await client.query(`SELECT * FROM ${descriptor.table}${recyclableTables.has(descriptor.table) ? ' WHERE deleted_at IS NULL AND space_id IS NULL' : ''}`)).rows;
     data[descriptor.name] = rows.map(row => {
       const entity = mapped(row, descriptor.fields);
       if (descriptor.name === "tasks") entity.estimatedHours = row.estimated_hours ?? null;

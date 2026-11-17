@@ -60,10 +60,23 @@ export async function runRetentionCleanup(pool, now = new Date(), force = false)
       sessions = (await client.query('DELETE FROM sessions WHERE id=ANY($1)', [oldSessions])).rowCount;
       if (sessions) await rebuildSessionClusters(client);
     }
-    const spacesDeleted = (await client.query(`DELETE FROM collaboration_spaces WHERE deleted_at IS NOT NULL
-      AND deleted_at <= $1::timestamptz - ($2 * interval '1 day')`,[now.toISOString(),settings.recycle_days])).rowCount;
-    const purged = { tasks: 0, notes: 0, experiments: 0, prompt_library: 0, users: 0 };
     const failures = [];
+    let spacesDeleted = 0;
+    const expiredSpaces = (await client.query(`SELECT id FROM collaboration_spaces WHERE deleted_at IS NOT NULL
+      AND deleted_at <= $1::timestamptz - ($2 * interval '1 day') ORDER BY deleted_at`,[now.toISOString(),settings.recycle_days])).rows;
+    for (const space of expiredSpaces) {
+      await client.query('SAVEPOINT retention_space');
+      try {
+        await client.query('DELETE FROM collaboration_spaces WHERE id=$1',[space.id]);
+        await client.query('RELEASE SAVEPOINT retention_space');
+        spacesDeleted++;
+      } catch {
+        await client.query('ROLLBACK TO SAVEPOINT retention_space');
+        await client.query('RELEASE SAVEPOINT retention_space');
+        failures.push({ type:'collaboration_spaces',id:space.id,reason:'空间仍有归属内容或其他引用，需先处理' });
+      }
+    }
+    const purged = { tasks: 0, notes: 0, experiments: 0, prompt_library: 0, users: 0 };
     for (const table of Object.keys(purged)) {
       const expired = (await client.query(`SELECT id FROM ${table} WHERE deleted_at IS NOT NULL AND deleted_at <= $1::timestamptz - ($2 * interval '1 day') ORDER BY deleted_at`, [now.toISOString(), table === 'users' ? 30 : settings.recycle_days])).rows;
       for (const row of expired) {
